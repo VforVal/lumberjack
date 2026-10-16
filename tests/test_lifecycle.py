@@ -21,6 +21,8 @@ import sweep_worktrees  # noqa: E402
 def test_hook_script_survives_source_worktree_removal(
     configured_repo: tuple[Path, Path], tmp_path: Path, entrypoint: str, source: str,
 ) -> None:
+    if entrypoint == "setup" and REAL_WHICH("uv") is None:
+        pytest.skip("uv is not installed")
     primary, trees = configured_repo
     project = Path(sweep_worktrees.__file__).resolve().parents[1]
     for rel in ("scripts/setup_lumberjack.py", "scripts/sweep_worktrees.py",
