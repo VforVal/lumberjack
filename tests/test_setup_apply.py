@@ -279,7 +279,7 @@ def test_simple_git_hooks_entry(repo: Path, capsys: pytest.CaptureFixture[str]) 
     apply(repo, capsys, hook="simple-git-hooks")
     data = json.loads(read(repo, "package.json"))
     assert data["name"] == "x" and data["simple-git-hooks"]["pre-commit"] == "t"
-    assert data["simple-git-hooks"]["post-merge"].count("lumberjack.script") == 1
+    assert data["simple-git-hooks"]["post-merge"].count("uv run") == 1
     assert read(repo, "package.json").startswith('{\n  "name"')
 
 
