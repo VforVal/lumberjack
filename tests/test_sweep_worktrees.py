@@ -618,3 +618,37 @@ def test_paths_are_relative_to_the_primary_parent_else_home(
     assert short_path(primary, primary.parent / "wt" / "x") == "wt/x"
     assert short_path(primary, home / "wt" / "y") == "~/wt/y"
     assert short_path(primary, other / "z") == (other / "z").resolve().as_posix()
+
+
+def remove(primary: Path, target: Path, cwd: Path | None = None) -> tuple[int, list[str]]:
+    done = sweep(primary, "--remove", str(target), cwd=cwd)
+    return done.returncode, done.stdout.splitlines()
+
+
+def test_remove_takes_only_the_named_worktree_and_keeps_its_branch(primary: Path) -> None:
+    wt = primary.parent / "wt"
+    assert remove(primary, wt / "eng-3-open") == (
+        0, ["cleaned claude/eng-3-open wt/eng-3-open (local branch kept)"]
+    )
+    assert not (wt / "eng-3-open").exists()
+    assert "claude/eng-3-open" in branches(primary)
+    # eng-1 is landed and clean, yet unnamed: the plain sweep would remove it, --remove must not.
+    assert (wt / "eng-1-clean").exists() and (wt / "eng-2-dirty").exists()
+
+
+def test_remove_refuses_a_blocked_worktree_with_its_reason(primary: Path) -> None:
+    wt = primary.parent / "wt"
+    dirty, open_ = wt / "eng-2-dirty", wt / "eng-3-open"
+    assert remove(primary, dirty) == (1, ["blocked claude/eng-2-dirty wt/eng-2-dirty: dirty"])
+    assert remove(primary, open_, cwd=open_) == (
+        1, ["blocked claude/eng-3-open wt/eng-3-open: current checkout"]
+    )
+    assert remove(primary, primary) == (1, ["blocked main primary: primary checkout"])
+    assert remove(primary, wt / "nowhere") == (1, [f"blocked {wt / 'nowhere'}: not a worktree"])
+    detached = wt / "detached"
+    git(primary, "worktree", "add", "-q", "--detach", str(detached))
+    (detached / "d.txt").write_text("d\n")
+    git(detached, "add", ".")
+    git(detached, "commit", "-q", "-m", "detached")
+    assert remove(primary, detached) == (1, ["blocked (detached) wt/detached: no branch"])
+    assert dirty.exists() and open_.exists() and detached.exists()

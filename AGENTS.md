@@ -11,6 +11,8 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
   Claude settings, the CLAUDE.md/AGENTS.md block and `.gitignore` entries; never commits.
   Imports `sweep_worktrees` for config loading, remote URL parsing and `hook_manager`.
 - `skills/lumberjack/SKILL.md` - the rules the script enforces.
+- `skills/cleanup/SKILL.md` - `/lumberjack:cleanup` (user-invoked only): runs `--cleanup`, then
+  removes `unverified` and `landed-probable` worktrees one confirmed `--remove <path>` at a time.
 - `skills/setup/SKILL.md` - run-once interview (`/lumberjack:setup`, user-invoked only) that drives
   `discover` and `apply`; its questions follow their JSON keys.
 - `hooks/hooks.json` - shared hooks: SessionStart, SubagentStart and Stop all run the sweep's
@@ -39,4 +41,5 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
 - Scripts stay standard-library only and run on Python 3.11.
 - Keep LF line endings.
 - `skills/lumberjack/SKILL.md` stays at most 79 lines, `skills/setup/SKILL.md` at most 120;
-  both name no consumer project, path or ticket; config keys carry the project-specific values.
+  they and `skills/cleanup/SKILL.md` name no consumer project, path or ticket; config keys
+  carry the project-specific values.

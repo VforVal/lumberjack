@@ -450,15 +450,15 @@ def short_path(primary: Path, path: str | Path) -> str:
     return full.as_posix()
 
 
-def block_reason(cfg: Config, w: Row, here: Path | None) -> str:
-    """Why a verified-landed worktree stays, or an empty string."""
+def block_reason(cfg: Config, w: Row, here: Path | None, pushed: bool = True) -> str:
+    """Why a worktree stays, or an empty string; pushed=False skips the upstream check."""
     evidence = cfg["evidence_dir"] and Path(w["path"]) / cfg["evidence_dir"]
     if here is not None and same_dir(w["path"], here):
         return "current checkout"  # never pull the directory from under the running session
     if w["dirty"]:  # -1 (status failed) counts as dirty
         return "dirty"
     # landed-pr: the forge saw this exact tip, and delete-on-merge drops the upstream.
-    if w["tier"] != "landed-pr" and unpushed(Path(w["path"])):
+    if pushed and w["tier"] != "landed-pr" and unpushed(Path(w["path"])):
         return "unpushed"
     if evidence and evidence.is_dir() and any(evidence.iterdir()):
         return "evidence"
@@ -475,9 +475,37 @@ def worktree_event(primary: Path, cfg: Config, w: Row, here: Path | None) -> tup
         return "blocked", f"blocked {tag(primary, w)}: {reason}"
     if cfg["cleanup"] == "report":
         return "", f"landed {tag(primary, w)}: would remove"
+    return remove_worktree(primary, w)
+
+
+def remove_worktree(primary: Path, w: Row) -> tuple[str, str]:
     if (gone := git(primary, "worktree", "remove", w["path"])).returncode:
         return "blocked", f"blocked {tag(primary, w)}: {gone.stderr.strip()}"
     return "cleaned", f"cleaned {tag(primary, w)} (local branch kept)"
+
+
+def remove_named(start: Path, target: str) -> tuple[bool, str]:
+    """Remove the one worktree at target, whatever its tier; (removed, output line)."""
+    primary = find_primary(start)
+    cfg = load_config(primary)
+    trees = registered(primary)
+    tree = next((t for t in trees if same_dir(t["path"], target)), None)
+    if tree is None:
+        return False, f"blocked {target}: not a worktree"
+    status = git(Path(tree["path"]), "status", "--porcelain")
+    w = {**tree, "tier": "", "dirty": len(lines(status)) if status.returncode == 0 else -1}
+    here = Path(git(start, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
+    contains = ("for-each-ref", "--contains", w["head"], "--count=1", "refs/heads")
+    if tree is trees[0]:
+        reason = "primary checkout"
+    elif not tree["branch"] and not lines(git(primary, *contains)):
+        reason = "no branch"  # removal would orphan the commits of a detached tip
+    else:
+        reason = block_reason(cfg, w, here, pushed=False)  # the kept branch holds the commits
+    if reason:
+        return False, f"blocked {tag(primary, w)}: {reason}"
+    key, line = remove_worktree(primary, w)
+    return key == "cleaned", line
 
 
 def dependent_hints(primary: Path, trunk: str, name: str, sha: str) -> list[str]:
@@ -720,7 +748,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--cleanup", action="store_true", help="remove landed worktrees, exit 0")
     parser.add_argument("--gate", action="store_true", help="exit 2 on debt")
+    parser.add_argument(
+        "--remove", metavar="PATH",
+        help="remove only this worktree, any tier, keeping its branch; exit 1 when blocked",
+    )
     args = parser.parse_args(argv)
+    if args.remove:
+        try:
+            removed, line = remove_named(Path.cwd(), args.remove)
+        except ConfigError as error:
+            raise SystemExit(error) from error
+        print(line)
+        return 0 if removed else 1
     if args.hook:
         return hook(hook_input())
     if args.gate:

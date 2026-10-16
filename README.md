@@ -150,8 +150,8 @@ Each tip is checked against `origin/<primary_branch>`; the first decisive tier w
 | `integrated` | tip is an ancestor of the primary branch | yes |
 | `content-integrated` | merging the tip changes nothing in the primary branch's tree | yes |
 | `landed-pr` | `gh` found a merged pull request into the primary branch with this exact tip | yes |
-| `landed-probable` | patches match recent primary history; a guess | no, report only |
-| `unverified` | no evidence of landing | no |
+| `landed-probable` | patches match recent primary history; a guess | only when confirmed in `/lumberjack:cleanup` |
+| `unverified` | no evidence of landing | only when confirmed in `/lumberjack:cleanup` |
 
 An `unverified` row carries a reason: `gh missing`, `not a github remote`,
 `unauthenticated`, `unreachable`, `tip diverged`, `non-primary base`
@@ -199,6 +199,32 @@ On Stop, `--hook` runs the gate: debt produces an exit-0 JSON block decision
 and reason, supported by both harnesses. This preserves blocking when PowerShell maps
 a native exit 2 to process exit 1. Running plain `--gate` still exits 2 with its reason
 on stderr. Both forms stay silent when the gate passes, is disabled, or already ran.
+
+## Cleanup command
+
+`/lumberjack:cleanup` (Codex: `lumberjack:cleanup` from the skill picker) clears old
+worktrees in the repository it runs in. It runs `--cleanup` and `git worktree prune`
+and relays their lines, then lists every `unverified` and `landed-probable` worktree with
+its tier and reason, and asks about each one. It removes only the worktrees the maintainer
+confirms, one at a time, with:
+
+```
+sweep_worktrees.py --remove <path>
+```
+
+`--remove` acts on that one worktree and nothing else, whatever its tier or the `cleanup`
+setting, and keeps its branch. It prints one line and exits 0 when removed, 1 when blocked:
+
+```
+cleaned alice/eng-15-spike ~/worktrees/app3 (local branch kept)
+blocked alice/eng-16-draft ~/worktrees/app4: dirty
+```
+
+It refuses with `current checkout`, `dirty` or `evidence` as in the cleanup rule (an
+unpushed tip is no loss, since the branch keeps it), and also with `primary checkout`,
+`not a worktree` (no registered worktree at that path) or `no branch` (a detached tip
+that no local branch contains). Ignored files in the worktree are deleted with it; the
+command shows them before asking.
 
 ## Hook placement
 

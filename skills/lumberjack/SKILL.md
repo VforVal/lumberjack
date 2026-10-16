@@ -61,7 +61,7 @@ before pushing `<b>`, otherwise its pull request still carries the squashed comm
 `landed`, `blocked`, `dependent`, `orphan` or `hint`. When nothing was swept the only
 line says why: a config error, or `sweep: ...; skipped`. The exit code is always 0.
 Paths are relative to the primary's parent directory, or start with `~`.
-`unverified` counts branches not proven landed; they are never removed.
+`unverified` counts unproven branches; only the maintainer's `/lumberjack:cleanup` removes them.
 
 ## Stop gate
 
