@@ -671,7 +671,7 @@ def email_reasons(start: Path, pattern: re.Pattern[str]) -> list[str]:
     if not pattern.fullmatch(email):
         reasons.append(
             f"gate: commit email: user.email {email or '(unset)'} does not match"
-            " commit_email; set it: git config user.email <matching address>"
+            " commit_email; set it for this repository: git config user.email <matching address>"
         )
     bad: dict[str, str] = {}  # email -> "role on sha", first (newest) hit
     log = git(start, "log", "--format=%h%x09%ae%x09%ce", "HEAD", "--not", "--remotes=origin")

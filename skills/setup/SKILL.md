@@ -64,9 +64,10 @@ looks like scratch or handoff output. Its contents block cleanup of a worktree.
 Otherwise set `""` without asking.
 
 **G. Commit email** (`commit_email`). Recommend `github.commit_email_guess`: a GitHub
-noreply pattern when `github.public` is true, else `""` (off). When set, the Stop gate
-blocks when `user.email` or a commit not yet on origin has an email that does not
-match it. Apply prints the GitHub email-privacy settings to turn on.
+noreply pattern when `github.public` is true, else `""` (off); when it is null (no `gh`)
+and origin is on github.com, ask whether the repository is public. When set, the Stop
+gate blocks when `user.email` or a commit not yet on origin does not match it. Apply
+prints the GitHub email-privacy settings to turn on.
 
 ## 3. Confirm
 
