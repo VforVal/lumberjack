@@ -2,6 +2,7 @@
 
 import io
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,47 @@ from helpers import git, write
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import setup_lumberjack  # noqa: E402
 import sweep_worktrees  # noqa: E402
+
+
+@pytest.mark.parametrize("entrypoint", ["setup", "cleanup"])
+@pytest.mark.parametrize("source", ["worktree", "external"])
+def test_hook_script_survives_source_worktree_removal(
+    configured_repo: tuple[Path, Path], tmp_path: Path, entrypoint: str, source: str,
+) -> None:
+    primary, trees = configured_repo
+    project = Path(sweep_worktrees.__file__).resolve().parents[1]
+    for rel in ("scripts/setup_lumberjack.py", "scripts/sweep_worktrees.py",
+                "skills/lumberjack/SKILL.md", "VERSION", ".gitignore"):
+        write(primary, rel, (project / rel).read_text(encoding="utf-8"))
+    git(primary, "add", "-A")
+    git(primary, "commit", "-q", "-m", "include plugin sources")
+    worktree = trees / "plugin source"
+    git(primary, "worktree", "add", "-q", "-b", "codex/eng-3-source", str(worktree))
+    plugin = worktree
+    if source == "external":
+        plugin = tmp_path / "installed plugin"
+        shutil.copytree(worktree / "scripts", plugin / "scripts")
+        shutil.copytree(worktree / "skills", plugin / "skills")
+        shutil.copyfile(worktree / "VERSION", plugin / "VERSION")
+    if entrypoint == "setup":
+        answers = tmp_path / "setup answers.json"
+        data = json.loads(answers.read_text(encoding="utf-8"))
+        data.update(hook="plain", cleanup="report")
+        answers.write_text(json.dumps(data), encoding="utf-8")
+        args = [str(plugin / "scripts/setup_lumberjack.py"), "apply", str(answers),
+                "--repo", str(primary)]
+    else:
+        args = [str(plugin / "scripts/sweep_worktrees.py"), "--cleanup"]
+    done = subprocess.run([sys.executable, *args], cwd=primary, capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout + done.stderr
+    script = Path(git(primary, "config", "--get", "lumberjack.script").strip())
+    expected = primary if source == "worktree" else plugin
+    assert script == expected / "scripts/sweep_worktrees.py"
+    git(primary, "worktree", "remove", str(worktree))
+    done = subprocess.run(
+        [sys.executable, str(script), "--gate"], cwd=primary, capture_output=True, text=True,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
 
 
 @pytest.fixture

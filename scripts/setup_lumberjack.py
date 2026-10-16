@@ -20,8 +20,10 @@ from sweep_worktrees import (
     DEFAULTS,
     ConfigError,
     config_table,
+    find_primary,
     git,
     hook_manager,
+    hook_script,
     lines,
     load_config,
     origin_parts,
@@ -430,7 +432,7 @@ def write_hook(repo: Path, hook: str) -> None:
         print(UV_MISSING)
         return
     HOOK_WRITERS[hook](repo)
-    script = (HERE / "sweep_worktrees.py").as_posix()
+    script = hook_script(find_primary(repo))
     git(repo, "config", "lumberjack.script", script)
     print(f"ran git config lumberjack.script {script}")
 
