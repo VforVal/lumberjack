@@ -248,7 +248,7 @@ MD_MARKERS = ("<!-- >>> lumberjack -->", "<!-- <<< lumberjack -->")
 BEGIN, END = SH_MARKERS
 RUN = 'uv run --quiet --script "$(git config --get lumberjack.script)" --cleanup'
 # A sweep failure must never fail the merge.
-SAFE_RUN = f'[ -f "$(git config --get lumberjack.script)" ] && {RUN} || true'
+SAFE_RUN = f'test -f "$(git config --get lumberjack.script)" && {RUN} || true'
 BLOCK = f"""{BEGIN}
 script="$(git config --get lumberjack.script)"
 if [ -f "$script" ] && command -v uv >/dev/null 2>&1; then
