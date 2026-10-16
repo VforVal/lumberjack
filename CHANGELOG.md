@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Removal lines: a detached worktree prints `cleaned (detached) <path>` without
+  `(local branch kept)`; a `git worktree remove` that fails after unregistering the
+  worktree prints `cleaned ... (local branch kept; directory left)` instead of `blocked`.
+
 ## 1.1.0
 
 - `/lumberjack:cleanup`: a user-invoked command that runs the cleanup and
@@ -8,9 +14,6 @@
 - `sweep_worktrees.py --remove <path>`: removes that one worktree and keeps its branch;
   refuses with `current checkout`, `dirty`, `evidence`, `ignored files`, `prototype`,
   `primary checkout`, `no branch` or `not a worktree`, and exits 1.
-- Removal lines: a detached worktree prints `cleaned (detached) <path>` without
-  `(local branch kept)`; a `git worktree remove` that fails after unregistering the
-  worktree prints `cleaned ... (local branch kept; directory left)` instead of `blocked`.
 
 ## 1.0.0
 
