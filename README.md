@@ -221,10 +221,15 @@ blocked alice/eng-16-draft ~/worktrees/app4: dirty
 ```
 
 It refuses with `current checkout`, `dirty` or `evidence` as in the cleanup rule (an
-unpushed tip is no loss, since the branch keeps it), and also with `primary checkout`,
-`not a worktree` (no registered worktree at that path) or `no branch` (a detached tip
-that no local branch contains). Ignored files in the worktree are deleted with it; the
-command shows them before asking.
+unpushed tip is no loss, since the branch keeps it), and also with:
+
+- `ignored files`: ignored files other than caches (`node_modules`, `.venv`,
+  `__pycache__`, tool caches), which removal would delete
+- `prototype`: a `prototype_prefix` branch, which is never cleaned
+- `primary checkout`: the path is the primary checkout
+- `no branch`: a detached tip that no local branch contains
+- `not a worktree`: no registered worktree at that path; the line is
+  `blocked <path>: not a worktree`
 
 ## Hook placement
 

@@ -627,6 +627,9 @@ def remove(primary: Path, target: Path, cwd: Path | None = None) -> tuple[int, l
 
 def test_remove_takes_only_the_named_worktree_and_keeps_its_branch(primary: Path) -> None:
     wt = primary.parent / "wt"
+    (primary / ".git" / "info" / "exclude").write_text("__pycache__/\n")
+    (wt / "eng-3-open" / "__pycache__").mkdir()
+    (wt / "eng-3-open" / "__pycache__" / "x.pyc").write_text("")  # caches do not block
     assert remove(primary, wt / "eng-3-open") == (
         0, ["cleaned claude/eng-3-open wt/eng-3-open (local branch kept)"]
     )
@@ -645,10 +648,18 @@ def test_remove_refuses_a_blocked_worktree_with_its_reason(primary: Path) -> Non
     )
     assert remove(primary, primary) == (1, ["blocked main primary: primary checkout"])
     assert remove(primary, wt / "nowhere") == (1, [f"blocked {wt / 'nowhere'}: not a worktree"])
+    (primary / ".git" / "info" / "exclude").write_text(".env\n")
+    (open_ / ".env").write_text("SECRET=1\n")
+    assert remove(primary, open_) == (
+        1, ["blocked claude/eng-3-open wt/eng-3-open: ignored files"]
+    )
+    proto = wt / "proto"
+    git(primary, "worktree", "add", "-q", str(proto), "prototype/eng-65-demo")
+    assert remove(primary, proto) == (1, ["blocked prototype/eng-65-demo wt/proto: prototype"])
     detached = wt / "detached"
     git(primary, "worktree", "add", "-q", "--detach", str(detached))
     (detached / "d.txt").write_text("d\n")
     git(detached, "add", ".")
     git(detached, "commit", "-q", "-m", "detached")
     assert remove(primary, detached) == (1, ["blocked (detached) wt/detached: no branch"])
-    assert dirty.exists() and open_.exists() and detached.exists()
+    assert dirty.exists() and open_.exists() and proto.exists() and detached.exists()

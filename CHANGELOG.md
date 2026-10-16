@@ -6,8 +6,8 @@
   `git worktree prune`, then asks about each `unverified` and `landed-probable`
   worktree and removes only the confirmed ones, keeping their branches.
 - `sweep_worktrees.py --remove <path>`: removes that one worktree and keeps its branch;
-  refuses with `current checkout`, `dirty`, `evidence`, `primary checkout`,
-  `not a worktree` or `no branch`, and exits 1.
+  refuses with `current checkout`, `dirty`, `evidence`, `ignored files`, `prototype`,
+  `primary checkout`, `no branch` or `not a worktree`, and exits 1.
 
 ## 1.0.0
 

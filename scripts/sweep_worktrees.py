@@ -495,17 +495,28 @@ def remove_named(start: Path, target: str) -> tuple[bool, str]:
     status = git(Path(tree["path"]), "status", "--porcelain")
     w = {**tree, "tier": "", "dirty": len(lines(status)) if status.returncode == 0 else -1}
     here = Path(git(start, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
-    contains = ("for-each-ref", "--contains", w["head"], "--count=1", "refs/heads")
+    on_branch = ("for-each-ref", "--contains", w["head"], "--count=1", "refs/heads")
     if tree is trees[0]:
         reason = "primary checkout"
-    elif not tree["branch"] and not lines(git(primary, *contains)):
+    elif tree["branch"].startswith(cfg["prototype_prefix"]):
+        reason = "prototype"
+    elif not tree["branch"] and not lines(git(primary, *on_branch)):
         reason = "no branch"  # removal would orphan the commits of a detached tip
     else:
-        reason = block_reason(cfg, w, here, pushed=False)  # the kept branch holds the commits
+        # The kept branch holds the commits, so unpushed is no loss; ignored files are.
+        reason = block_reason(cfg, w, here, pushed=False)
+        reason = reason or ("ignored files" if stray_ignored(Path(tree["path"])) else "")
     if reason:
         return False, f"blocked {tag(primary, w)}: {reason}"
-    key, line = remove_worktree(primary, w)
-    return key == "cleaned", line
+    outcome, line = remove_worktree(primary, w)
+    return outcome == "cleaned", line
+
+
+def stray_ignored(path: Path) -> bool:
+    """Ignored entries other than caches; git worktree remove deletes them silently."""
+    ignored = lines(git(path, "status", "--porcelain", "--ignored"))
+    names = [Path(line[3:].rstrip("/")).name for line in ignored if line.startswith("!! ")]
+    return any(name not in CACHE_DIRS for name in names)
 
 
 def dependent_hints(primary: Path, trunk: str, name: str, sha: str) -> list[str]:
@@ -753,7 +764,7 @@ def main(argv: list[str] | None = None) -> int:
         help="remove only this worktree, any tier, keeping its branch; exit 1 when blocked",
     )
     args = parser.parse_args(argv)
-    if args.remove:
+    if args.remove is not None:
         try:
             removed, line = remove_named(Path.cwd(), args.remove)
         except ConfigError as error:
