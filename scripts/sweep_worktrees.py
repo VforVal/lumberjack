@@ -35,6 +35,7 @@ DEFAULTS: Config = {
     ],
     "cleanup": "prune",
     "stop_gate": True,
+    "commit_email": "",
 }
 # .codex-worktree-name is all Codex leaves behind after removing a worktree.
 # onexc replaced the deprecated onerror in 3.12; the handler signature is the same.
@@ -96,6 +97,10 @@ def load_config(primary: Path) -> Config:
         raise ConfigError(
             f"lumberjack: cleanup must be one of {', '.join(CLEANUP_MODES)}", source
         )
+    try:
+        re.compile(cfg["commit_email"])
+    except re.error as exc:
+        raise ConfigError(f"lumberjack: commit_email is not a valid regex: {exc}", source) from exc
     return cfg
 
 
@@ -654,6 +659,31 @@ def gate(start: Path) -> list[str]:
             f"gate: the primary checkout is on {branch}; move the work to a"
             f" worktree and return the primary to {cfg['primary_branch']}"
         )
+    if cfg["commit_email"]:
+        reasons += email_reasons(start, re.compile(cfg["commit_email"]))
+    return reasons
+
+
+def email_reasons(start: Path, pattern: re.Pattern[str]) -> list[str]:
+    """user.email and the emails on HEAD commits not yet on origin must match commit_email."""
+    reasons = []
+    email = git(start, "config", "user.email").stdout.strip()
+    if not pattern.fullmatch(email):
+        reasons.append(
+            f"gate: commit email: user.email {email or '(unset)'} does not match"
+            " commit_email; set it: git config user.email <matching address>"
+        )
+    bad: dict[str, str] = {}  # email -> "role on sha", first (newest) hit
+    log = git(start, "log", "--format=%h%x09%ae%x09%ce", "HEAD", "--not", "--remotes=origin")
+    for sha, author, committer in (row.split("\t") for row in lines(log)):
+        for role, address in (("author", author), ("committer", committer)):
+            if not pattern.fullmatch(address):
+                bad.setdefault(address, f"{role} {address or '(empty)'} on {sha}")
+    reasons += [
+        f"gate: commit email: {hit} (not yet on origin) does not match commit_email;"
+        " fix user.email, then amend or rebase those commits with --reset-author"
+        for hit in bad.values()
+    ]
     return reasons
 
 

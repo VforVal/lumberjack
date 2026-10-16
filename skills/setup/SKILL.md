@@ -63,13 +63,18 @@ set, or a directory named `.evidence`, `evidence` or `.<name>` sits at the root 
 looks like scratch or handoff output. Its contents block cleanup of a worktree.
 Otherwise set `""` without asking.
 
+**G. Commit email** (`commit_email`). Recommend `github.commit_email_guess`: a GitHub
+noreply pattern when `github.public` is true, else `""` (off). When set, the Stop gate
+blocks when `user.email` or a commit not yet on origin has an email that does not
+match it. Apply prints the GitHub email-privacy settings to turn on.
+
 ## 3. Confirm
 
 Show one consolidated summary and wait for an explicit yes:
 
 1. The full answers JSON. Keys: `harnesses`, `pin_claude_settings`, `ticket_prefix`,
    `owners`, `prototype_prefix`, `primary_branch`, `worktree_roots`, `cleanup`,
-   `stop_gate`, `hook`, `evidence_dir`.
+   `stop_gate`, `hook`, `evidence_dir`, `commit_email`.
 2. The files apply will write or edit: `.lumberjack.toml`; the hook file for `hook`;
    `.claude/settings.json` when pinning; the `CLAUDE.md` (else `AGENTS.md`) block
    (creating `AGENTS.md` when neither exists);
@@ -102,6 +107,8 @@ commit it themselves.
 - `gh missing or unauthenticated...`: tell them cleanup still works but decides
   "landed" from git alone; run `gh auth login` for pull-request detection.
 - `note: run ... to activate the hook`: relay it; the maintainer runs that command.
+- `printed, not run: git config user.email ...`: the maintainer runs it so new commits
+  pass the commit email gate; relay the `note:` on GitHub email settings with it.
 
 ## Re-running
 

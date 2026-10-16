@@ -12,3 +12,23 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv run --python ${{ matrix.python }} --with "pytest>=8" pytest
+  commit-emails:
+    # Every commit reachable from the pushed ref or the PR head must carry the noreply
+    # address; GitHub's own web-flow committer is allowed for merges made on github.com.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - env:
+          ALLOWED: 18632434+VforVal@users.noreply.github.com
+        run: |
+          bad=$(git log --format='%h %ae %ce' HEAD | awk -v ok="$ALLOWED" '
+            $2 != ok { print $1, "author" }
+            $3 != ok && $3 != "noreply@github.com" { print $1, "committer" }')
+          if [ -n "$bad" ]; then
+            echo "::error::commits with an email other than $ALLOWED (sha, role):"
+            echo "$bad"
+            exit 1
+          fi

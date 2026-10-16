@@ -33,6 +33,7 @@ HERE = Path(__file__).resolve().parent
 REMOTE = "refs/remotes/origin/"
 TICKET = re.compile(r"\b([a-z]+-)\d+")
 TRACKER_DOC = Path("docs", "agents", "issue-tracker.md")  # the matt-pocock-skills convention
+NOREPLY = r"([0-9]+\+)?[^@\s]+@users\.noreply\.github\.com"  # GitHub's private commit email
 
 
 def git_out(cwd: Path, *args: str) -> str:
@@ -131,6 +132,41 @@ def gh_facts() -> Facts:
     return {"present": True, "authenticated": ok}
 
 
+def gh_api(path: str) -> Facts | None:
+    """GET a GitHub API path through gh; None when gh is missing, unauthenticated or fails."""
+    if not (gh := shutil.which("gh")):
+        return None
+    try:
+        done = subprocess.run(
+            [gh, "api", path], capture_output=True, text=True, encoding="utf-8", timeout=5
+        )
+        data = json.loads(done.stdout) if done.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def noreply_address() -> str | None:
+    user = gh_api("user") or {}
+    if not {"id", "login"} <= user.keys():
+        return None
+    return f"{user['id']}+{user['login']}@users.noreply.github.com"
+
+
+def github_facts(origin: Facts) -> Facts:
+    """Whether origin is a public GitHub repository (None: unknown) and the commit email advice."""
+    host = origin_parts(origin["url"])[0] if origin["url"] else ""
+    found = None
+    if host == "github.com" and origin["owner"] and origin["name"]:
+        found = gh_api(f"repos/{origin['owner']}/{origin['name']}")
+    public = found.get("visibility") == "public" if found else None
+    return {
+        "public": public,
+        "noreply": noreply_address(),
+        "commit_email_guess": NOREPLY if public else "",
+    }
+
+
 def config_facts(repo: Path) -> Facts:
     try:
         source, _ = config_table(repo)
@@ -145,6 +181,7 @@ def discover(repo: Path) -> Facts:
     hooks_path = git_out(repo, "config", "--type=path", "core.hooksPath") or None
     has = repo.joinpath
     package = has("package.json")
+    origin = origin_facts(repo)
     return {
         "repo": str(repo),
         "name": repo.name,
@@ -154,7 +191,8 @@ def discover(repo: Path) -> Facts:
             "claude_settings": has(".claude", "settings.json").is_file(),
             "codex_dir": has(".codex").is_dir(),
         },
-        "origin": origin_facts(repo),
+        "origin": origin,
+        "github": github_facts(origin),
         **remote_facts(repo),
         "worktree_parents": worktree_parents(repo),
         "tracker": tracker_facts(repo),
@@ -177,6 +215,7 @@ CONFIG_DOC = {
     "worktree_roots": "Where worktrees live: ~ is the home directory, * a glob, {name} the repo name.",
     "cleanup": "What SessionStart does with landed worktrees: prune, report or keep.",
     "stop_gate": "Whether the Stop hook blocks on branch and primary-checkout debt.",
+    "commit_email": "Regex that user.email and unpushed commit emails must match; empty for none.",
 }
 HARNESSES = ("claude", "codex")
 ANSWER_KEYS = {*DEFAULTS, "harnesses", "hook", "pin_claude_settings"}
@@ -478,8 +517,22 @@ def apply(answers: Facts, repo: Path) -> None:
         if harness in answers["harnesses"]:
             for line in INSTALL_STEPS[harness]:
                 print(f"printed, not run: {line}")
+    if answers["commit_email"]:
+        email_steps(repo, answers["commit_email"])
     if not (gh := gh_facts())["present"] or not gh["authenticated"]:
         print("gh missing or unauthenticated: landed detection is offline-only until gh auth login")
+
+
+def email_steps(repo: Path, pattern: str) -> None:
+    if not re.fullmatch(pattern, git_out(repo, "config", "user.email")):
+        address = noreply_address()
+        if not address or not re.fullmatch(pattern, address):
+            address = "<address matching commit_email>"
+        print(f"printed, not run: git config user.email {address}")
+    print(
+        'note: in GitHub Settings > Emails turn on "Keep my email addresses private"'
+        ' and "Block command line pushes that expose my email"'
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

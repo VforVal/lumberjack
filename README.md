@@ -75,7 +75,8 @@ or `claude plugin --help` and upgrade to a tested version before continuing.
 In Claude Code, run `/lumberjack:setup` once per repository. In Codex, choose
 `lumberjack:setup` from the skill picker. The agent reads facts about the repository
 (`discover`, read-only), then asks about harnesses, branch shape, worktree roots,
-cleanup and Stop gate behaviour, the git hook and an evidence directory, each with a
+cleanup and Stop gate behaviour, the git hook, an evidence directory and a commit email
+pattern (a GitHub noreply pattern for a public repository), each with a
 recommended answer. After your yes it writes `.lumberjack.toml`, the post-merge hook,
 the `CLAUDE.md` (else `AGENTS.md`) block (creating `AGENTS.md` when neither exists),
 optional `.claude/settings.json` pinning and
@@ -95,7 +96,7 @@ Optional `.lumberjack.toml` at the repo root (top-level keys), else a
 `[tool.lumberjack]` table in `pyproject.toml`; the first file found is used.
 Missing keys keep these defaults. A config error (unknown key, bad TOML, a `cleanup`
 outside the three modes, a non-boolean `stop_gate`, a key of the wrong TOML type, an empty
-`prototype_prefix`) makes the Stop gate block;
+`prototype_prefix`, a `commit_email` that is not a valid regex) makes the Stop gate block;
 SessionStart prints the error and cleans nothing.
 
 | Key | Default | Meaning |
@@ -108,6 +109,7 @@ SessionStart prints the error and cleans nothing.
 | `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where worktrees live: `~` is home, `*` a glob, `{name}` the repo name |
 | `cleanup` | `"prune"` | `prune` removes landed worktrees; `report` lists them as `would remove`; `keep` does nothing |
 | `stop_gate` | `true` | `false` turns the Stop hook off |
+| `commit_email` | `""` | Regex that `git config user.email` and the author and committer emails of commits not yet on `origin` must match in full; a mismatch blocks the Stop gate with `gate: commit email:`; empty checks nothing |
 
 ```toml
 owners = ["alice", "codex", "claude"]

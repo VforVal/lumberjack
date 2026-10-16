@@ -26,6 +26,7 @@ ANSWERS = {
     "worktree_roots": [".wt", "~/worktrees/{name}"],
     "cleanup": "report",
     "stop_gate": False,
+    "commit_email": "",
     "hook": "none",
     "pin_claude_settings": False,
 }
@@ -498,3 +499,20 @@ def test_linked_hooks_dir_keeps_its_foreign_hook_in_place(
     assert code == 2 and "outside the repository" in err
     assert (outside / "post-merge").read_text(encoding="utf-8").endswith("print('mine')\n")
     assert not (outside / "post-merge.user").exists()
+
+
+def test_commit_email_prints_the_user_email_command_and_github_reminder(
+    repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pattern = setup_lumberjack.NOREPLY
+    monkeypatch.setattr(setup_lumberjack, "gh_api", {"user": {"id": 7, "login": "val"}}.get)
+    git(repo, "config", "user.email", "someone@example.com")
+    code, out, _ = apply(repo, capsys, commit_email=pattern)
+    assert code == 0 and load_config(repo)["commit_email"] == pattern
+    assert "printed, not run: git config user.email 7+val@users.noreply.github.com" in out
+    assert "Keep my email addresses private" in out and "Block command line pushes" in out
+    assert git(repo, "config", "user.email").strip() == "someone@example.com"  # never run
+    git(repo, "config", "user.email", "7+val@users.noreply.github.com")
+    assert "git config user.email" not in apply(repo, capsys, commit_email=pattern)[1]
+    _, out, _ = apply(repo, capsys)
+    assert "user.email" not in out and "Keep my email" not in out

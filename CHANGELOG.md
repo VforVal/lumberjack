@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `commit_email` config key: a regex, empty by default. When set, the Stop gate blocks
+  (`gate: commit email:`) when `git config user.email` or the author or committer email
+  of a commit not yet on `origin` does not match it.
+- `/lumberjack:setup`: `discover` reports whether `origin` is a public GitHub repository
+  and the account's noreply address; the interview recommends a noreply pattern for
+  public repositories; `apply` prints, but never runs, the `git config user.email`
+  command when the current value does not match, and reminds the maintainer of GitHub's
+  email privacy settings.
+
 ## 1.0.0
 
 First public release.

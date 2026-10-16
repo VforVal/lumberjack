@@ -374,3 +374,51 @@ def test_default_roots_are_harness_conventions(
         primary / ".claude/worktrees/z",
         home / "worktrees/primary/w",
     }
+
+
+NOREPLY = r"[0-9]+\+[a-z]+@users\.noreply\.github\.com"
+
+
+def commit_as(monkeypatch: pytest.MonkeyPatch, root: Path, email: str) -> None:
+    for who in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{who}_EMAIL", email)
+    git(root, "commit", "-q", "--allow-empty", "-m", "work")
+
+
+def test_commit_email_gate_checks_user_email_and_unpushed_commits_only(
+    primary: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    good = "1+someone@users.noreply.github.com"
+    configure(primary, f"commit_email = '{NOREPLY}'")
+    git(primary, "config", "user.email", good)
+    # the root commit is already on origin with test@example.com: never blocks
+    assert gate_errors(monkeypatch, capsys, primary) == ""
+    commit_as(monkeypatch, primary, good)
+    assert gate_errors(monkeypatch, capsys, primary) == ""
+    git(primary, "config", "user.email", "someone@example.com")
+    err = gate_errors(monkeypatch, capsys, primary)
+    assert "gate: commit email: user.email someone@example.com does not match commit_email" in err
+    assert "git config user.email" in err
+    git(primary, "config", "user.email", good)
+    commit_as(monkeypatch, primary, "someone@example.com")
+    err = gate_errors(monkeypatch, capsys, primary)
+    assert "gate: commit email: author someone@example.com" in err and "not yet on origin" in err
+    assert err.count("gate: commit email:") == 1  # one line per bad email, not per role
+    git(primary, "push", "-q", "origin", "main")
+    assert gate_errors(monkeypatch, capsys, primary) == ""
+
+
+def test_empty_commit_email_never_blocks(
+    primary: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    git(primary, "config", "user.email", "someone@example.com")
+    commit_as(monkeypatch, primary, "someone@example.com")
+    assert sweep_worktrees.load_config(primary)["commit_email"] == ""
+    assert gate_errors(monkeypatch, capsys, primary) == ""
+
+
+def test_bad_commit_email_regex_blocks_the_gate(
+    primary: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    configure(primary, "commit_email = '('")
+    assert "commit_email is not a valid regex" in gate_errors(monkeypatch, capsys, primary)
