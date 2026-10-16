@@ -236,7 +236,8 @@ unpushed tip is no loss, since the branch keeps it), and also with:
 ## Hook placement
 
 Setup installs a post-merge hook that runs the sweep after every merge. It skips silently
-when `uv` or `git config lumberjack.script` is missing. Everything setup adds sits
+when `uv`, `git config lumberjack.script` or the configured script file is missing.
+Everything setup adds sits
 between `# >>> lumberjack` and `# <<< lumberjack` lines.
 
 | Manager | What setup writes |

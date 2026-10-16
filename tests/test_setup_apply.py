@@ -127,6 +127,35 @@ def test_plain_hook_keeps_existing_hooks_path(
     assert not (repo / ".githooks").exists()
 
 
+@pytest.mark.parametrize("hook", ["plain", "husky", "lefthook", "pre-commit", "simple-git-hooks"])
+def test_post_merge_quietly_skips_a_missing_script(
+    repo: Path, capsys: pytest.CaptureFixture[str], hook: str,
+) -> None:
+    if hook == "simple-git-hooks":
+        old = f"{setup_lumberjack.RUN} || true"
+        write(repo, "package.json", json.dumps({"simple-git-hooks": {"post-merge": old}}))
+    apply(repo, capsys, hook=hook)
+    apply(repo, capsys, hook=hook)
+    git(repo, "config", "lumberjack.script", str(repo / "missing source/sweep_worktrees.py"))
+    write(repo, "bin/uv", '#!/bin/sh\necho "unexpected uv invocation" >&2\n')
+    (repo / "bin/uv").chmod(0o755)
+    if hook in ("plain", "husky"):
+        command = read(repo, f"{'.githooks' if hook == 'plain' else '.husky'}/post-merge")
+    elif hook == "lefthook":
+        command = read(repo, "lefthook-local.yml").split("run: ", 1)[1].splitlines()[0]
+    elif hook == "pre-commit":
+        command = read(repo, ".pre-commit-config.yaml").split("entry: sh -c '", 1)[1].splitlines()[0][:-1]
+    else:
+        command = json.loads(read(repo, "package.json"))["simple-git-hooks"]["post-merge"]
+        assert command.count("uv run") == 1
+    shell = REAL_WHICH("sh") or git(repo, "var", "GIT_SHELL_PATH").strip()
+    done = subprocess.run(
+        [shell, "-c", command], cwd=repo, capture_output=True, text=True,
+        env={**os.environ, "PATH": str(repo / "bin") + os.pathsep + os.environ["PATH"]},
+    )
+    assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
+
+
 def test_existing_sh_hook_gains_block_once(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
