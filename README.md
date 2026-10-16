@@ -178,8 +178,11 @@ only caches (`node_modules-only`) are deleted, others (`mixed`, `not-git`; an em
 A root outside the repository without `{name}` is shared with other repositories, so only
 its `<dir>/<name>` subdirectories count (the Codex layout); scope your own roots with `{name}`,
 such as `~/worktrees/{name}-*`.
-The sweep also sets `git config lumberjack.script` to its own path so the hook finds it,
-and sets `core.hooksPath .githooks` only when `.githooks/post-merge` holds the
+The sweep also sets `git config lumberjack.script` so the hook finds it. A script that
+runs from a linked worktree of the swept repository (as when developing lumberjack
+itself) records the primary checkout's copy instead, so cleanup cannot delete it;
+installed plugin paths are recorded as they are. The sweep sets `core.hooksPath .githooks`
+only when `.githooks/post-merge` holds the
 `# >>> lumberjack` marker and `core.hooksPath` is unset.
 When a hook manager is present and its config does not mention `lumberjack.script` yet,
 the last line is `hint: post-merge hook managed by <manager>; run /lumberjack:setup to add lumberjack`.
@@ -240,7 +243,8 @@ unpushed tip is no loss, since the branch keeps it), and also with:
 ## Hook placement
 
 Setup installs a post-merge hook that runs the sweep after every merge. It skips silently
-when `uv` or `git config lumberjack.script` is missing. Everything setup adds sits
+when `uv`, `git config lumberjack.script` or the configured script file is missing.
+Everything setup adds sits
 between `# >>> lumberjack` and `# <<< lumberjack` lines.
 
 | Manager | What setup writes |

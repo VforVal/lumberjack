@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Post-merge hook: setup and the sweep no longer record a `lumberjack.script` inside a
+  removable linked worktree, and every generated hook skips quietly when the recorded
+  script file is missing. Re-run setup to upgrade an existing hook.
 - Removal lines: a detached worktree prints `cleaned (detached) <path>` without
   `(local branch kept)`; a `git worktree remove` that fails after unregistering the
   worktree prints `cleaned ... (local branch kept; directory left)` instead of `blocked`.

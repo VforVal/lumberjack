@@ -631,9 +631,21 @@ def manager_wired(primary: Path) -> bool:
     return False
 
 
+def hook_script(primary: Path) -> str:
+    """Keep this repository's hook outside its removable source worktrees."""
+    script = Path(__file__).resolve()
+    stable = primary / "scripts" / script.name
+    if stable.is_file() and any(
+        script == Path(tree["path"]).resolve() / "scripts" / script.name
+        for tree in registered(primary)
+    ):
+        script = stable
+    return script.as_posix()
+
+
 def self_heal(primary: Path) -> list[str]:
     """Point git at this script and, when it is free, at .githooks; hint on unwired managers."""
-    git(primary, "config", "lumberjack.script", Path(__file__).resolve().as_posix())
+    git(primary, "config", "lumberjack.script", hook_script(primary))
     if name := hook_manager(primary):
         if manager_wired(primary):
             return []

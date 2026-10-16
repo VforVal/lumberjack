@@ -2,7 +2,7 @@
 
 # >>> lumberjack
 script="$(git config --get lumberjack.script)"
-if [ -n "$script" ] && command -v uv >/dev/null 2>&1; then
+if [ -f "$script" ] && command -v uv >/dev/null 2>&1; then
   uv run --quiet --script "$script" --cleanup || true
 fi
 # <<< lumberjack

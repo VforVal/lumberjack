@@ -20,8 +20,10 @@ from sweep_worktrees import (
     DEFAULTS,
     ConfigError,
     config_table,
+    find_primary,
     git,
     hook_manager,
+    hook_script,
     lines,
     load_config,
     origin_parts,
@@ -245,10 +247,11 @@ SH_MARKERS = ("# >>> lumberjack", "# <<< lumberjack")
 MD_MARKERS = ("<!-- >>> lumberjack -->", "<!-- <<< lumberjack -->")
 BEGIN, END = SH_MARKERS
 RUN = 'uv run --quiet --script "$(git config --get lumberjack.script)" --cleanup'
-SAFE_RUN = f"{RUN} || true"  # a sweep failure must never fail the merge
+# A sweep failure must never fail the merge.
+SAFE_RUN = f'test -f "$(git config --get lumberjack.script)" && {RUN} || true'
 BLOCK = f"""{BEGIN}
 script="$(git config --get lumberjack.script)"
-if [ -n "$script" ] && command -v uv >/dev/null 2>&1; then
+if [ -f "$script" ] && command -v uv >/dev/null 2>&1; then
   uv run --quiet --script "$script" --cleanup || true
 fi
 {END}
@@ -397,7 +400,10 @@ def simple_git_hooks_hook(repo: Path) -> None:
     package = read_json(repo, "package.json") or {}
     hooks = package.setdefault("simple-git-hooks", {})
     old = hooks.get("post-merge", "")
-    if RUN not in old:
+    if RUN in old:
+        if SAFE_RUN not in old:
+            hooks["post-merge"] = old.replace(f"{RUN} || true", SAFE_RUN)
+    else:
         hooks["post-merge"] = f"{old}; {SAFE_RUN}" if old else SAFE_RUN
     write_json(repo, "package.json", package)
     print("note: run npx simple-git-hooks to activate the hook")
@@ -430,7 +436,7 @@ def write_hook(repo: Path, hook: str) -> None:
         print(UV_MISSING)
         return
     HOOK_WRITERS[hook](repo)
-    script = (HERE / "sweep_worktrees.py").as_posix()
+    script = hook_script(find_primary(repo))
     git(repo, "config", "lumberjack.script", script)
     print(f"ran git config lumberjack.script {script}")
 
