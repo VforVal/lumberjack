@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
 
 - `/lumberjack:cleanup`: a user-invoked command that runs the cleanup and
   `git worktree prune`, then asks about each `unverified` and `landed-probable`
