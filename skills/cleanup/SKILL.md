@@ -48,9 +48,9 @@ means keep it. A yes to one is not a yes to the next. On a yes, run:
 uv run --quiet --script "SWEEP" --remove "PATH"
 ```
 
-Relay its one line verbatim: `cleaned <branch> <path> (local branch kept)`, or a
-`blocked` line with its reason and exit 1, after which the worktree stays and you move
-on. Do not work around a block (commit, stash, delete files or `cd` away) unless
+Relay its one line verbatim: a `cleaned` line and exit 0 (`directory left` means the
+maintainer deletes the leftover directory by hand), or a `blocked` line with its reason
+and exit 1, after which the worktree stays and you move on. Do not work around a block (commit, stash, delete files or `cd` away) unless
 the maintainer asks for that step by name.
 
 ## 4. Report

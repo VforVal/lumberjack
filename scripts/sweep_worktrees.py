@@ -479,9 +479,13 @@ def worktree_event(primary: Path, cfg: Config, w: Row, here: Path | None) -> tup
 
 
 def remove_worktree(primary: Path, w: Row) -> tuple[str, str]:
+    notes = ["local branch kept"] if w["branch"] else []
     if (gone := git(primary, "worktree", "remove", w["path"])).returncode:
-        return "blocked", f"blocked {tag(primary, w)}: {gone.stderr.strip()}"
-    return "cleaned", f"cleaned {tag(primary, w)} (local branch kept)"
+        # On Windows a locked directory fails the remove after git deleted the files and entry.
+        if any(same_dir(t["path"], w["path"]) for t in registered(primary)):
+            return "blocked", f"blocked {tag(primary, w)}: {gone.stderr.strip()}"
+        notes += ["directory left"] if Path(w["path"]).exists() else []
+    return "cleaned", f"cleaned {tag(primary, w)}" + (f" ({'; '.join(notes)})" if notes else "")
 
 
 def remove_named(start: Path, target: str) -> tuple[bool, str]:
