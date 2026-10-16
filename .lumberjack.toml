@@ -1,0 +1,25 @@
+# written by lumberjack setup 1.0.0
+
+# Branch owners allowed in <owner>/<slug> names; empty allows any owner.
+owners = ["claude", "codex"]
+
+# Ticket prefix in branch names (for example eng-); empty means no ticket.
+ticket_prefix = ""
+
+# Prefix of throwaway prototype branches, which skip the owner rule.
+prototype_prefix = "prototype/"
+
+# Trunk branch the primary checkout stays on; landed work merges into it.
+primary_branch = "main"
+
+# Directory whose files protect a worktree from cleanup; empty for none.
+evidence_dir = ""
+
+# Where worktrees live: ~ is the home directory, * a glob, {name} the repo name.
+worktree_roots = [".claude/worktrees", "~/.codex/worktrees/*", "~/Documents/{name}-*"]
+
+# What SessionStart does with landed worktrees: prune, report or keep.
+cleanup = "prune"
+
+# Whether the Stop hook blocks on branch and primary-checkout debt.
+stop_gate = true

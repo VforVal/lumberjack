@@ -43,3 +43,11 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
 - `skills/lumberjack/SKILL.md` stays at most 79 lines, `skills/setup/SKILL.md` at most 120;
   they and `skills/cleanup/SKILL.md` name no consumer project, path or ticket; config keys
   carry the project-specific values.
+
+<!-- >>> lumberjack -->
+## Lumberjack
+
+Worktree rules live in the `lumberjack` skill; config in `.lumberjack.toml`.
+Session start cleans up landed worktrees; the Stop hook gates debt.
+Re-run the `lumberjack:setup` skill after conventions change.
+<!-- <<< lumberjack -->
