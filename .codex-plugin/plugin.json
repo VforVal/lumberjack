@@ -1,0 +1,13 @@
+{
+  "name": "lumberjack",
+  "version": "1.0.0",
+  "description": "Removes agent worktrees whose work has landed, and blocks turns that end on a misnamed branch or an off-branch primary checkout",
+  "skills": ["./skills"],
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Lumberjack",
+    "shortDescription": "Cleans landed worktrees, gates bad branch names",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/icon.png"
+  }
+}

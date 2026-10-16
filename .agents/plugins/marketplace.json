@@ -1,0 +1,10 @@
+{
+  "name": "lumberjack",
+  "plugins": [
+    {
+      "name": "lumberjack",
+      "description": "Removes agent worktrees whose work has landed, and blocks turns that end on a misnamed branch or an off-branch primary checkout",
+      "source": "./"
+    }
+  ]
+}

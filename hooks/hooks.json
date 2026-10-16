@@ -1,0 +1,41 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --quiet --script \"${CLAUDE_PLUGIN_ROOT}/scripts/sweep_worktrees.py\" --hook",
+            "timeout": 30,
+            "statusMessage": "Sweeping worktrees"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --quiet --script \"${CLAUDE_PLUGIN_ROOT}/scripts/sweep_worktrees.py\" --hook",
+            "timeout": 15,
+            "statusMessage": "Loading worktree rules"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --quiet --script \"${CLAUDE_PLUGIN_ROOT}/scripts/sweep_worktrees.py\" --hook",
+            "timeout": 15,
+            "statusMessage": "Checking worktree debt"
+          }
+        ]
+      }
+    ]
+  }
+}
