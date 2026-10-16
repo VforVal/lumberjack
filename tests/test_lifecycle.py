@@ -17,7 +17,7 @@ import sweep_worktrees  # noqa: E402
 
 
 @pytest.mark.parametrize("entrypoint", ["setup", "cleanup"])
-@pytest.mark.parametrize("source", ["worktree", "external"])
+@pytest.mark.parametrize("source", ["worktree", "external", "nested"])
 def test_hook_script_survives_source_worktree_removal(
     configured_repo: tuple[Path, Path], tmp_path: Path, entrypoint: str, source: str,
 ) -> None:
@@ -31,8 +31,8 @@ def test_hook_script_survives_source_worktree_removal(
     worktree = trees / "plugin source"
     git(primary, "worktree", "add", "-q", "-b", "codex/eng-3-source", str(worktree))
     plugin = worktree
-    if source == "external":
-        plugin = tmp_path / "installed plugin"
+    if source != "worktree":
+        plugin = (primary if source == "nested" else tmp_path) / "installed plugin"
         shutil.copytree(worktree / "scripts", plugin / "scripts")
         shutil.copytree(worktree / "skills", plugin / "skills")
         shutil.copyfile(worktree / "VERSION", plugin / "VERSION")

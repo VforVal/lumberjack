@@ -636,7 +636,8 @@ def hook_script(primary: Path) -> str:
     script = Path(__file__).resolve()
     stable = primary / "scripts" / script.name
     if stable.is_file() and any(
-        script.is_relative_to(Path(tree["path"]).resolve()) for tree in registered(primary)
+        script == Path(tree["path"]).resolve() / "scripts" / script.name
+        for tree in registered(primary)
     ):
         script = stable
     return script.as_posix()
