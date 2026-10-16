@@ -220,6 +220,12 @@ cleaned alice/eng-15-spike ~/worktrees/app3 (local branch kept)
 blocked alice/eng-16-draft ~/worktrees/app4: dirty
 ```
 
+A detached worktree's line is `cleaned (detached) <path>`, with no branch note. When
+`git worktree remove` fails after it already dropped the worktree (on Windows, a locked
+directory), the note adds `directory left`, as in `(local branch kept; directory left)`,
+and the exit is 0; delete the leftover directory by hand. A failure that leaves the
+worktree registered prints `blocked` with git's error.
+
 It refuses with `current checkout`, `dirty` or `evidence` as in the cleanup rule (an
 unpushed tip is no loss, since the branch keeps it), and also with:
 

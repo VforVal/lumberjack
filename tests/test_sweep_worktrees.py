@@ -663,3 +663,46 @@ def test_remove_refuses_a_blocked_worktree_with_its_reason(primary: Path) -> Non
     git(detached, "commit", "-q", "-m", "detached")
     assert remove(primary, detached) == (1, ["blocked (detached) wt/detached: no branch"])
     assert dirty.exists() and open_.exists() and proto.exists() and detached.exists()
+
+
+def test_remove_takes_a_detached_worktree_whose_commit_is_on_a_branch(primary: Path) -> None:
+    detached = primary.parent / "wt" / "detached"
+    git(primary, "worktree", "add", "-q", "--detach", str(detached), "claude/eng-3-open")
+    assert remove(primary, detached) == (0, ["cleaned (detached) wt/detached"])
+    assert not detached.exists()
+
+
+def failing_remove(monkeypatch: pytest.MonkeyPatch, unregister: bool) -> None:
+    """git worktree remove fails as on a locked Windows directory, after it did its work or not."""
+    real = sweep_worktrees.git
+
+    def fake(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        if args[:2] != ("worktree", "remove"):
+            return real(cwd, *args)
+        if unregister:
+            real(cwd, *args)
+            Path(args[2]).mkdir()
+        return subprocess.CompletedProcess(["git", *args], 255, "", "error: Permission denied\n")
+
+    monkeypatch.setattr(sweep_worktrees, "git", fake)
+
+
+def test_remove_reports_a_half_failed_removal_as_cleaned(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    open_ = primary.parent / "wt" / "eng-3-open"
+    failing_remove(monkeypatch, unregister=True)
+    assert sweep_worktrees.remove_named(primary, str(open_)) == (
+        True, "cleaned claude/eng-3-open wt/eng-3-open (local branch kept; directory left)"
+    )
+    assert open_.exists() and not any(open_.iterdir())
+
+
+def test_remove_reports_a_failed_removal_as_blocked(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    open_ = primary.parent / "wt" / "eng-3-open"
+    failing_remove(monkeypatch, unregister=False)
+    assert sweep_worktrees.remove_named(primary, str(open_)) == (
+        False, "blocked claude/eng-3-open wt/eng-3-open: error: Permission denied"
+    )
