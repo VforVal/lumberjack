@@ -245,7 +245,12 @@ SH_MARKERS = ("# >>> lumberjack", "# <<< lumberjack")
 MD_MARKERS = ("<!-- >>> lumberjack -->", "<!-- <<< lumberjack -->")
 BEGIN, END = SH_MARKERS
 LEGACY_RUN = 'uv run --quiet --script "$(git config --get lumberjack.script)" --cleanup'
-PYTHON = 'python="$(command -v python || command -v python3)"'
+# First of python3, python that reports 3.11+; empty when none does. No quotes: pre-commit
+# wraps it in sh -c '...'.
+PYTHON = (
+    'for python in python3 python; do case $($python -V 2>/dev/null) in '
+    'Python?3.1[1-9]*|Python?3.[2-9][0-9]*) break;; esac; python=; done'
+)
 RUN = '"$python" "$(git config --get lumberjack.script)" --cleanup'
 # A sweep failure must never fail the merge.
 SAFE_RUN = (

@@ -11,14 +11,14 @@ writing; you only gather answers. Never commit anything.
 
 ## 1. Discover
 
+Check `python3 --version`, then `python --version`: use the first name that reports
+3.11 or newer in place of `python` below. If neither does, stop and point to
+https://www.python.org/downloads/ . If git is
+missing, stop and point to https://git-scm.com/downloads before running the helper.
+
 Resolve the helper at `../../scripts/setup_lumberjack.py` relative to this skill's
 directory. Use its absolute path in place of `HELPER` below, quoted for the active
 shell (including paths with spaces). Run from the repository root; keep the JSON:
-
-Check `python --version` (or `python3 --version`): it must be 3.11 or newer; use that
-name in place of `python` below. If missing or older, stop and point to
-https://www.python.org/downloads/ . If git is
-missing, stop and point to https://git-scm.com/downloads before running the helper.
 
 ```
 python "HELPER" discover

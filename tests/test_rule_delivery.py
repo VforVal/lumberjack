@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -37,10 +38,8 @@ def test_subagent_has_one_context_only_hook() -> None:
     assert command.endswith("--hook")
 
 
-@pytest.mark.parametrize("event", ["SessionStart", "SubagentStart", "Stop"])
-def test_registered_hook_runs_through_the_host_shell_without_uv(
-    tmp_path: Path, event: str,
-) -> None:
+def registered_hook(tmp_path: Path, event: str, *shims: str) -> subprocess.CompletedProcess[str]:
+    """Run the registered hook command through the host shell; shims lead PATH."""
     root = Path(__file__).resolve().parents[1]
     plugin = tmp_path / "plugin with spaces"
     shutil.copytree(root / "scripts", plugin / "scripts")
@@ -53,17 +52,24 @@ def test_registered_hook_runs_through_the_host_shell_without_uv(
     command = hooks[event][0]["hooks"][0]["command"].replace(
         "${CLAUDE_PLUGIN_ROOT}", plugin.as_posix(),
     )
-    # Use the registered command through the host shell, with no uv on PATH.
+    # No uv on PATH: the command must run on plain Python.
     uv = REAL_WHICH("uv")
     path = os.pathsep.join(
-        part for part in os.environ["PATH"].split(os.pathsep)
-        if not uv or Path(part).resolve() != Path(uv).parent.resolve()
+        [*shims] + [part for part in os.environ["PATH"].split(os.pathsep)
+                    if not uv or Path(part).resolve() != Path(uv).parent.resolve()]
     )
     shell = REAL_WHICH("sh") or git(repo, "var", "GIT_SHELL_PATH").strip()
-    done = subprocess.run(
+    return subprocess.run(
         [shell, "-c", command], cwd=repo, input=json.dumps({"hook_event_name": event}),
         capture_output=True, text=True, env={**os.environ, "PATH": path},
     )
+
+
+@pytest.mark.parametrize("event", ["SessionStart", "SubagentStart", "Stop"])
+def test_registered_hook_runs_through_the_host_shell_without_uv(
+    tmp_path: Path, event: str,
+) -> None:
+    done = registered_hook(tmp_path, event)
     assert done.returncode == 0, done.stderr
     assert done.stderr == ""
     output = json.loads(done.stdout)
@@ -72,3 +78,21 @@ def test_registered_hook_runs_through_the_host_shell_without_uv(
         assert "branch Feature_X violates" in output["reason"]
     else:
         assert "Worktree" in output["hookSpecificOutput"]["additionalContext"]
+
+
+@pytest.mark.parametrize("stale", ["python3", "python"])
+def test_registered_hook_skips_a_python_older_than_311(tmp_path: Path, stale: str) -> None:
+    # Stock macOS and Ubuntu 22.04 ship an old python3; CentOS 7 has python 2. The launcher
+    # must pick the other name by version, not by position.
+    shims = tmp_path / "shims"
+    shims.mkdir()
+    (shims / stale).write_text("#!/bin/sh\necho Python 3.9.6\n", encoding="utf-8")
+    (shims / ("python" if stale == "python3" else "python3")).write_text(
+        f'#!/bin/sh\nexec "{Path(sys.executable).as_posix()}" "$@"\n', encoding="utf-8",
+    )
+    for shim in shims.iterdir():
+        shim.chmod(0o755)
+    done = registered_hook(tmp_path, "Stop", str(shims))
+    assert done.returncode == 0, done.stderr
+    assert done.stderr == ""
+    assert json.loads(done.stdout)["decision"] == "block"

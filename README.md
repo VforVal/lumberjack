@@ -44,8 +44,10 @@ cleanup rule, detection tiers, the summary line, hook placement and uninstall.
 - `git`
 - [Python 3.11+](https://www.python.org/downloads/) on PATH as `python` or `python3`.
   The scripts use only the standard library; no `uv`, virtual environment or runtime
-  packages are needed. Every hook tries `python` first, then `python3`. An older Python
-  prints `lumberjack: Python 3.11+ required, found <version>` and exits.
+  packages are needed. Every hook tries `python3`, then `python`, and runs the first that
+  reports 3.11 or newer. When neither does, the post-merge hook skips and the plugin
+  hooks run `python3` anyway, so its error shows in the harness: `not found`, or
+  `lumberjack: Python 3.11+ required, found <version>` from an older Python.
 - Optional: `gh`, logged in, to detect squash-merged and rebase-merged pull requests.
   Without it the sweep decides from git alone and fewer branches count as landed.
 
@@ -251,8 +253,8 @@ what produced them and asks once per group: delete, ignore (`.git/info/exclude` 
 ## Hook placement
 
 Setup installs a post-merge hook that runs the sweep after every merge. It skips silently
-when `python` and `python3`, `git config lumberjack.script` or the configured script file
-are missing.
+when no `python3` or `python` reports 3.11+, or `git config lumberjack.script` or the
+configured script file is missing.
 Everything setup adds sits
 between `# >>> lumberjack` and `# <<< lumberjack` lines.
 
@@ -275,9 +277,10 @@ followed by `ran git config lumberjack.script <path>`. Other lines setup can pri
 
 The post-merge hook is a `sh` script and runs under Git for Windows; there is no shim.
 The plugin hooks run the sweep through a `git` alias, so git's own `sh` picks the Python
-and the command line parses the same under Git Bash and PowerShell. Without a real Python
-install, `python` resolves to the Microsoft Store alias, which prints a Store message
-instead of running the sweep; install Python 3.11+ or turn the alias off.
+and the command line parses the same under Git Bash and PowerShell. The Microsoft Store
+`python` and `python3` aliases fail the version probe and are skipped; without a real
+Python 3.11+ install the plugin hooks then print the Store message instead of running
+the sweep, so install Python 3.11+ or turn the aliases off.
 In the plugin's hooks, `${CLAUDE_PLUGIN_ROOT}` expands to the plugin directory.
 
 ## Uninstall
