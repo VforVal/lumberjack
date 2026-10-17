@@ -215,11 +215,6 @@ confirms, one at a time, with:
 sweep_worktrees.py --remove <path>
 ```
 
-When `--remove` refuses with `dirty` or `ignored files`, the command groups the stray
-files by what produced them (one tool's output, one file type, one directory) and asks
-once per group whether to delete them, add a `.gitignore` pattern on the branch, or
-commit them to the branch, then retries. It never asks file by file.
-
 `--remove` acts on that one worktree and nothing else, whatever its tier or the `cleanup`
 setting, and keeps its branch. It prints one line and exits 0 when removed, 1 when blocked:
 
@@ -244,6 +239,11 @@ unpushed tip is no loss, since the branch keeps it), and also with:
 - `no branch`: a detached tip that no local branch contains
 - `not a worktree`: no registered worktree at that path; the line is
   `blocked <path>: not a worktree`
+
+On a `dirty` or `ignored files` block, the command lists the stray files, groups them by
+what produced them and asks once per group: delete, ignore (`.git/info/exclude` or
+`.gitignore`) or commit and push. It never asks file by file. The same rule is in the
+`lumberjack` skill for a `blocked ...: dirty` line at session start.
 
 ## Hook placement
 

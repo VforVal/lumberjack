@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-- `/lumberjack:cleanup`: on a `dirty` or `ignored files` block it groups the stray files
-  by origin and asks once per group whether to delete, `.gitignore` or commit them, then
-  retries `--remove`.
+- `/lumberjack:cleanup`: a `dirty` landed worktree is offered too, and on a `dirty` or
+  `ignored files` block the command groups the stray files by what produced them and asks
+  once per group whether to delete, ignore or commit them, then retries `--remove`. The
+  `lumberjack` skill gives agents the same rule for a `blocked ...: dirty` line.
 
 ## 1.1.1
 

@@ -34,9 +34,10 @@ go on to step 2.
 uv run --quiet --script "SWEEP"
 ```
 
-Keep the `worktree` lines whose `tier=` is `unverified` or `landed-probable`. Show them
-as one numbered list: branch, path, tier and reason. The path is everything after the
-branch, already absolute; use it as `PATH` below. If there are none, say so and stop.
+Keep the `worktree` lines whose `tier=` is `unverified` or `landed-probable`, plus any
+worktree step 1 reported as `blocked ...: dirty`. Show them as one numbered list: branch,
+path, tier and reason. The path is everything after the branch, already absolute; use it
+as `PATH` below. If there are none, say so and stop.
 
 ## 3. Ask about each one
 
@@ -52,26 +53,28 @@ Relay its one line verbatim: a `cleaned` line and exit 0 (`directory left` means
 maintainer deletes the leftover directory by hand), or a `blocked` line with its reason
 and exit 1, after which the worktree stays and you move on. Do not work around a block
 (commit, stash, delete files or `cd` away) unless the maintainer asks for that step by
-name. The one exception is stray files, handled below.
+name; a per-group answer under "Stray files" below is that request.
 
 ### Stray files (`dirty` or `ignored files`)
 
-The block line names no files. Run `git -C "PATH" status --porcelain --ignored` and
-group the untracked (`??`) and ignored (`!!`) entries by what produced them: one tool's
-output, one file type, one directory. Never ask file by file. Ask one question per
-group, naming its files and the three choices:
+The block line names no files. Run `git -C "PATH" status --porcelain -uall --ignored`.
+Stray entries are the untracked (`??`) ones and the ignored (`!!`) ones other than caches
+(`node_modules`, `.venv`, `__pycache__`, tool caches). Modified tracked files (`M`, `D`)
+are not stray: show them and leave them. Group the stray entries by what produced them:
+one tool's output, one file type, one directory. Never ask file by file. Ask one question
+per group, naming its files and the three choices:
 
-- **delete**: `git -C "PATH" clean -f -- <files>` (add `-d` for directories, `-x` for
-  ignored ones); removal would delete them anyway.
-- **ignore**: add one `.gitignore` pattern on the branch and commit it, then delete the
-  copies as above; `--remove` still refuses while non-cache ignored files exist.
-- **commit**: `git -C "PATH" add -- <files>` and commit on the branch, so they ride its
-  pull request; the tip is then unpushed, which does not block `--remove`.
+- **delete**: `git -C "PATH" clean -f -x -- <files>`; removal would delete them anyway.
+- **ignore** (`??` entries only): add one pattern to `.git/info/exclude` in the primary
+  checkout, which covers every worktree of this clone without a commit, or to
+  `.gitignore` on the primary branch through its own pull request; then delete the
+  copies as above.
+- **commit**: `git -C "PATH" add -f -- <files>`, commit on the branch and push; the files
+  reach the primary branch through its pull request, a new one if the old one merged.
 
 Only the answer for that group counts; silence keeps its files, and the worktree stays
-while any group is kept. Modified tracked files (`M`, `D`) are not stray: show them and
-leave them unless the maintainer names the step. Once every group is settled, run
-`--remove "PATH"` again and relay its line.
+while any group is kept. Once every group is settled, run `--remove "PATH"` again and
+relay its line.
 
 ## 4. Report
 
