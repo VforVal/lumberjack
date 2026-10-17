@@ -2,7 +2,7 @@
 
 # >>> lumberjack
 script="$(git config --get lumberjack.script)"
-python="$(command -v python || command -v python3)"
+for python in python3 python; do case $($python -V 2>/dev/null) in Python?3.1[1-9]*|Python?3.[2-9][0-9]*) break;; esac; python=; done
 if [ -f "$script" ] && [ -n "$python" ]; then
   "$python" "$script" --cleanup || true
 fi

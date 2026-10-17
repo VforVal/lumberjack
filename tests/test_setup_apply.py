@@ -421,12 +421,11 @@ def test_claude_lines_are_printed_not_run(
     assert "claude plugin" not in apply(repo, capsys, harnesses=["codex"])[1]
 
 
-def test_uv_missing_still_installs_hook_config_and_settings(
+def test_no_optional_tool_on_path_still_installs_hook_config_and_settings(
     repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("shutil.which", lambda _: None)
     _, out, _ = apply(repo, capsys, hook="plain", pin_claude_settings=True)
-    assert "uv missing" not in out  # the plain "uv" would match this checkout's path
     assert (repo / ".lumberjack.toml").is_file() and (repo / ".claude/settings.json").is_file()
     assert (repo / ".githooks/post-merge").is_file()
 

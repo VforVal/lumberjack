@@ -13,7 +13,7 @@ confirm by name, and never pass `--force` to git.
 Resolve the script at `../../scripts/sweep_worktrees.py` relative to this skill's
 directory. Use its absolute path in place of `SWEEP` below, quoted for the active shell.
 Run every command from the repository root with Python 3.11+ as `python` or `python3`;
-use the name that exists in place of `python` below. If missing or older, stop and point
+use the name that reports 3.11+ in place of `python` below. If missing or older, stop and point
 to https://www.python.org/downloads/ .
 
 ## 1. Sweep
