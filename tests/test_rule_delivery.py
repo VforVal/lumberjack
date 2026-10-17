@@ -38,7 +38,7 @@ def test_subagent_has_one_context_only_hook() -> None:
 
 
 @pytest.mark.parametrize("event", ["SessionStart", "SubagentStart", "Stop"])
-def test_registered_hook_runs_with_plain_python(
+def test_registered_hook_runs_through_the_host_shell_without_uv(
     tmp_path: Path, event: str,
 ) -> None:
     root = Path(__file__).resolve().parents[1]
@@ -59,8 +59,9 @@ def test_registered_hook_runs_with_plain_python(
         part for part in os.environ["PATH"].split(os.pathsep)
         if not uv or Path(part).resolve() != Path(uv).parent.resolve()
     )
+    shell = REAL_WHICH("sh") or git(repo, "var", "GIT_SHELL_PATH").strip()
     done = subprocess.run(
-        command, shell=True, cwd=repo, input=json.dumps({"hook_event_name": event}),
+        [shell, "-c", command], cwd=repo, input=json.dumps({"hook_event_name": event}),
         capture_output=True, text=True, env={**os.environ, "PATH": path},
     )
     assert done.returncode == 0, done.stderr

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/sweep_worktrees.py\" --hook",
+            "command": "git -c 'alias.lumberjack=!unset GIT_DIR GIT_PREFIX;p=python;command -v $p >/dev/null 2>&1||p=python3;exec $p' lumberjack \"${CLAUDE_PLUGIN_ROOT}/scripts/sweep_worktrees.py\" --hook",
             "timeout": 30,
             "statusMessage": "Sweeping worktrees"
           }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/sweep_worktrees.py\" --hook",
+            "command": "git -c 'alias.lumberjack=!unset GIT_DIR GIT_PREFIX;p=python;command -v $p >/dev/null 2>&1||p=python3;exec $p' lumberjack \"${CLAUDE_PLUGIN_ROOT}/scripts/sweep_worktrees.py\" --hook",
             "timeout": 15,
             "statusMessage": "Loading worktree rules"
           }
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/sweep_worktrees.py\" --hook",
+            "command": "git -c 'alias.lumberjack=!unset GIT_DIR GIT_PREFIX;p=python;command -v $p >/dev/null 2>&1||p=python3;exec $p' lumberjack \"${CLAUDE_PLUGIN_ROOT}/scripts/sweep_worktrees.py\" --hook",
             "timeout": 15,
             "statusMessage": "Checking worktree debt"
           }

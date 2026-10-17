@@ -2,7 +2,8 @@
 
 # >>> lumberjack
 script="$(git config --get lumberjack.script)"
-if [ -f "$script" ] && command -v python >/dev/null 2>&1; then
-  python "$script" --cleanup || true
+python="$(command -v python || command -v python3)"
+if [ -f "$script" ] && [ -n "$python" ]; then
+  "$python" "$script" --cleanup || true
 fi
 # <<< lumberjack

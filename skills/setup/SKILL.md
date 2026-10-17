@@ -15,8 +15,9 @@ Resolve the helper at `../../scripts/setup_lumberjack.py` relative to this skill
 directory. Use its absolute path in place of `HELPER` below, quoted for the active
 shell (including paths with spaces). Run from the repository root; keep the JSON:
 
-Check `python --version`: it must be 3.11 or newer and available as `python` on PATH.
-If missing or older, stop and point to https://www.python.org/downloads/ . If git is
+Check `python --version` (or `python3 --version`): it must be 3.11 or newer; use that
+name in place of `python` below. If missing or older, stop and point to
+https://www.python.org/downloads/ . If git is
 missing, stop and point to https://git-scm.com/downloads before running the helper.
 
 ```

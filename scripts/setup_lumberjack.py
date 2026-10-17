@@ -7,6 +7,9 @@ import re
 import shutil
 import subprocess
 import sys
+
+if sys.version_info < (3, 11):  # before tomllib: a plain message instead of a traceback
+    sys.exit(f"lumberjack: Python 3.11+ required, found {sys.version.split()[0]}")
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -242,16 +245,18 @@ SH_MARKERS = ("# >>> lumberjack", "# <<< lumberjack")
 MD_MARKERS = ("<!-- >>> lumberjack -->", "<!-- <<< lumberjack -->")
 BEGIN, END = SH_MARKERS
 LEGACY_RUN = 'uv run --quiet --script "$(git config --get lumberjack.script)" --cleanup'
-RUN = 'python "$(git config --get lumberjack.script)" --cleanup'
+PYTHON = 'python="$(command -v python || command -v python3)"'
+RUN = '"$python" "$(git config --get lumberjack.script)" --cleanup'
 # A sweep failure must never fail the merge.
 SAFE_RUN = (
     'test -f "$(git config --get lumberjack.script)" && '
-    f'command -v python >/dev/null 2>&1 && {RUN} || true'
+    f'{PYTHON} && test -n "$python" && {RUN} || true'
 )
 BLOCK = f"""{BEGIN}
 script="$(git config --get lumberjack.script)"
-if [ -f "$script" ] && command -v python >/dev/null 2>&1; then
-  python "$script" --cleanup || true
+{PYTHON}
+if [ -f "$script" ] && [ -n "$python" ]; then
+  "$python" "$script" --cleanup || true
 fi
 {END}
 """

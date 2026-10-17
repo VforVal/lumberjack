@@ -42,9 +42,10 @@ cleanup rule, detection tiers, the summary line, hook placement and uninstall.
 ## Requirements
 
 - `git`
-- [Python 3.11+](https://www.python.org/downloads/), available as `python` on PATH
-  (`python --version` must report 3.11 or newer). The scripts use only the standard library;
-  no `uv`, virtual environment or runtime packages are needed.
+- [Python 3.11+](https://www.python.org/downloads/) on PATH as `python` or `python3`.
+  The scripts use only the standard library; no `uv`, virtual environment or runtime
+  packages are needed. Every hook tries `python` first, then `python3`. An older Python
+  prints `lumberjack: Python 3.11+ required, found <version>` and exits.
 - Optional: `gh`, logged in, to detect squash-merged and rebase-merged pull requests.
   Without it the sweep decides from git alone and fewer branches count as landed.
 
@@ -84,10 +85,9 @@ optional `.claude/settings.json` pinning and
 `.gitignore` lines for worktree roots inside the repository. It never commits; review
 `git diff` and commit it yourself. Re-running is safe.
 
-If git or Python 3.11+ is missing, install the requirement before setup. On systems
-that provide only `python3`, also make that interpreter available as `python` on the
-PATH inherited by the harness and Git hooks; an interactive shell alias is insufficient.
-After upgrading from a uv-based release, re-run setup to refresh the post-merge hook.
+If git or Python 3.11+ is missing, install the requirement before setup. The PATH that
+matters is the one the harness and Git hooks inherit; an interactive shell alias is not
+enough. After upgrading from a uv-based release, re-run setup to refresh the post-merge hook.
 For authentication errors, run `claude auth login` or `codex login` before invoking the setup skill;
 `gh auth login` enables pull-request landing evidence. Installation alone does not
 prove that the setup skill or hooks ran.
@@ -251,7 +251,8 @@ what produced them and asks once per group: delete, ignore (`.git/info/exclude` 
 ## Hook placement
 
 Setup installs a post-merge hook that runs the sweep after every merge. It skips silently
-when `python`, `git config lumberjack.script` or the configured script file is missing.
+when `python` and `python3`, `git config lumberjack.script` or the configured script file
+are missing.
 Everything setup adds sits
 between `# >>> lumberjack` and `# <<< lumberjack` lines.
 
@@ -273,6 +274,10 @@ followed by `ran git config lumberjack.script <path>`. Other lines setup can pri
 ## Windows
 
 The post-merge hook is a `sh` script and runs under Git for Windows; there is no shim.
+The plugin hooks run the sweep through a `git` alias, so git's own `sh` picks the Python
+and the command line parses the same under Git Bash and PowerShell. Without a real Python
+install, `python` resolves to the Microsoft Store alias, which prints a Store message
+instead of running the sweep; install Python 3.11+ or turn the alias off.
 In the plugin's hooks, `${CLAUDE_PLUGIN_ROOT}` expands to the plugin directory.
 
 ## Uninstall

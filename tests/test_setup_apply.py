@@ -101,7 +101,7 @@ def test_plain_hook_is_written_to_githooks_and_wired(
     _, out, _ = apply(repo, capsys, hook="plain")
     text = read(repo, ".githooks/post-merge")
     assert text.startswith("#!/bin/sh\n") and block_count(text) == 1
-    assert 'python "$script" --cleanup || true' in text
+    assert '"$python" "$script" --cleanup || true' in text
     assert git(repo, "config", "core.hooksPath").strip() == ".githooks"
     assert "wrote .githooks/post-merge" in out and "ran git config core.hooksPath" in out
     script = (Path(setup_lumberjack.__file__).parent / "sweep_worktrees.py").resolve().as_posix()
@@ -146,7 +146,7 @@ def test_post_merge_runs_or_quietly_skips_missing_requirements(
         command = read(repo, ".pre-commit-config.yaml").split("entry: sh -c '", 1)[1].splitlines()[0][:-1]
     else:
         command = json.loads(read(repo, "package.json"))["simple-git-hooks"]["post-merge"]
-        assert command.count('python "') == 1
+        assert command.count("--cleanup") == 1
     shell = REAL_WHICH("sh") or git(repo, "var", "GIT_SHELL_PATH").strip()
     path = str(repo / "bin") + os.pathsep + os.environ["PATH"]
     if missing == "python":
@@ -287,7 +287,7 @@ def test_simple_git_hooks_entry(repo: Path, capsys: pytest.CaptureFixture[str]) 
     apply(repo, capsys, hook="simple-git-hooks")
     data = json.loads(read(repo, "package.json"))
     assert data["name"] == "x" and data["simple-git-hooks"]["pre-commit"] == "t"
-    assert data["simple-git-hooks"]["post-merge"].count('python "') == 1
+    assert data["simple-git-hooks"]["post-merge"].count("--cleanup") == 1
     assert read(repo, "package.json").startswith('{\n  "name"')
 
 
@@ -426,7 +426,7 @@ def test_uv_missing_still_installs_hook_config_and_settings(
 ) -> None:
     monkeypatch.setattr("shutil.which", lambda _: None)
     _, out, _ = apply(repo, capsys, hook="plain", pin_claude_settings=True)
-    assert "uv" not in out
+    assert "uv missing" not in out  # the plain "uv" would match this checkout's path
     assert (repo / ".lumberjack.toml").is_file() and (repo / ".claude/settings.json").is_file()
     assert (repo / ".githooks/post-merge").is_file()
 
