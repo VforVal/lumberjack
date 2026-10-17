@@ -52,7 +52,26 @@ Relay its one line verbatim: a `cleaned` line and exit 0 (`directory left` means
 maintainer deletes the leftover directory by hand), or a `blocked` line with its reason
 and exit 1, after which the worktree stays and you move on. Do not work around a block
 (commit, stash, delete files or `cd` away) unless the maintainer asks for that step by
-name.
+name. The one exception is stray files, handled below.
+
+### Stray files (`dirty` or `ignored files`)
+
+The block line names no files. Run `git -C "PATH" status --porcelain --ignored` and
+group the untracked (`??`) and ignored (`!!`) entries by what produced them: one tool's
+output, one file type, one directory. Never ask file by file. Ask one question per
+group, naming its files and the three choices:
+
+- **delete**: `git -C "PATH" clean -f -- <files>` (add `-d` for directories, `-x` for
+  ignored ones); removal would delete them anyway.
+- **ignore**: add one `.gitignore` pattern on the branch and commit it, then delete the
+  copies as above; `--remove` still refuses while non-cache ignored files exist.
+- **commit**: `git -C "PATH" add -- <files>` and commit on the branch, so they ride its
+  pull request; the tip is then unpushed, which does not block `--remove`.
+
+Only the answer for that group counts; silence keeps its files, and the worktree stays
+while any group is kept. Modified tracked files (`M`, `D`) are not stray: show them and
+leave them unless the maintainer names the step. Once every group is settled, run
+`--remove "PATH"` again and relay its line.
 
 ## 4. Report
 

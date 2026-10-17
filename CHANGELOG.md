@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `/lumberjack:cleanup`: on a `dirty` or `ignored files` block it groups the stray files
+  by origin and asks once per group whether to delete, `.gitignore` or commit them, then
+  retries `--remove`.
+
 ## 1.1.1
 
 - Post-merge hook: setup and the sweep no longer record a `lumberjack.script` inside a
