@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
 """Inventory worktrees, orphan directories, branches and the primary checkout."""
 
 import argparse

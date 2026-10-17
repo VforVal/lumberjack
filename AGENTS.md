@@ -5,7 +5,7 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
 
 ## Layout
 
-- `scripts/sweep_worktrees.py` - worktree and branch sweep (PEP 723 script, Python 3.11+).
+- `scripts/sweep_worktrees.py` - worktree and branch sweep (standard-library Python 3.11+).
 - `scripts/setup_lumberjack.py` - setup helper: `discover` prints repo facts as JSON (read-only),
   `apply ANSWERS.json` writes `.lumberjack.toml`, the post-merge hook (marker-bounded block),
   Claude settings, the CLAUDE.md/AGENTS.md block and `.gitignore` entries; never commits.
@@ -29,12 +29,12 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
   `test_setup_discover.py`, `test_setup_apply.py`, `test_lifecycle.py`, `test_rule_delivery.py`;
   `conftest.py` isolates HOME, git identity and `shutil.which`, `helpers.py` holds `git` and
   `write`. Main seams: each script's `main()` against temp git repos, a `gh` shim on PATH, and
-  a real merge through the hook when `uv` is installed. A few tests call `classify`, `short_path` and `load_config` directly and patch
-  `orphan_candidates`, `GH_TIMEOUT` and `gh_facts`.
+  a real merge through the Python hook. A few tests call `classify`, `short_path` and
+  `load_config` directly and patch `orphan_candidates`, `GH_TIMEOUT` and `gh_facts`.
 
 ## Tests
 
-`uv run --with "pytest>=8" pytest -q`, or `python -m pytest -q` when uv is missing.
+`python -m pip install "pytest>=8"`, then `python -m pytest -q`.
 
 ## Rules
 

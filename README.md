@@ -42,7 +42,9 @@ cleanup rule, detection tiers, the summary line, hook placement and uninstall.
 ## Requirements
 
 - `git`
-- [`uv`](https://docs.astral.sh/uv/), which runs the scripts and fetches Python 3.11+ itself
+- [Python 3.11+](https://www.python.org/downloads/), available as `python` on PATH
+  (`python --version` must report 3.11 or newer). The scripts use only the standard library;
+  no `uv`, virtual environment or runtime packages are needed.
 - Optional: `gh`, logged in, to detect squash-merged and rebase-merged pull requests.
   Without it the sweep decides from git alone and fewer branches count as landed.
 
@@ -82,10 +84,11 @@ optional `.claude/settings.json` pinning and
 `.gitignore` lines for worktree roots inside the repository. It never commits; review
 `git diff` and commit it yourself. Re-running is safe.
 
-If `uv` is missing, the agent can use Python 3.11+ to write configuration, but the
-post-merge hook is skipped until you install uv and rerun setup. If git or a usable
-Python runner is missing, install the requirement before setup. For authentication
-errors, run `claude auth login` or `codex login` before invoking the setup skill;
+If git or Python 3.11+ is missing, install the requirement before setup. On systems
+that provide only `python3`, also make that interpreter available as `python` on the
+PATH inherited by the harness and Git hooks; an interactive shell alias is insufficient.
+After upgrading from a uv-based release, re-run setup to refresh the post-merge hook.
+For authentication errors, run `claude auth login` or `codex login` before invoking the setup skill;
 `gh auth login` enables pull-request landing evidence. Installation alone does not
 prove that the setup skill or hooks ran.
 
@@ -243,7 +246,7 @@ unpushed tip is no loss, since the branch keeps it), and also with:
 ## Hook placement
 
 Setup installs a post-merge hook that runs the sweep after every merge. It skips silently
-when `uv`, `git config lumberjack.script` or the configured script file is missing.
+when `python`, `git config lumberjack.script` or the configured script file is missing.
 Everything setup adds sits
 between `# >>> lumberjack` and `# <<< lumberjack` lines.
 
@@ -260,7 +263,6 @@ Every file setup writes is reported as `wrote <path>`, and every installed hook 
 followed by `ran git config lumberjack.script <path>`. Other lines setup can print:
 `printed, not run: <command>` for each selected harness's install step,
 `setup: git missing: install git from https://git-scm.com/downloads and re-run`,
-`uv missing: hooks not installed; install uv from https://docs.astral.sh/uv/ and re-run` and
 `gh missing or unauthenticated: landed detection is offline-only until gh auth login`.
 
 ## Windows
@@ -283,8 +285,9 @@ In the plugin's hooks, `${CLAUDE_PLUGIN_ROOT}` expands to the plugin directory.
 
 ## Tests and CI
 
-`uv run --with "pytest>=8" pytest`. CI (`.github/workflows/test.yml`) runs pytest on
-Python 3.11 and the latest release, on Linux and Windows.
+`python -m pip install "pytest>=8"`, then `python -m pytest -q`. CI
+(`.github/workflows/test.yml`) runs pytest with plain Python 3.11 and 3.13 on Linux
+and Windows; it does not install uv.
 
 ## License
 

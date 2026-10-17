@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Run hooks, setup and cleanup directly with Python 3.11+ (`python` on PATH).
+  No uv or runtime packages are required. Re-run setup to upgrade existing git hooks,
+  and review the updated plugin hook commands in the harness.
+
 ## 1.1.1
 
 - Post-merge hook: setup and the sweep no longer record a `lumberjack.script` inside a

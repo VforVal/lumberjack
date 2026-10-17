@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
 """Set up lumberjack in a repository: `discover` reports facts, `apply` writes the answers."""
 
 import argparse
@@ -164,7 +160,7 @@ def discover(repo: Path) -> Facts:
         "post_merge_hook": hook_facts(repo, hooks_path),
         "hooks_path": hooks_path,
         "git_version": git_out(repo, "--version").removeprefix("git version "),
-        "uv": shutil.which("uv") is not None,
+        "python": sys.version.split()[0],
         "gh": gh_facts(),
         "config": config_facts(repo),
     }
@@ -182,7 +178,6 @@ CONFIG_DOC = {
 }
 HARNESSES = ("claude", "codex")
 ANSWER_KEYS = {*DEFAULTS, "harnesses", "hook", "pin_claude_settings"}
-UV_MISSING = "uv missing: hooks not installed; install uv from https://docs.astral.sh/uv/ and re-run"
 
 
 def abort(message: str) -> SystemExit:
@@ -246,13 +241,17 @@ def config_text(answers: Facts) -> str:
 SH_MARKERS = ("# >>> lumberjack", "# <<< lumberjack")
 MD_MARKERS = ("<!-- >>> lumberjack -->", "<!-- <<< lumberjack -->")
 BEGIN, END = SH_MARKERS
-RUN = 'uv run --quiet --script "$(git config --get lumberjack.script)" --cleanup'
+LEGACY_RUN = 'uv run --quiet --script "$(git config --get lumberjack.script)" --cleanup'
+RUN = 'python "$(git config --get lumberjack.script)" --cleanup'
 # A sweep failure must never fail the merge.
-SAFE_RUN = f'test -f "$(git config --get lumberjack.script)" && {RUN} || true'
+SAFE_RUN = (
+    'test -f "$(git config --get lumberjack.script)" && '
+    f'command -v python >/dev/null 2>&1 && {RUN} || true'
+)
 BLOCK = f"""{BEGIN}
 script="$(git config --get lumberjack.script)"
-if [ -f "$script" ] && command -v uv >/dev/null 2>&1; then
-  uv run --quiet --script "$script" --cleanup || true
+if [ -f "$script" ] && command -v python >/dev/null 2>&1; then
+  python "$script" --cleanup || true
 fi
 {END}
 """
@@ -400,9 +399,11 @@ def simple_git_hooks_hook(repo: Path) -> None:
     package = read_json(repo, "package.json") or {}
     hooks = package.setdefault("simple-git-hooks", {})
     old = hooks.get("post-merge", "")
+    # Upgrade both the original command and its later missing-script guard.
+    legacy_safe = f'test -f "$(git config --get lumberjack.script)" && {LEGACY_RUN} || true'
+    old = old.replace(legacy_safe, SAFE_RUN).replace(f"{LEGACY_RUN} || true", SAFE_RUN)
     if RUN in old:
-        if SAFE_RUN not in old:
-            hooks["post-merge"] = old.replace(f"{RUN} || true", SAFE_RUN)
+        hooks["post-merge"] = old if SAFE_RUN in old else old.replace(f"{RUN} || true", SAFE_RUN)
     else:
         hooks["post-merge"] = f"{old}; {SAFE_RUN}" if old else SAFE_RUN
     write_json(repo, "package.json", package)
@@ -431,9 +432,6 @@ HOOKS = (*HOOK_WRITERS, "none")
 
 def write_hook(repo: Path, hook: str) -> None:
     if hook == "none":
-        return
-    if not shutil.which("uv"):
-        print(UV_MISSING)
         return
     HOOK_WRITERS[hook](repo)
     script = hook_script(find_primary(repo))
