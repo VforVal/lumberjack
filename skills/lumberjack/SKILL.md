@@ -5,10 +5,9 @@ description: Worktree and branch rules delivered by lumberjack at session start.
 
 # Worktrees, cleanup and the Stop gate
 
-lumberjack keeps one clone tidy: the primary checkout stays on `primary_branch`, work
-happens in one worktree per task, and a worktree whose work has landed is removed
-automatically. Settings live in `.lumberjack.toml` (or `[tool.lumberjack]` in
-`pyproject.toml`); the README lists every key and its default.
+lumberjack keeps one clone tidy: the primary checkout stays on `primary_branch`, work happens
+in one worktree per task, and a landed worktree is removed automatically. Settings live in
+`.lumberjack.toml` (or `[tool.lumberjack]` in `pyproject.toml`); the README lists each key's default.
 
 ## Primary checkout
 
@@ -41,6 +40,8 @@ A worktree that fails a check stays, and the sweep names the reason: `dirty`,
 directories in a worktree root holding only caches (`node_modules`, `.venv`,
 `__pycache__`, tool caches) are deleted; other orphans are listed. With the primary
 off `primary_branch`, or a post-merge run in another worktree, nothing is cleaned.
+On `dirty`, list the stray files grouped by what produced them and ask the maintainer once
+per group (delete, ignore or commit), never file by file; `/lumberjack:cleanup` has the steps.
 
 When a landed branch has other branches built on top, the sweep prints one line per
 dependent, `dependent <b> of <a>: git rebase --onto <primary> <a-tip> <b>`. Run it
@@ -73,7 +74,6 @@ A second stop in the same turn passes; `stop_gate = false` disables the gate. Pl
 
 ## Recovery
 
-Removing a worktree deletes nothing committed: the branch stays. Bring the work back
-with `git worktree add <path> <branch>` or `git checkout <branch>` in the primary.
+Removing a worktree deletes nothing committed: `git worktree add <path> <branch>` brings it back.
 Uncommitted files are not recoverable, which is why a dirty worktree is never removed.
 Before forcing a removal by hand, snapshot the branch: `git update-ref refs/archive/<branch> <branch>`.

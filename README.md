@@ -243,6 +243,11 @@ unpushed tip is no loss, since the branch keeps it), and also with:
 - `not a worktree`: no registered worktree at that path; the line is
   `blocked <path>: not a worktree`
 
+On a `dirty` or `ignored files` block, the command lists the stray files, groups them by
+what produced them and asks once per group: delete, ignore (`.git/info/exclude` or
+`.gitignore`) or commit and push. It never asks file by file. The same rule is in the
+`lumberjack` skill for a `blocked ...: dirty` line at session start.
+
 ## Hook placement
 
 Setup installs a post-merge hook that runs the sweep after every merge. It skips silently

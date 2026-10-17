@@ -5,6 +5,10 @@
 - Run hooks, setup and cleanup directly with Python 3.11+ (`python` on PATH).
   No uv or runtime packages are required. Re-run setup to upgrade existing git hooks,
   and review the updated plugin hook commands in the harness.
+- `/lumberjack:cleanup`: a `dirty` landed worktree is offered too, and on a `dirty` or
+  `ignored files` block the command groups the stray files by what produced them and asks
+  once per group whether to delete, ignore or commit them, then retries `--remove`. The
+  `lumberjack` skill gives agents the same rule for a `blocked ...: dirty` line.
 
 ## 1.1.1
 
