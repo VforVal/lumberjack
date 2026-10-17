@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
 """Inventory worktrees, orphan directories, branches and the primary checkout."""
 
 import argparse
@@ -13,6 +9,9 @@ import shutil
 import stat
 import subprocess
 import sys
+
+if sys.version_info < (3, 11):  # before tomllib: a plain message instead of a traceback
+    sys.exit(f"lumberjack: Python 3.11+ required, found {sys.version.split()[0]}")
 import tomllib
 from collections.abc import Callable
 from pathlib import Path

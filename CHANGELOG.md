@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Run hooks, setup and cleanup directly with Python 3.11+ (`python` on PATH).
+  No uv or runtime packages are required. Re-run setup to upgrade existing git hooks,
+  and review the updated plugin hook commands in the harness. The plugin hooks run through
+  a `git` alias so git's own `sh` picks `python` or `python3` under any harness shell; the
+  generated post-merge hooks fall back to `python3` too, and an older Python exits with
+  `lumberjack: Python 3.11+ required, found <version>` instead of a traceback.
 - `/lumberjack:cleanup`: a `dirty` landed worktree is offered too, and on a `dirty` or
   `ignored files` block the command groups the stray files by what produced them and asks
   once per group whether to delete, ignore or commit them, then retries `--remove`. The

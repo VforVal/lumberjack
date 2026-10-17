@@ -15,7 +15,7 @@ import setup_lumberjack  # noqa: E402
 KEYS = {
     "repo", "name", "harness", "origin", "remote_shapes", "ticket_prefix_guess",
     "owners_guess", "worktree_parents", "tracker", "hook_manager", "post_merge_hook",
-    "hooks_path", "git_version", "uv", "gh", "config",
+    "hooks_path", "git_version", "python", "gh", "config",
 }  # fmt: skip
 
 
@@ -51,7 +51,8 @@ def test_plain_repo_without_origin_has_every_key(
     assert facts["origin"] == {"url": None, "owner": None, "name": None, "default_branch": None}
     assert facts["remote_shapes"] == [] and facts["ticket_prefix_guess"] == ""
     assert facts["hook_manager"] is None and facts["post_merge_hook"] is None
-    assert facts["uv"] is False and facts["gh"] == {"present": False, "authenticated": None}
+    assert facts["python"] == sys.version.split()[0]
+    assert facts["gh"] == {"present": False, "authenticated": None}
     assert facts["config"] == {"source": None, "error": None}
 
 
@@ -205,7 +206,7 @@ def shim_gh(root: Path, monkeypatch: pytest.MonkeyPatch, code: int) -> None:
 
 
 @pytest.mark.parametrize(("code", "authenticated"), [(0, True), (1, False)])
-def test_gh_and_uv_presence(
+def test_gh_presence(
     repo: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -216,6 +217,4 @@ def test_gh_and_uv_presence(
     shim_gh(tmp_path, monkeypatch, code)
     facts = discover(capsys, repo)
     assert facts["gh"] == {"present": True, "authenticated": authenticated}
-    monkeypatch.setattr("shutil.which", lambda name: "/bin/uv" if name == "uv" else None)
-    assert discover(capsys, repo)["uv"] is True
 

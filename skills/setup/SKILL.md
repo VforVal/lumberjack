@@ -15,14 +15,14 @@ Resolve the helper at `../../scripts/setup_lumberjack.py` relative to this skill
 directory. Use its absolute path in place of `HELPER` below, quoted for the active
 shell (including paths with spaces). Run from the repository root; keep the JSON:
 
-```
-uv run --quiet --script "HELPER" discover
-```
-
-If `uv` is missing, use an available `python` or `python3` version 3.11 or newer;
-apply writes config, skips the hook and prints `uv missing`. Relay that line. If
-neither runner exists, stop and point to https://docs.astral.sh/uv/ . If git is
+Check `python --version` (or `python3 --version`): it must be 3.11 or newer; use that
+name in place of `python` below. If missing or older, stop and point to
+https://www.python.org/downloads/ . If git is
 missing, stop and point to https://git-scm.com/downloads before running the helper.
+
+```
+python "HELPER" discover
+```
 
 ## 2. Interview
 
@@ -86,7 +86,7 @@ Any change requested means back to the affected section, then confirm again.
 Write the answers to a temporary file and run it once:
 
 ```
-uv run --quiet --script "HELPER" apply ANSWERS.json
+python "HELPER" apply ANSWERS.json
 ```
 
 Relay its output lines verbatim. On a `setup:` error, fix the named answer and run
@@ -97,8 +97,6 @@ commit it themselves.
 
 - Relay `printed, not run:` lines for each selected harness. With Codex, say
   that trusting the hooks (`/hooks` in Codex) is a one-time step per machine.
-- `uv missing: hooks not installed...`: tell them the config is written but the git
-  hook is not; install uv from https://docs.astral.sh/uv/ and re-run setup.
 - `gh missing or unauthenticated...`: tell them cleanup still works but decides
   "landed" from git alone; run `gh auth login` for pull-request detection.
 - `note: run ... to activate the hook`: relay it; the maintainer runs that command.

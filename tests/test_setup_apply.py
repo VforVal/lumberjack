@@ -35,12 +35,6 @@ def read(root: Path, path: str) -> str:
     return (root / path).read_text(encoding="utf-8")
 
 
-@pytest.fixture(autouse=True)
-def uv_present(monkeypatch: pytest.MonkeyPatch) -> None:
-    # uv present, gh absent unless a test says otherwise
-    monkeypatch.setattr("shutil.which", lambda name: "/bin/uv" if name == "uv" else None)
-
-
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     root = tmp_path / "plain"
@@ -107,7 +101,7 @@ def test_plain_hook_is_written_to_githooks_and_wired(
     _, out, _ = apply(repo, capsys, hook="plain")
     text = read(repo, ".githooks/post-merge")
     assert text.startswith("#!/bin/sh\n") and block_count(text) == 1
-    assert 'uv run --quiet --script "$script" --cleanup || true' in text
+    assert '"$python" "$script" --cleanup || true' in text
     assert git(repo, "config", "core.hooksPath").strip() == ".githooks"
     assert "wrote .githooks/post-merge" in out and "ran git config core.hooksPath" in out
     script = (Path(setup_lumberjack.__file__).parent / "sweep_worktrees.py").resolve().as_posix()
@@ -128,17 +122,22 @@ def test_plain_hook_keeps_existing_hooks_path(
 
 
 @pytest.mark.parametrize("hook", ["plain", "husky", "lefthook", "pre-commit", "simple-git-hooks"])
-def test_post_merge_quietly_skips_a_missing_script(
-    repo: Path, capsys: pytest.CaptureFixture[str], hook: str,
+@pytest.mark.parametrize("missing", ["script", "python", None])
+def test_post_merge_runs_or_quietly_skips_missing_requirements(
+    repo: Path, capsys: pytest.CaptureFixture[str], hook: str, missing: str | None,
 ) -> None:
     if hook == "simple-git-hooks":
         old = f"{setup_lumberjack.RUN} || true"
         write(repo, "package.json", json.dumps({"simple-git-hooks": {"post-merge": old}}))
     apply(repo, capsys, hook=hook)
     apply(repo, capsys, hook=hook)
-    git(repo, "config", "lumberjack.script", str(repo / "missing source/sweep_worktrees.py"))
-    write(repo, "bin/uv", '#!/bin/sh\necho "unexpected uv invocation" >&2\n')
-    (repo / "bin/uv").chmod(0o755)
+    script = repo / "source with spaces/sweep_worktrees.py"
+    git(repo, "config", "lumberjack.script", script.as_posix())
+    if missing == "script":
+        write(repo, "bin/python", '#!/bin/sh\necho "unexpected Python invocation" >&2\n')
+        (repo / "bin/python").chmod(0o755)
+    else:
+        write(repo, "source with spaces/sweep_worktrees.py", 'import sys\nprint("ran", *sys.argv[1:])\n')
     if hook in ("plain", "husky"):
         command = read(repo, f"{'.githooks' if hook == 'plain' else '.husky'}/post-merge")
     elif hook == "lefthook":
@@ -147,13 +146,22 @@ def test_post_merge_quietly_skips_a_missing_script(
         command = read(repo, ".pre-commit-config.yaml").split("entry: sh -c '", 1)[1].splitlines()[0][:-1]
     else:
         command = json.loads(read(repo, "package.json"))["simple-git-hooks"]["post-merge"]
-        assert command.count("uv run") == 1
+        assert command.count("--cleanup") == 1
     shell = REAL_WHICH("sh") or git(repo, "var", "GIT_SHELL_PATH").strip()
+    path = str(repo / "bin") + os.pathsep + os.environ["PATH"]
+    if missing == "python":
+        # Git remains available, but no Python command is on this hook's PATH.
+        executable = Path(REAL_WHICH("git")).as_posix()
+        write(repo, "bin/git", f'#!/bin/sh\nexec "{executable}" "$@"\n')
+        (repo / "bin/git").chmod(0o755)
+        path = str(repo / "bin")
     done = subprocess.run(
         [shell, "-c", command], cwd=repo, capture_output=True, text=True,
-        env={**os.environ, "PATH": str(repo / "bin") + os.pathsep + os.environ["PATH"]},
+        env={**os.environ, "PATH": path},
     )
-    assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
+    assert (done.returncode, done.stdout, done.stderr) == (
+        0, "" if missing else "ran --cleanup\n", "",
+    )
 
 
 def test_existing_sh_hook_gains_block_once(
@@ -279,8 +287,24 @@ def test_simple_git_hooks_entry(repo: Path, capsys: pytest.CaptureFixture[str]) 
     apply(repo, capsys, hook="simple-git-hooks")
     data = json.loads(read(repo, "package.json"))
     assert data["name"] == "x" and data["simple-git-hooks"]["pre-commit"] == "t"
-    assert data["simple-git-hooks"]["post-merge"].count("uv run") == 1
+    assert data["simple-git-hooks"]["post-merge"].count("--cleanup") == 1
     assert read(repo, "package.json").startswith('{\n  "name"')
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+def test_simple_git_hooks_upgrades_uv_command_once(
+    repo: Path, capsys: pytest.CaptureFixture[str], guarded: bool,
+) -> None:
+    legacy = f"{setup_lumberjack.LEGACY_RUN} || true"
+    if guarded:
+        legacy = f'test -f "$(git config --get lumberjack.script)" && {legacy}'
+    write(repo, "package.json", json.dumps({
+        "simple-git-hooks": {"post-merge": f"echo user-hook; {legacy}"},
+    }))
+    apply(repo, capsys, hook="simple-git-hooks")
+    apply(repo, capsys, hook="simple-git-hooks")
+    command = json.loads(read(repo, "package.json"))["simple-git-hooks"]["post-merge"]
+    assert command == f"echo user-hook; {setup_lumberjack.SAFE_RUN}"
 
 
 def test_hook_none_writes_no_hook(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -397,14 +421,14 @@ def test_claude_lines_are_printed_not_run(
     assert "claude plugin" not in apply(repo, capsys, harnesses=["codex"])[1]
 
 
-def test_uv_missing_skips_hook_but_writes_config_and_settings(
+def test_uv_missing_still_installs_hook_config_and_settings(
     repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("shutil.which", lambda _: None)
     _, out, _ = apply(repo, capsys, hook="plain", pin_claude_settings=True)
-    assert "uv missing: hooks not installed; install uv from https://docs.astral.sh/uv/ and re-run" in out
+    assert "uv missing" not in out  # the plain "uv" would match this checkout's path
     assert (repo / ".lumberjack.toml").is_file() and (repo / ".claude/settings.json").is_file()
-    assert not (repo / ".githooks").exists()
+    assert (repo / ".githooks/post-merge").is_file()
 
 
 def test_gh_missing_or_unauthenticated_line(
@@ -457,7 +481,6 @@ def merge(cwd: Path, branch: str) -> str:
     return done.stdout + done.stderr
 
 
-@pytest.mark.skipif(REAL_WHICH("uv") is None, reason="uv is not installed")
 def test_plain_hook_runs_the_sweep_on_a_real_merge(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

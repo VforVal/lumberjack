@@ -12,13 +12,14 @@ confirm by name, and never pass `--force` to git.
 
 Resolve the script at `../../scripts/sweep_worktrees.py` relative to this skill's
 directory. Use its absolute path in place of `SWEEP` below, quoted for the active shell.
-Run every command from the repository root. If `uv` is missing, use an available
-`python` or `python3` version 3.11 or newer in place of `uv run --quiet --script`.
+Run every command from the repository root with Python 3.11+ as `python` or `python3`;
+use the name that exists in place of `python` below. If missing or older, stop and point
+to https://www.python.org/downloads/ .
 
 ## 1. Sweep
 
 ```
-uv run --quiet --script "SWEEP" --cleanup
+python "SWEEP" --cleanup
 git worktree prune --verbose
 ```
 
@@ -31,7 +32,7 @@ go on to step 2.
 ## 2. List what is left
 
 ```
-uv run --quiet --script "SWEEP"
+python "SWEEP"
 ```
 
 Keep the `worktree` lines whose `tier=` is `unverified` or `landed-probable`, plus any
@@ -46,7 +47,7 @@ kept. Only an explicit yes for that worktree counts; anything else, silence incl
 means keep it. A yes to one is not a yes to the next. On a yes, run:
 
 ```
-uv run --quiet --script "SWEEP" --remove "PATH"
+python "SWEEP" --remove "PATH"
 ```
 
 Relay its one line verbatim: a `cleaned` line and exit 0 (`directory left` means the

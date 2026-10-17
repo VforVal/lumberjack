@@ -21,8 +21,6 @@ import sweep_worktrees  # noqa: E402
 def test_hook_script_survives_source_worktree_removal(
     configured_repo: tuple[Path, Path], tmp_path: Path, entrypoint: str, source: str,
 ) -> None:
-    if entrypoint == "setup" and REAL_WHICH("uv") is None:
-        pytest.skip("uv is not installed")
     primary, trees = configured_repo
     project = Path(sweep_worktrees.__file__).resolve().parents[1]
     for rel in ("scripts/setup_lumberjack.py", "scripts/sweep_worktrees.py",
@@ -203,11 +201,12 @@ def test_json_gate_blocks_through_a_real_powershell_process(
 ) -> None:
     primary, _ = configured_repo
     git(primary, "switch", "-q", "-c", "Feature_X")
-    python = sys.executable.replace("'", "''")
-    script = str(Path(sweep_worktrees.__file__).resolve()).replace("'", "''")
+    root = Path(sweep_worktrees.__file__).resolve().parents[1]
+    hooks = json.loads((root / "hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]
+    command = hooks["Stop"][0]["hooks"][0]["command"].replace("${CLAUDE_PLUGIN_ROOT}", root.as_posix())
     done = subprocess.run(
         [REAL_WHICH("pwsh") or REAL_WHICH("powershell"), "-NoLogo", "-NoProfile", "-Command",
-         f"@{{hook_event_name='Stop'}} | ConvertTo-Json -Compress | & '{python}' '{script}' --hook"],
+         f"@{{hook_event_name='Stop'}} | ConvertTo-Json -Compress | {command}"],
         cwd=primary, capture_output=True, text=True,
     )
     assert done.returncode == 0, done.stderr
@@ -217,7 +216,6 @@ def test_json_gate_blocks_through_a_real_powershell_process(
     assert done.stderr == ""
 
 
-@pytest.mark.skipif(REAL_WHICH("uv") is None, reason="uv is not installed")
 def test_real_post_merge_hook_prunes_under_paths_with_spaces(
     configured_repo: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -247,3 +245,14 @@ def test_real_post_merge_hook_prunes_under_paths_with_spaces(
     assert "cleaned codex/eng-1-hook" in done.stdout + done.stderr
     assert not clean.exists()
     assert git(primary, "rev-parse", "--verify", "codex/eng-1-hook").strip()
+
+
+@pytest.mark.parametrize("script", ["sweep_worktrees.py", "setup_lumberjack.py"])
+def test_scripts_refuse_old_python_with_a_plain_message(script: str) -> None:
+    path = Path(sweep_worktrees.__file__).with_name(script)
+    done = subprocess.run(
+        [sys.executable, "-c", f"import sys; sys.version_info = (3, 10, 0); exec(open({str(path)!r}).read())"],
+        capture_output=True, text=True,
+    )
+    assert done.returncode == 1 and "Traceback" not in done.stderr
+    assert done.stderr.strip() == f"lumberjack: Python 3.11+ required, found {sys.version.split()[0]}"

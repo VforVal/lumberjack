@@ -42,7 +42,10 @@ cleanup rule, detection tiers, the summary line, hook placement and uninstall.
 ## Requirements
 
 - `git`
-- [`uv`](https://docs.astral.sh/uv/), which runs the scripts and fetches Python 3.11+ itself
+- [Python 3.11+](https://www.python.org/downloads/) on PATH as `python` or `python3`.
+  The scripts use only the standard library; no `uv`, virtual environment or runtime
+  packages are needed. Every hook tries `python` first, then `python3`. An older Python
+  prints `lumberjack: Python 3.11+ required, found <version>` and exits.
 - Optional: `gh`, logged in, to detect squash-merged and rebase-merged pull requests.
   Without it the sweep decides from git alone and fewer branches count as landed.
 
@@ -82,10 +85,10 @@ optional `.claude/settings.json` pinning and
 `.gitignore` lines for worktree roots inside the repository. It never commits; review
 `git diff` and commit it yourself. Re-running is safe.
 
-If `uv` is missing, the agent can use Python 3.11+ to write configuration, but the
-post-merge hook is skipped until you install uv and rerun setup. If git or a usable
-Python runner is missing, install the requirement before setup. For authentication
-errors, run `claude auth login` or `codex login` before invoking the setup skill;
+If git or Python 3.11+ is missing, install the requirement before setup. The PATH that
+matters is the one the harness and Git hooks inherit; an interactive shell alias is not
+enough. After upgrading from a uv-based release, re-run setup to refresh the post-merge hook.
+For authentication errors, run `claude auth login` or `codex login` before invoking the setup skill;
 `gh auth login` enables pull-request landing evidence. Installation alone does not
 prove that the setup skill or hooks ran.
 
@@ -248,7 +251,8 @@ what produced them and asks once per group: delete, ignore (`.git/info/exclude` 
 ## Hook placement
 
 Setup installs a post-merge hook that runs the sweep after every merge. It skips silently
-when `uv`, `git config lumberjack.script` or the configured script file is missing.
+when `python` and `python3`, `git config lumberjack.script` or the configured script file
+are missing.
 Everything setup adds sits
 between `# >>> lumberjack` and `# <<< lumberjack` lines.
 
@@ -265,12 +269,15 @@ Every file setup writes is reported as `wrote <path>`, and every installed hook 
 followed by `ran git config lumberjack.script <path>`. Other lines setup can print:
 `printed, not run: <command>` for each selected harness's install step,
 `setup: git missing: install git from https://git-scm.com/downloads and re-run`,
-`uv missing: hooks not installed; install uv from https://docs.astral.sh/uv/ and re-run` and
 `gh missing or unauthenticated: landed detection is offline-only until gh auth login`.
 
 ## Windows
 
 The post-merge hook is a `sh` script and runs under Git for Windows; there is no shim.
+The plugin hooks run the sweep through a `git` alias, so git's own `sh` picks the Python
+and the command line parses the same under Git Bash and PowerShell. Without a real Python
+install, `python` resolves to the Microsoft Store alias, which prints a Store message
+instead of running the sweep; install Python 3.11+ or turn the alias off.
 In the plugin's hooks, `${CLAUDE_PLUGIN_ROOT}` expands to the plugin directory.
 
 ## Uninstall
@@ -288,8 +295,9 @@ In the plugin's hooks, `${CLAUDE_PLUGIN_ROOT}` expands to the plugin directory.
 
 ## Tests and CI
 
-`uv run --with "pytest>=8" pytest`. CI (`.github/workflows/test.yml`) runs pytest on
-Python 3.11 and the latest release, on Linux and Windows.
+`python -m pip install "pytest>=8"`, then `python -m pytest -q`. CI
+(`.github/workflows/test.yml`) runs pytest with plain Python 3.11 and 3.13 on Linux
+and Windows; it does not install uv.
 
 ## License
 
