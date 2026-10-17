@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.1
 
 - Post-merge hook: setup and the sweep no longer record a `lumberjack.script` inside a
   removable linked worktree, and every generated hook skips quietly when the recorded
