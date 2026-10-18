@@ -190,9 +190,9 @@ dependent alice/eng-14-ui of alice/eng-12-login: git rebase --onto main 01234567
 
 A `dependent` line is a branch built on top of a landed one; run the printed rebase
 before pushing it.
-A `doc` line is a bundle: an untracked top-level entry (file or folder) of a `doc_roots`
-folder in the primary checkout; tracked files and registered worktrees (or folders holding
-them) are never listed. Its tickets are the
+A `doc` line is a bundle: the outermost untracked entry (file or folder) under a `doc_roots`
+folder, below tracked subfolders too, in the primary checkout; tracked files and registered
+worktrees (or folders holding them) are never listed. Its tickets are the
 `ticket_prefix` ids in its folder name plus those on a `Ticket:` or `Tickets:` line in the head
 of its top file (the first Markdown file, else the first file); without a `ticket_prefix` no
 ticket is found. The class is `reference` when the name holds `research` or `prototype`

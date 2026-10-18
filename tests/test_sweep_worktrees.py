@@ -567,6 +567,7 @@ def test_doc_bundles_are_untracked_entries_with_tickets_class_and_state(
 ) -> None:
     settings(primary, 'doc_roots = ["docs/work"]\n')
     write(primary, "docs/work/guide.md", "Ticket: eng-70\n")  # tracked: never a bundle
+    write(primary, "docs/work/agents/index.md", "tracked\n")
     git(primary, "add", "docs")
     git(primary, "commit", "-q", "-m", "guide")
     head = "Tickets: eng-91, eng-92\n"
@@ -576,6 +577,7 @@ def test_doc_bundles_are_untracked_entries_with_tickets_class_and_state(
     write(primary, "docs/work/research-notes/README.md", "# R\n\n**Ticket:** eng-95\n")
     write(primary, "docs/work/loose/x.md", "no ticket here\n")
     write(primary, "docs/work/eng-96-note.md", "x" * 2048)
+    write(primary, "docs/work/agents/eng-97-plan/plan.md", "x")  # below a tracked folder
     docs = docs_by_path(primary, capsys)
     assert "docs/work/guide.md" not in docs
     got = {p: (d["class"], d["state"], d["tickets"]) for p, d in docs.items()}
@@ -585,9 +587,10 @@ def test_doc_bundles_are_untracked_entries_with_tickets_class_and_state(
         "docs/work/research-notes": ("reference", "linked", ["eng-95"]),
         "docs/work/loose": ("ephemeral", "unlinked", []),
         "docs/work/eng-96-note.md": ("ephemeral", "linked", ["eng-96"]),
+        "docs/work/agents/eng-97-plan": ("ephemeral", "linked", ["eng-97"]),
     }
     out = cleanup(primary)
-    assert out[0].endswith("orphans 0, docs 3")
+    assert out[0].endswith("orphans 0, docs 4")
     assert "doc ephemeral docs/work/eng-90-handoff: tickets eng-90, eng-91, eng-92; 1.0 KB" in out
     assert "doc reference docs/work/research-notes: tickets eng-95; 24 B" in out
     assert "doc ephemeral docs/work/eng-96-note.md: tickets eng-96; 2.0 KB" in out
@@ -658,9 +661,11 @@ def test_bundle_named_in_a_tracked_document_is_live(
     write(primary, "docs/work/eng-111-plan/a.md", "Ticket: eng-111\n")
     write(primary, "docs/work/scratch/a.md", "no ticket\n")
     write(primary, "docs/work/quiet/a.md", "no ticket\n")
+    write(primary, "docs/work/eng-112-spec/a.md", "x")
     states = {d["state"] for d in docs_by_path(primary, capsys).values()}
     assert states == {"linked", "unlinked"}
-    write(primary, "guide.md", "Background: docs/work/eng-110-plan and docs/work/scratch.\n")
+    write(primary, "guide.md", "Background: docs/work/eng-110-plan and docs/work/scratch.\n"
+          "See eng-112-spec; keep it quiet.\n")  # a bare name counts only with a ticket in it
     git(primary, "add", "guide.md")  # tracked, uncommitted: git grep reads the index
     states = {p: d["state"] for p, d in docs_by_path(primary, capsys).items()}
     assert states == {
@@ -668,6 +673,7 @@ def test_bundle_named_in_a_tracked_document_is_live(
         "docs/work/eng-111-plan": "linked",
         "docs/work/scratch": "live",
         "docs/work/quiet": "unlinked",
+        "docs/work/eng-112-spec": "live",
     }
 
 

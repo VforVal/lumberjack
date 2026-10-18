@@ -24,7 +24,7 @@ it was created at. Kept, even though it looks integrated; after 24 hours the usu
 research, run output). A landed worktree with an untracked or ignored file under one stays,
 reason `docs`; documents go in a folder named for the ticket or branch slug.
 
-**bundle**: an untracked top-level entry under a doc root. Its tickets come from its folder
+**bundle**: the outermost untracked file or folder under a doc root. Its tickets come from its folder
 name (via `ticket_prefix`) and a `Ticket:`/`Tickets:` line in its top file. It is `ephemeral`
 or `reference` (research and prototypes), and `live` (a worktree or an unlanded local branch carries
 one of its tickets, or a tracked file or an unlanded branch's commit message names the folder),

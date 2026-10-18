@@ -240,6 +240,8 @@ def toml_value(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, list):
         return "[" + ", ".join(toml_value(item) for item in value) + "]"
+    if isinstance(value, dict):  # an inline table
+        return "{" + ", ".join(f"{json.dumps(k)} = {toml_value(v)}" for k, v in value.items()) + "}"
     return json.dumps(value)  # a JSON string is a valid TOML basic string
 
 

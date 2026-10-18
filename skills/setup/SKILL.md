@@ -67,7 +67,7 @@ Otherwise set `""` without asking.
 `doc_root_candidates` is not empty. Recommend the candidate `path`s, each with its one-line
 `reason`, and say a landed worktree with an untracked or ignored file under a doc root stays,
 reason `docs`. On a re-run keep `config.doc_roots` unless the maintainer changes it. Otherwise
-set `[]` without asking.
+set `[]` without asking. Copy `config.doc_reference` into the answers unchanged, never asking.
 
 ## 3. Confirm
 
@@ -75,7 +75,7 @@ Show one consolidated summary and wait for an explicit yes:
 
 1. The full answers JSON. Keys: `harnesses`, `pin_claude_settings`, `ticket_prefix`,
    `owners`, `prototype_prefix`, `primary_branch`, `worktree_roots`, `cleanup`,
-   `stop_gate`, `hook`, `evidence_dir`, `doc_roots`.
+   `stop_gate`, `hook`, `evidence_dir`, `doc_roots`, `doc_reference`.
 2. The files apply will write or edit: `.lumberjack.toml`; the hook file for `hook`;
    `.claude/settings.json` when pinning; the `CLAUDE.md` (else `AGENTS.md`) block
    (creating `AGENTS.md` when neither exists);

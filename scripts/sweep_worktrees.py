@@ -16,7 +16,7 @@ if sys.version_info < (3, 11):  # before tomllib: a plain message instead of a t
     sys.exit(f"lumberjack: Python 3.11+ required, found {sys.version.split()[0]}")
 import tomllib
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 Row = dict[str, Any]
@@ -98,6 +98,13 @@ def load_config(primary: Path) -> Config:
             raise ConfigError(f"lumberjack: {key} must be {type(default).__name__}", source)
     if not cfg["prototype_prefix"]:
         raise ConfigError("lumberjack: prototype_prefix must not be empty", source)
+    # git refuses a path outside the worktree, which would read as `docs` and keep every worktree.
+    if not all(
+        isinstance(root, str) and root and not PureWindowsPath(root).anchor
+        and ".." not in PureWindowsPath(root).parts
+        for root in cfg["doc_roots"]
+    ):
+        raise ConfigError("lumberjack: doc_roots must be relative paths inside the repo", source)
     if not all(
         isinstance(words, list) and all(isinstance(w, str) for w in words)
         for words in cfg["doc_reference"].values()
@@ -419,7 +426,7 @@ def ticket_ids(cfg: Config, text: str) -> list[str]:
 
 
 def doc_entries(primary: Path, cfg: Config) -> list[tuple[str, str]]:
-    """(doc root, repo-relative path) of each untracked top-level entry under a doc root."""
+    """(doc root, repo-relative path) of each outermost untracked entry under a doc root."""
     found: dict[str, str] = {}
     for root in map(posixpath.normpath, cfg["doc_roots"]):
         # --directory prints one line per untracked folder, so huge doc roots stay cheap.
@@ -431,7 +438,7 @@ def doc_entries(primary: Path, cfg: Config) -> list[tuple[str, str]]:
                     found |= {f"{root}/{e.name}": root for e in os.scandir(primary / root)}
                 except OSError:
                     pass
-            elif entry and posixpath.dirname(entry) == root:
+            elif entry:  # the outermost untracked file or folder, below tracked folders too
                 found[entry] = root
     return [(root, path) for path, root in sorted(found.items())]
 
@@ -517,13 +524,16 @@ def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verd
         # a worktree, or a folder holding worktrees, is not a document bundle
         if not any(w.is_relative_to((primary / rel).resolve()) for w in worktrees)
     ]
-    named = mentioned(primary, cfg, sorted({posixpath.basename(rel) for _, rel in bundles}), tiers)
+    # A bundle's path is specific; its bare name only when it carries a ticket ("archive" is not).
+    names = {posixpath.basename(rel) for _, rel in bundles}
+    named = mentioned(primary, cfg, sorted({rel for _, rel in bundles}
+                                           | {n for n in names if ticket_ids(cfg, n)}), tiers)
     rows = []
     for root, rel in bundles:
         name, path = posixpath.basename(rel), primary / rel
         tickets = list(dict.fromkeys(ticket_ids(cfg, name) + top_file_tickets(cfg, path)))
         words = cfg["doc_reference"].get(root, DOC_REFERENCE)
-        live = name in named or carried & set(tickets)
+        live = rel in named or name in named or carried & set(tickets)
         state = "live" if live else "linked" if tickets else "unlinked"
         rows.append({
             "path": rel,

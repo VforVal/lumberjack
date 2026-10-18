@@ -11,7 +11,7 @@
   cleanup, session start and `--remove`. `evidence_dir` is unchanged and still reports
   `evidence`. The `lumberjack` skill tells agents to write work documents only under a
   doc root, in a folder named for the ticket or branch slug.
-- The sweep lists the bundles (untracked top-level entries) of the primary checkout's
+- The sweep lists the bundles (outermost untracked entries) of the primary checkout's
   `doc_roots` with their tickets, class (`ephemeral` or `reference`, set per root by the new
   `doc_reference` setting) and live, linked or unlinked state. The summary line gains
   `docs N` and each linked bundle prints `doc <class> <path>: tickets <ids>; <size>`.
