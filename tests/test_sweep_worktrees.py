@@ -1071,22 +1071,63 @@ def test_clear_delete_with_markdown_scope_leaves_other_files(primary: Path) -> N
     assert left == ["out.log"] and not trash_folders(primary)
 
 
-def test_clear_refuses_a_symlinked_bundle_and_leaves_its_target(primary: Path) -> None:
-    strategy_settings(primary, ephemeral="delete", scope="markdown")
+def link_dir(link: Path, target: Path) -> None:
+    """A directory link: a junction on Windows (no privilege needed), else a symlink."""
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "win32":
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                       check=True, capture_output=True)
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def outside_dir(primary: Path) -> Path:
     outside = primary.parent / "outside"
     write(outside, "keep.md", "x")
-    try:
-        os.symlink(outside, primary / "docs-link", target_is_directory=True)
-    except OSError:
-        pytest.skip("symlinks are not permitted here")
-    (primary / "docs/work").mkdir(parents=True)
-    os.replace(primary / "docs-link", primary / "docs/work/eng-136-notes")
+    write(outside, "sub/deep.md", "x")
+    return outside
+
+
+@pytest.mark.parametrize("scope", ["markdown", "bundle"])
+def test_clear_refuses_a_bundle_that_is_a_link_out_of_the_repository(
+    primary: Path, scope: str
+) -> None:
+    strategy_settings(primary, ephemeral="delete", scope=scope)
+    outside = outside_dir(primary)
+    link_dir(primary / "docs/work/eng-136-notes", outside)
     assert clear(primary, "docs/work/eng-136-notes") == (
-        1, "blocked docs/work/eng-136-notes: symlink"
+        1, "blocked docs/work/eng-136-notes: links outside the repository"
     )
-    strategy_settings(primary, ephemeral="delete", scope="bundle")
-    assert clear(primary, "docs/work/eng-136-notes")[0] == 1
-    assert (outside / "keep.md").exists() and os.access(outside / "keep.md", os.W_OK)
+    assert sorted(p.name for p in outside.rglob("*.md")) == ["deep.md", "keep.md"]
+    assert os.access(outside / "keep.md", os.W_OK)
+
+
+@pytest.mark.parametrize("action", ["delete", "trash"])
+def test_clear_refuses_a_link_nested_in_a_markdown_scope_bundle(
+    primary: Path, action: str
+) -> None:
+    strategy_settings(primary, ephemeral=action, scope="markdown")
+    outside = outside_dir(primary)
+    write(primary, "docs/work/eng-136-notes/own.md", "Ticket: eng-136\n")
+    link_dir(primary / "docs/work/eng-136-notes/linked", outside)
+    assert clear(primary, "docs/work/eng-136-notes") == (
+        1, "blocked docs/work/eng-136-notes: links outside the repository"
+    )
+    assert sorted(p.name for p in outside.rglob("*.md")) == ["deep.md", "keep.md"]
+    assert (primary / "docs/work/eng-136-notes/own.md").exists() and not trash_folders(primary)
+
+
+@pytest.mark.parametrize("action", ["delete", "trash"])
+def test_clearing_a_whole_bundle_drops_a_nested_link_but_not_its_target(
+    primary: Path, action: str
+) -> None:
+    strategy_settings(primary, ephemeral=action, scope="bundle")
+    outside = outside_dir(primary)
+    write(primary, "docs/work/eng-136-notes/own.md", "Ticket: eng-136\n")
+    link_dir(primary / "docs/work/eng-136-notes/linked", outside)
+    assert clear(primary, "docs/work/eng-136-notes")[0] == 0
+    assert not (primary / "docs/work/eng-136-notes").exists()
+    assert sorted(p.name for p in outside.rglob("*.md")) == ["deep.md", "keep.md"]
 
 
 def test_clear_with_markdown_scope_blocks_when_nothing_is_in_scope(primary: Path) -> None:

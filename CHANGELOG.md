@@ -48,7 +48,8 @@
   for folders past `trash_days`; only `--purge-trash` deletes them.
 - `doc_strategy.roots` (optional): an action per doc root that overrides the class action, so
   `roots = {"docs/handoffs" = "keep"}` keeps one root's bundles while others are trashed. `--clear` also
-  refuses a symlinked bundle (`symlink`) and a markdown-scope bundle with no `.md` file
+  refuses a bundle whose path or files lead outside the repository through a symlink or junction
+  (`links outside the repository`) and a markdown-scope bundle with no `.md` file
   (`no Markdown in scope`) instead of reporting success.
 
 ## 1.1.1

@@ -786,7 +786,6 @@ def clear_bundle(start: Path, target: str, promoted: str = "") -> tuple[bool, st
         "no strategy saved" if not strategy
         else "not a bundle" if doc is None
         else doc["state"] if doc["state"] != "linked"  # live or unlinked
-        else "symlink" if (primary / rel).is_symlink()  # its target may lie outside the repository
         else "kept by strategy" if action == "keep"
         else "promote it first (--promoted)" if action == "promote" and not promoted
         else "the promoted copy is not on origin" if action == "promote" and not saved
@@ -799,6 +798,10 @@ def clear_bundle(start: Path, target: str, promoted: str = "") -> tuple[bool, st
     units = [path] if strategy["scope"] == "bundle" else [
         f for f in ([path] if path.is_file() else path.rglob("*.md")) if f.suffix.lower() == ".md"
     ]
+    # A link (symlink or Windows junction) can lead a bundle or a file in it out of the repository;
+    # rmtree and move only unlink a link nested in a bundle, so the target survives.
+    if any(not u.resolve().is_relative_to(primary.resolve()) for u in [path, *units]):
+        return False, f"blocked {rel}: links outside the repository"
     if not units:
         return False, f"blocked {rel}: no Markdown in scope"
     stamp = datetime.now(timezone.utc).strftime(TRASH_STAMP)
