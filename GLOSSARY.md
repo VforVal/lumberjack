@@ -15,8 +15,9 @@ confirmed removal.
 **dependent**: a branch built on top of a landed branch. It needs a rebase onto the
 primary branch before it is pushed, or its pull request carries the squashed commits.
 
-**fresh**: a worktree added less than 24 hours ago whose branch still points at the commit
-it was created at. Kept, even though it looks integrated; after 24 hours the usual rules apply.
+**fresh**: a worktree added less than 24 hours ago whose branch has not moved since it was
+created (its reflog has only the creation entry, or none). Kept, even though it looks
+integrated; after 24 hours the usual rules apply.
 
 **locked**: a worktree locked with `git worktree lock`. Never removed by lumberjack.
 
@@ -24,12 +25,12 @@ it was created at. Kept, even though it looks integrated; after 24 hours the usu
 research, run output). A landed worktree with an untracked or ignored file under one stays,
 reason `docs`; documents go in a folder named for the ticket or branch slug.
 
-**bundle**: the outermost untracked file or folder under a doc root. Its tickets come from its folder
-name (via `ticket_prefix`) and a `Ticket:`/`Tickets:` line in its top file. It is `ephemeral`
-or `reference` (research and prototypes), and `live` (a worktree or an unlanded local branch carries
-one of its tickets, or a tracked file or an unlanded branch's commit message names the folder),
-`linked` (tickets, none live) or `unlinked`. The sweep reports linked bundles (`docs N`) and
-deletes nothing.
+**bundle**: the outermost untracked file or folder under a doc root. Its tickets come from its
+folder name (via `ticket_prefix`) and a `Ticket:`/`Tickets:` line in its top file. It is
+`ephemeral` or `reference` (research and prototypes), and `live` (a worktree or an unlanded
+local branch carries one of its tickets, or a tracked file or an unlanded branch's commit
+message names its path or ticketed folder name), `linked` (tickets, none live) or `unlinked`.
+The sweep reports linked bundles (`docs N`) and deletes nothing.
 
 **cleanup**: removing a landed worktree at session start while keeping its branch.
 

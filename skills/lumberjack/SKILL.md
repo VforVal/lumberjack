@@ -38,7 +38,7 @@ Each session start the sweep fetches `origin` (5 second limit; on failure it say
 
 A worktree that fails a check stays, and the sweep names the reason: `dirty`, `unpushed`, `evidence`,
 `docs`, `tip diverged` (the pull request merged a different tip), `current checkout` (the sweep runs
-inside it), `locked` (`git worktree lock`) or `fresh` (added <24h ago, no commits). The local branch is
+inside it), `locked` (`git worktree lock`) or `fresh` (added <24h ago, not moved). The local branch is
 always kept. Orphan directories in a worktree root holding only caches (`node_modules`, `.venv`,
 `__pycache__`) are deleted; other orphans are listed. With the primary off `primary_branch`, or a
 post-merge run in another worktree, nothing is cleaned. On `dirty`, ask the maintainer once per group of
@@ -62,15 +62,15 @@ or its pull request carries the squashed commits.
 `landed`, `blocked`, `dependent`, `orphan`, `doc` or `hint`. When nothing was swept the only
 line says why: a config error, or `sweep: ...; skipped`. The exit code is always 0.
 Paths are relative to the primary's parent directory, or start with `~`.
-`doc <ephemeral|reference> <path>: tickets <ids>; <size>` is an untracked `doc_roots` bundle that no
-branch, worktree, tracked document or unlanded branch's commit message names; nothing is deleted.
+`doc <ephemeral|reference> <path>: tickets <ids>; <size>` is a `doc_roots` bundle with tickets that no
+worktree, unlanded branch, tracked file or unlanded commit message keeps live; nothing is deleted.
 `unverified` counts unproven branches; only the maintainer's `/lumberjack:cleanup` removes them.
 
 ## Stop gate
 
-At turn end, the Stop hook blocks with a reason when the current branch breaks naming rules or
-the primary checkout is off `primary_branch`. Rename with `git branch -m`, move work to a
-worktree, then return the primary to `primary_branch`. A second stop in the same turn passes.
+At turn end, the Stop hook blocks with a reason when the current branch breaks naming rules or the
+primary is off `primary_branch`: rename with `git branch -m`, move work to a worktree, return the primary.
+A second stop in a turn passes. Plain `--gate` exits 2 via stderr; the plugin's `--hook` exits 0 with JSON.
 
 ## Recovery
 

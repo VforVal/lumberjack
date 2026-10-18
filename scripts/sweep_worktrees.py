@@ -101,7 +101,7 @@ def load_config(primary: Path) -> Config:
     # git refuses a path outside the worktree, which would read as `docs` and keep every worktree.
     if not all(
         isinstance(root, str) and root and not PureWindowsPath(root).anchor
-        and ".." not in PureWindowsPath(root).parts
+        and ".." not in PureWindowsPath(root).parts and posixpath.normpath(root) != "."
         for root in cfg["doc_roots"]
     ):
         raise ConfigError("lumberjack: doc_roots must be relative paths inside the repo", source)
@@ -622,7 +622,9 @@ def fresh(path: Path, branch: str, head: str) -> bool:
     log = lines(git(path, "reflog", "show", "--format=%H %gs", f"refs/heads/{branch}"))
     if not log:  # some tools (the Claude desktop app) create branches without a reflog entry
         return True  # and any later commit or reset would have written one
-    sha, _, subject = log[-1].partition(" ")
+    if len(log) > 1:  # moved since it was created, even when reset back to that commit
+        return False
+    sha, _, subject = log[0].partition(" ")
     return sha == head and subject.startswith("branch: Created from")
 
 
@@ -780,7 +782,7 @@ def run_cleanup(
     counts["cleaned"] += cleaned
     out += orphan_lines
     docs = linked_docs(report)
-    out += map(doc_line, docs) if mode != "keep" else []
+    out += map(doc_line, docs)
     summary = (
         f"sweep: cleaned {counts['cleaned']}, landed {counts['landed']},"
         f" dependents {counts['dependents']}, blocked {counts['blocked']},"

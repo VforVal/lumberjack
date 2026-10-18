@@ -840,6 +840,16 @@ def test_fresh_worktree_is_kept_until_it_has_its_own_commits(primary: Path) -> N
     assert "cleaned claude/eng-40-fresh wt/eng-40-fresh (local branch kept)" in cleanup(primary)
 
 
+def test_branch_reset_to_its_creation_commit_is_not_fresh(primary: Path) -> None:
+    path = primary.parent / "wt" / "eng-43-reset"
+    git(primary, "worktree", "add", "-q", "-b", "claude/eng-43-reset", str(path), "origin/main")
+    (path / "r.txt").write_text("r")
+    git(path, "add", ".")
+    git(path, "commit", "-q", "-m", "r")
+    git(path, "reset", "-q", "--hard", "origin/main")
+    assert "cleaned claude/eng-43-reset wt/eng-43-reset (local branch kept)" in cleanup(primary)
+
+
 def test_locked_worktree_is_never_removed(primary: Path) -> None:
     path = landed_worktree(primary, "eng-42-locked")
     git(primary, "worktree", "lock", "--reason", "busy", str(path))
