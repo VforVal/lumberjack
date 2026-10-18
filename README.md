@@ -195,7 +195,7 @@ them) are never listed. Its tickets are the
 of its top file (the first Markdown file, else the first file); without a `ticket_prefix` no
 ticket is found. The class is `reference` when the name holds `research` or `prototype`
 (`doc_reference` changes the words per root), else `ephemeral`. A bundle is `live` when a
-local branch name, a worktree's branch or a worktree's folder name carries one of its tickets
+worktree's branch or folder name, or an unlanded local branch, carries one of its tickets
 (so a Codex worktree on a detached HEAD counts), `linked` when it has tickets and none is live,
 `unlinked` without tickets. `docs N` and the lines cover linked bundles only (`--json` lists
 all three states under `docs`); the size comes from file metadata, never file contents, and

@@ -455,7 +455,10 @@ def top_file_tickets(cfg: Config, path: Path) -> list[str]:
 def tree_size(path: Path, deadline: float) -> int | None:
     """Bytes under path from stat alone (no file is opened); None once the deadline passes."""
     if not path.is_dir():
-        return path.stat().st_size
+        try:
+            return path.lstat().st_size
+        except OSError:
+            return None
     total, stack = 0, [path]
     while stack:
         if time.monotonic() > deadline:  # shortcut: checked per folder, not per file
@@ -483,11 +486,13 @@ def human_size(size: int | None) -> str:
     return f"{value:.1f} GB"
 
 
-def doc_rows(primary: Path, cfg: Config, trees: list[Row], local: list[str]) -> list[Row]:
+def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verdict]) -> list[Row]:
     """Untracked doc-root bundles: class, tickets and live/linked/unlinked; size for linked."""
-    # A worktree counts by branch or by folder name, so a detached Codex worktree still does.
-    carried = {t for name in (*local, *(n for tree in trees[1:] for n in (
-        tree["branch"], Path(tree["path"]).name))) for t in ticket_ids(cfg, name)}
+    # Any worktree counts, by branch or folder name, so a detached Codex worktree does too.
+    # A branch without one counts until it lands: landed local branches are never deleted.
+    names = [n for t in trees[1:] for n in (t["branch"], Path(t["path"]).name) if n]
+    names += [n for (_, n), (tier, _) in tiers.items() if n and tier not in VERIFIED]
+    carried = {t for name in names for t in ticket_ids(cfg, name)}
     deadline = time.monotonic() + DOC_SECONDS
     worktrees = [Path(tree["path"]).resolve() for tree in trees[1:]]
     rows = []
@@ -528,7 +533,7 @@ def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
     return {
         "worktrees": worktree_rows(trees, tiers),
         "orphans": orphan_rows(primary, cfg, trees),
-        "docs": doc_rows(primary, cfg, trees, local),
+        "docs": doc_rows(primary, cfg, trees, tiers),
         "branches": branch_rows(loose, tiers),
         "prototypes": prototype_rows(primary, cfg),
         "primary": primary_row(primary, cfg),

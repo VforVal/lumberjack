@@ -612,9 +612,14 @@ def test_detached_worktree_folder_name_makes_a_bundle_live(
     write(primary, "docs/work/other/a.md", "Ticket: eng-98\n")
     write(primary, "docs/work/none/a.md", "Ticket: eng-99\n")
     git(primary, "worktree", "add", "-q", "--detach", str(primary.parent / "wt" / "eng-97-codex"))
-    git(primary, "branch", "claude/eng-98-later")
+    git(primary, "branch", "claude/eng-99-landed")  # its tip is on main: landed
+    git(primary, "checkout", "-q", "-b", "claude/eng-98-later")
+    write(primary, "later.txt", "x")
+    git(primary, "add", "later.txt")
+    git(primary, "commit", "-q", "-m", "unlanded")
+    git(primary, "checkout", "-q", "main")
     states = {p: d["state"] for p, d in docs_by_path(primary, capsys).items()}
-    assert states == {  # detached worktree folder, local branch, neither
+    assert states == {  # detached worktree folder, unlanded branch, landed branch only
         "docs/work/spec": "live",
         "docs/work/other": "live",
         "docs/work/none": "linked",
@@ -659,11 +664,11 @@ def test_doc_sizes_stay_fast_on_a_large_tree_and_degrade_when_over_budget(
     cfg = sweep_worktrees.load_config(primary)
     trees = sweep_worktrees.registered(primary)
     start = time.monotonic()
-    rows = sweep_worktrees.doc_rows(primary, cfg, trees, [])
+    rows = sweep_worktrees.doc_rows(primary, cfg, trees, {})
     assert time.monotonic() - start < 5
     assert [r["size"] for r in rows] == [4000] * 3
     monkeypatch.setattr(sweep_worktrees, "DOC_SECONDS", -1)
-    rows = sweep_worktrees.doc_rows(primary, cfg, trees, [])
+    rows = sweep_worktrees.doc_rows(primary, cfg, trees, {})
     assert [r["size"] for r in rows] == [None] * 3
     assert "size unknown" in sweep_worktrees.doc_line(rows[0])
 
