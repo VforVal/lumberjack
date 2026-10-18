@@ -20,8 +20,8 @@ under one of `worktree_roots`, one per task, so it inherits nothing uncommitted.
 `<owner>/<ticket_prefix><n>-<slug>` or `<owner>/<slug>`, where `<owner>` is one of
 `owners` (empty means any lowercase owner). Throwaway captures use
 `<prototype_prefix><ticket_prefix><n>-<slug>`. Other shapes fail the Stop gate.
-Put work documents (plans, notes, research, output) only in a `doc_roots` folder named
-`<ticket_prefix><n>-<slug>` or the branch slug; extra tickets go on a `Tickets: <ids>` line in its top file.
+Put work documents only in a `doc_roots` folder named `<ticket_prefix><n>-<slug>` or the branch slug.
+When you read or extend a bundle for your ticket, add it to the bundle's `Tickets: <ids>` line (top file).
 
 ## Cleanup rule
 
@@ -62,8 +62,8 @@ or its pull request carries the squashed commits.
 `landed`, `blocked`, `dependent`, `orphan`, `doc` or `hint`. When nothing was swept the only
 line says why: a config error, or `sweep: ...; skipped`. The exit code is always 0.
 Paths are relative to the primary's parent directory, or start with `~`.
-`doc <ephemeral|reference> <path>: tickets <ids>; <size>` is an untracked `doc_roots` bundle (repo-relative
-path) no branch or worktree carries; nothing is deleted.
+`doc <ephemeral|reference> <path>: tickets <ids>; <size>` is an untracked `doc_roots` bundle that no
+branch, worktree, tracked document or unlanded branch's commit message names; nothing is deleted.
 `unverified` counts unproven branches; only the maintainer's `/lumberjack:cleanup` removes them.
 
 ## Stop gate
