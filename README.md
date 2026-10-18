@@ -114,6 +114,7 @@ SessionStart prints the error and cleans nothing.
 | `evidence_dir` | `""` | Directory inside a worktree whose contents block cleanup; empty protects nothing extra |
 | `doc_roots` | `[]` | Folders inside a worktree for work documents (handoffs, plans, research, run output); an untracked or ignored file under one blocks cleanup with `docs`. `evidence_dir` is one more such folder but keeps its own reason, `evidence` |
 | `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); a root not listed uses `["research", "prototype"]`. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
+| `doc_strategy` | `{}` | What `/lumberjack:cleanup` may do with doc bundles, saved after it asks once (empty: nothing is removed). Keys, all required once set: `scope` (`markdown` or `bundle`), `ephemeral` (`delete`, `trash` or `keep`), `reference` (`promote` or `keep`), `trash_days` (whole days, at least 1) and `tracker` (text: where tickets are checked). A table: `[doc_strategy]` then `scope = "bundle"` |
 | `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where worktrees live: `~` is home, `*` a glob, `{name}` the repo name |
 | `cleanup` | `"prune"` | `prune` removes landed worktrees; `report` lists them as `would remove`; `keep` does nothing |
 | `stop_gate` | `true` | `false` turns the Stop hook off |
@@ -186,10 +187,13 @@ cleaned alice/eng-12-login ~/worktrees/app (local branch kept)
 blocked alice/eng-13-search ~/worktrees/app2: dirty
 doc ephemeral docs/work/eng-9-handoff: tickets eng-9, eng-11; 3.2 MB
 dependent alice/eng-14-ui of alice/eng-12-login: git rebase --onto main 0123456789ab alice/eng-14-ui
+trash 20260101T120000Z: 41 days old; 3.2 MB
 ```
 
 A `dependent` line is a branch built on top of a landed one; run the printed rebase
-before pushing it.
+before pushing it. A `trash` line is a folder in lumberjack's trash older than `trash_days`;
+the summary gains `, trash N` (before `origin stale`) only when there are such folders. The sweep
+never deletes them; only `--purge-trash` does.
 A `doc` line is a bundle: the outermost untracked entry (file or folder) under a `doc_roots`
 folder, below tracked subfolders too, in the primary checkout; tracked files and registered
 worktrees (or folders holding them) are never listed. Its tickets are the
@@ -276,6 +280,37 @@ On a `dirty` or `ignored files` block, the command lists the stray files, groups
 what produced them and asks once per group: delete, ignore (`.git/info/exclude` or
 `.gitignore`) or commit and push. It never asks file by file. The same rule is in the
 `lumberjack` skill for a `blocked ...: dirty` line at session start.
+
+### Work documents
+
+When `doc_roots` holds linked bundles, `/lumberjack:cleanup` asks the maintainer once for a
+`doc_strategy` (scope, an action per class, trash days, tracker) and saves it with
+`setup_lumberjack.py strategy <file.json>`; later runs ask nothing, and until it is saved
+nothing is removed. For each linked bundle the agent checks every listed ticket in the named
+tracker with its own tools and offers the bundle only when all are closed, one question per
+group. `ephemeral` bundles follow the strategy: `trash`, `delete` or `keep` (never offered).
+`reference` bundles are only offered promote or keep: promote writes the findings to a document
+tracked on `origin/<primary_branch>` or pushes a `prototype_prefix` branch, and only then clears the
+bundle, always into the trash. `scope = "markdown"` acts on `.md` files only, `"bundle"` on the whole entry,
+run output included. The script does the removal:
+
+```
+sweep_worktrees.py --clear <bundle path> [--promoted <doc path or prototype branch>]
+sweep_worktrees.py --purge-trash
+```
+
+`--clear` prints one line and exits 0 when done, 1 when blocked:
+
+```
+cleared docs/work/eng-9-handoff: trashed 20260101T120000Z
+blocked docs/work/eng-9-handoff: kept by strategy
+```
+
+Reasons: `no strategy saved`, `not a bundle`, `live`, `unlinked` (only a `linked` bundle is
+cleared), `kept by strategy`, `promote it first (--promoted)` and `the promoted copy is not on
+origin`. A trashed bundle moves to `<git dir>/lumberjack-trash/<UTC timestamp>/<its path>`, which
+git never sees. `--purge-trash` deletes the timestamp folders older than `trash_days`, printing
+`purged <timestamp>` for each, or `trash: nothing past retention`.
 
 ## Hook placement
 

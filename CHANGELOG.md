@@ -35,6 +35,18 @@
   once per group whether to delete, ignore or commit them, then retries `--remove`. The
   `lumberjack` skill gives agents the same rule for a `blocked ...: dirty` line.
 
+- `doc_strategy`: a new setting `/lumberjack:cleanup` asks for once when `doc_roots` holds linked
+  bundles (scope, action per class, trash days, tracker) and saves with the new
+  `setup_lumberjack.py strategy <file.json>`; a re-run of setup keeps it. Until it is saved nothing
+  is removed. The command checks the tracker with the agent's own tools, offers a bundle only when
+  every listed ticket is closed and the bundle is not live, asks once per group, and offers
+  `reference` bundles only promote or keep.
+- `sweep_worktrees.py --clear <path> [--promoted <ref>]` trashes or deletes one linked bundle as the
+  strategy says (refusing `no strategy saved`, `not a bundle`, `live`, `unlinked`, `kept by strategy`
+  and an unpromoted reference bundle). Trash lives in `<git dir>/lumberjack-trash/<UTC timestamp>/`.
+  The sweep prints a `trash <timestamp>: N days old; <size>` line (and `, trash N` in the summary)
+  for folders past `trash_days`; only `--purge-trash` deletes them.
+
 ## 1.1.1
 
 - Post-merge hook: setup and the sweep no longer record a `lumberjack.script` inside a

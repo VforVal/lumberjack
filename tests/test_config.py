@@ -83,7 +83,7 @@ def test_unknown_key_exits_naming_it(
 
 @pytest.mark.parametrize(
     ("body", "message"),
-    [('owners = "val"', "owners must be list"), ('doc_roots = "docs"', "doc_roots must be list"), ('doc_roots = ["../notes"]', "doc_roots must be relative"), ('doc_roots = ["/abs"]', "doc_roots must be relative"), ('doc_roots = [1]', "doc_roots must be relative"), ('doc_roots = ["./"]', "doc_roots must be relative"), ('prototype_prefix = ""', "prototype_prefix must not be empty"), ('doc_reference = {a = "x"}', "doc_reference must map")],
+    [('owners = "val"', "owners must be list"), ('doc_roots = "docs"', "doc_roots must be list"), ('doc_roots = ["../notes"]', "doc_roots must be relative"), ('doc_roots = ["/abs"]', "doc_roots must be relative"), ('doc_roots = [1]', "doc_roots must be relative"), ('doc_roots = ["./"]', "doc_roots must be relative"), ('prototype_prefix = ""', "prototype_prefix must not be empty"), ('doc_reference = {a = "x"}', "doc_reference must map"), ('doc_strategy = {scope = "bundle"}', "doc_strategy must be"), ('doc_strategy = {scope = "bundle", ephemeral = "burn", reference = "keep", trash_days = 7, tracker = "gh"}', "doc_strategy must be"), ('doc_strategy = {scope = "bundle", ephemeral = "keep", reference = "keep", trash_days = 0, tracker = "gh"}', "doc_strategy must be")],
 )
 def test_bad_type_and_empty_prototype_prefix_are_rejected(
     tmp_path: Path, body: str, message: str

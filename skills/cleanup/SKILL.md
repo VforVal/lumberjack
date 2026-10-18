@@ -77,7 +77,58 @@ Only the answer for that group counts; silence keeps its files, and the worktree
 while any group is kept. Once every group is settled, run `--remove "PATH"` again and
 relay its line.
 
-## 4. Report
+## 4. Work documents
 
-List what was removed, what was kept and what was blocked with its reason. Mention
-that a removed worktree comes back with `git worktree add <path> <branch>`.
+```
+python "SWEEP" --json
+```
+
+Read `docs`, `doc_strategy` and `trash`. When no doc has `state` `linked` and `trash` is
+empty, skip to step 5. Never remove a bundle outside this step's commands, and never
+by hand.
+
+### Strategy (first run only)
+
+When `doc_strategy` is `{}`, ask in one message, with these choices, then save the answers:
+
+- scope: `markdown` (only `.md` files) or `bundle` (whole entries, run output included)
+- ephemeral bundles: `trash` (recoverable), `delete` (permanent) or `keep`
+- reference bundles: `promote` or `keep`
+- trash days: whole days a trashed folder is kept (suggest 30)
+- tracker: where tickets are checked, in words (for example `github issues`)
+
+Write them as JSON with keys `scope`, `ephemeral`, `reference`, `trash_days`, `tracker`
+to a temporary file and run `python "HELPER" strategy FILE`, where `HELPER` is
+`../../scripts/setup_lumberjack.py` relative to this skill's directory. Relay its output and
+say the maintainer commits `.lumberjack.toml`. If they decline, remove nothing and go to
+step 5. A saved strategy is never asked for again; follow it.
+
+### Offer
+
+Take the `linked` docs whose class is not `keep` in the strategy. For each, check every id
+in `tickets` in the tracker with your own tools (for example `gh issue view` or a tracker
+connector). Offer a bundle only when all of its tickets are confirmed closed; an unreachable
+tracker or an unknown ticket means skip it. Ask once per group (same class and doc root),
+never bundle by bundle, listing the paths, tickets and sizes. Only an explicit yes counts.
+
+- **ephemeral**: say whether the strategy trashes (kept `trash_days` days) or deletes
+  (permanent, no copy). On a yes, run `python "SWEEP" --clear "PATH"` for each path.
+- **reference**: offer only *promote* or *keep*; keep is the default. To promote, write
+  the findings into a document without naming the bundle's folder and get it tracked on
+  `origin/<primary_branch>` through its pull request, or push the work as a
+  `prototype_prefix` branch. Only then run
+  `python "SWEEP" --clear "PATH" --promoted "REF"` with that document's path or branch name.
+
+Relay each line verbatim. A `blocked` line (exit 1) means the bundle stays; do not work
+around it.
+
+### Trash
+
+When `trash` lists folders, show them with their age and size and ask once whether to
+purge them. On a yes, run `python "SWEEP" --purge-trash` and relay its lines. Without
+a yes, leave them.
+
+## 5. Report
+
+List what was removed, what was kept and what was blocked with its reason (worktrees,
+bundles and trash). Mention that a removed worktree comes back with `git worktree add <path> <branch>`.

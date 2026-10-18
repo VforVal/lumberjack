@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 
 if sys.version_info < (3, 11):  # before tomllib: a plain message instead of a traceback
     sys.exit(f"lumberjack: Python 3.11+ required, found {sys.version.split()[0]}")
@@ -31,6 +32,7 @@ DEFAULTS: Config = {
     "evidence_dir": "",
     "doc_roots": [],
     "doc_reference": {},
+    "doc_strategy": {},
     "worktree_roots": [
         "~/.codex/worktrees/*",
         ".claude/worktrees",
@@ -47,6 +49,9 @@ CACHE_DIRS = {"node_modules", ".venv", "__pycache__", ".pytest_cache", ".mypy_ca
 CACHE_DIRS.add(".codex-worktree-name")
 DOC_REFERENCE = ["research", "prototype"]  # bundle name words that make a bundle reference
 DOC_COMMITS = 1000  # newest commits read from unlanded branches when looking for bundle names
+TRASH_STAMP = "%Y%m%dT%H%M%SZ"  # a trash folder is named for the UTC moment its files moved
+STRATEGY = {"scope": ("markdown", "bundle"), "ephemeral": ("delete", "trash", "keep"),
+            "reference": ("promote", "keep")}  # the choices; trash_days and tracker are free
 DOC_SECONDS = 10  # budget for sizing bundles; the SessionStart hook times out at 30
 
 
@@ -110,6 +115,17 @@ def load_config(primary: Path) -> Config:
         for words in cfg["doc_reference"].values()
     ):
         raise ConfigError("lumberjack: doc_reference must map each root to a list of words", source)
+    strategy = cfg["doc_strategy"]
+    if strategy and not (
+        strategy.keys() == {*STRATEGY, "trash_days", "tracker"}
+        and all(strategy[k] in choices for k, choices in STRATEGY.items())
+        and type(strategy["trash_days"]) is int and strategy["trash_days"] > 0
+        and isinstance(strategy["tracker"], str) and strategy["tracker"]
+    ):
+        raise ConfigError(
+            "lumberjack: doc_strategy must be empty or set scope, ephemeral, reference,"
+            " trash_days and tracker to valid values", source,
+        )
     # One spelling per root, so "docs/work/" in doc_reference finds the root "./docs/work".
     cfg["doc_roots"] = [posixpath.normpath(root) for root in cfg["doc_roots"]]
     cfg["doc_reference"] = {posixpath.normpath(k): v for k, v in cfg["doc_reference"].items()}
@@ -411,6 +427,7 @@ def format_rows(report: Row) -> list[str]:
     ]
     out += [f"orphan {o['kind']} {o['path']}" for o in report["orphans"]]
     out += map(doc_line, linked_docs(report))
+    out += map(trash_line, report["trash"])
     out += [f"branch {b['state']}{detail(b)} {b['name']}" for b in report["branches"]]
     out += [f"prototype {p['issue']} {p['name']}" for p in report["prototypes"]]
     p = report["primary"]
@@ -563,6 +580,32 @@ def linked_docs(report: Row) -> list[Row]:
     return [d for d in report["docs"] if d["state"] == "linked"]
 
 
+def trash_dir(primary: Path) -> Path:
+    # Inside .git: never tracked, never untracked, never in a worktree removal check.
+    return Path(git(primary, "rev-parse", "--absolute-git-dir").stdout.strip()) / "lumberjack-trash"
+
+
+def trash_rows(primary: Path, cfg: Config) -> list[Row]:
+    """Trash folders older than the saved retention, oldest first."""
+    days, folder = cfg["doc_strategy"].get("trash_days"), trash_dir(primary)
+    if not days or not folder.is_dir():
+        return []
+    now, rows = datetime.now(timezone.utc), []
+    deadline = time.monotonic() + DOC_SECONDS
+    for name in sorted(os.listdir(folder)):
+        try:
+            age = (now - datetime.strptime(name, TRASH_STAMP).replace(tzinfo=timezone.utc)).days
+        except ValueError:  # not ours
+            continue
+        if age >= days:
+            rows.append({"name": name, "days": age, "size": tree_size(folder / name, deadline)})
+    return rows
+
+
+def trash_line(row: Row) -> str:
+    return f"trash {row['name']}: {row['days']} days old; {human_size(row['size'])}"
+
+
 def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
     trees = registered(primary)
     loose = branch_tips(primary, cfg, trees)
@@ -575,6 +618,8 @@ def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
         "worktrees": worktree_rows(trees, tiers),
         "orphans": orphan_rows(primary, cfg, trees),
         "docs": doc_rows(primary, cfg, trees, tiers),
+        "doc_strategy": cfg["doc_strategy"],
+        "trash": trash_rows(primary, cfg),
         "branches": branch_rows(loose, tiers),
         "prototypes": prototype_rows(primary, cfg),
         "primary": primary_row(primary, cfg),
@@ -713,6 +758,59 @@ def remove_named(start: Path, target: str) -> tuple[bool, str]:
     return outcome == "cleaned", line
 
 
+def clear_bundle(start: Path, target: str, promoted: str = "") -> tuple[bool, str]:
+    """Trash or delete one linked bundle as the saved strategy says; (done, output line)."""
+    primary = find_primary(start)
+    cfg = load_config(primary)
+    strategy, rel = cfg["doc_strategy"], posixpath.normpath(target.replace("\\", "/"))
+    doc = next((d for d in build_report(primary, cfg)["docs"] if d["path"] == rel), None)
+    action = strategy.get(doc["class"]) if doc else None
+    base = f"origin/{cfg['primary_branch']}"
+    if promoted.startswith(cfg["prototype_prefix"]):  # a pushed prototype branch ...
+        copy = git(primary, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{promoted}")
+        saved = copy.returncode == 0
+    else:  # ... or a document tracked on the primary branch
+        saved = git(primary, "cat-file", "-t", f"{base}:{promoted}").stdout.strip() == "blob"
+    reason = (
+        "no strategy saved" if not strategy
+        else "not a bundle" if doc is None
+        else doc["state"] if doc["state"] != "linked"  # live or unlinked
+        else "kept by strategy" if action == "keep"
+        else "promote it first (--promoted)" if action == "promote" and not promoted
+        else "the promoted copy is not on origin" if action == "promote" and not saved
+        else ""
+    )
+    if reason:
+        return False, f"blocked {rel}: {reason}"
+    path = primary / rel
+    # shortcut: markdown scope matches the .md suffix only; widen it if other text formats matter.
+    units = [path] if strategy["scope"] == "bundle" else [
+        f for f in ([path] if path.is_file() else path.rglob("*.md")) if f.suffix.lower() == ".md"
+    ]
+    stamp = datetime.now(timezone.utc).strftime(TRASH_STAMP)
+    for unit in units:
+        if action in ("trash", "promote"):  # a promoted reference bundle is trashed, never deleted
+            dest = trash_dir(primary) / stamp / unit.relative_to(primary)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(unit, dest)
+        elif unit.is_dir() and not unit.is_symlink():
+            shutil.rmtree(unit, **{RMTREE_HANDLER: make_writable})
+        else:
+            os.chmod(unit, stat.S_IWRITE)
+            unit.unlink()
+    return True, f"cleared {rel}: " + ("deleted" if action == "delete" else f"trashed {stamp}")
+
+
+def purge_trash(start: Path) -> list[str]:
+    """Delete the trash folders past retention; one line each."""
+    primary = find_primary(start)
+    cfg = load_config(primary)
+    expired = trash_rows(primary, cfg)
+    for row in expired:
+        shutil.rmtree(trash_dir(primary) / row["name"], **{RMTREE_HANDLER: make_writable})
+    return [f"purged {row['name']}" for row in expired] or ["trash: nothing past retention"]
+
+
 def stray_ignored(path: Path) -> bool:
     """Ignored entries other than caches; git worktree remove deletes them silently."""
     ignored = lines(git(path, "status", "--porcelain", "--ignored"))
@@ -783,11 +881,13 @@ def run_cleanup(
     out += orphan_lines
     docs = linked_docs(report)
     out += map(doc_line, docs)
+    out += map(trash_line, report["trash"])
     summary = (
         f"sweep: cleaned {counts['cleaned']}, landed {counts['landed']},"
         f" dependents {counts['dependents']}, blocked {counts['blocked']},"
         f" unverified {counts['unverified']}, orphans {len(report['orphans'])},"
         f" docs {len(docs)}"
+        + (f", trash {len(report['trash'])}" if report["trash"] else "")
         + (", origin stale" if stale else "")
     )
     return [summary, *out]
@@ -979,7 +1079,27 @@ def main(argv: list[str] | None = None) -> int:
         "--remove", metavar="PATH",
         help="remove only this worktree, any tier, keeping its branch; exit 1 when blocked",
     )
+    parser.add_argument(
+        "--clear", metavar="PATH",
+        help="trash or delete this linked doc bundle as doc_strategy says; exit 1 when blocked",
+    )
+    parser.add_argument(
+        "--promoted", metavar="REF", default="",
+        help="with --clear: a doc tracked on origin's primary branch, or a pushed prototype"
+        " branch, holding a reference bundle's findings",
+    )
+    parser.add_argument("--purge-trash", action="store_true", help="delete trash past retention")
     args = parser.parse_args(argv)
+    if args.clear is not None or args.purge_trash:
+        try:
+            if args.purge_trash:
+                print("\n".join(purge_trash(Path.cwd())))
+                return 0
+            cleared, line = clear_bundle(Path.cwd(), args.clear, args.promoted)
+        except ConfigError as error:
+            raise SystemExit(error) from error
+        print(line)
+        return 0 if cleared else 1
     if args.remove is not None:
         try:
             removed, line = remove_named(Path.cwd(), args.remove)

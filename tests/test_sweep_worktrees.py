@@ -999,3 +999,125 @@ def test_remove_reports_a_failed_removal_as_blocked(
     assert sweep_worktrees.remove_named(primary, str(open_)) == (
         False, "blocked claude/eng-3-open wt/eng-3-open: error: Permission denied"
     )
+
+
+STRATEGY = {"scope": "bundle", "ephemeral": "trash", "reference": "promote",
+            "trash_days": 30, "tracker": "github"}
+
+
+def strategy_settings(primary: Path, **override: object) -> None:
+    table = ", ".join(f"{k} = {json.dumps(v)}" for k, v in {**STRATEGY, **override}.items())
+    settings(primary, f'doc_roots = ["docs/work"]\ndoc_strategy = {{{table}}}\n')
+
+
+def clear(primary: Path, target: str, *args: str) -> tuple[int, str]:
+    done = sweep(primary, "--clear", target, *args)
+    return done.returncode, done.stdout.strip()
+
+
+def trash_folders(primary: Path) -> list[Path]:
+    folder = primary / ".git" / "lumberjack-trash"
+    return sorted(folder.iterdir()) if folder.is_dir() else []
+
+
+def test_clear_removes_nothing_until_a_strategy_is_saved(primary: Path) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/eng-130-handoff/a.md", "Ticket: eng-130\n")
+    assert clear(primary, "docs/work/eng-130-handoff") == (
+        1, "blocked docs/work/eng-130-handoff: no strategy saved"
+    )
+    assert (primary / "docs/work/eng-130-handoff/a.md").exists() and not trash_folders(primary)
+
+
+def test_clear_trashes_a_linked_bundle_with_a_timestamp(primary: Path) -> None:
+    strategy_settings(primary)
+    write(primary, "docs/work/eng-131-handoff/a.md", "Ticket: eng-131\n")
+    write(primary, "docs/work/eng-131-handoff/run/out.log", "log")
+    code, line = clear(primary, "docs/work/eng-131-handoff")
+    (folder,) = trash_folders(primary)
+    assert (code, line) == (0, f"cleared docs/work/eng-131-handoff: trashed {folder.name}")
+    assert time.strptime(folder.name, sweep_worktrees.TRASH_STAMP)
+    assert not (primary / "docs/work/eng-131-handoff").exists()
+    assert (folder / "docs/work/eng-131-handoff/run/out.log").read_text() == "log"
+
+
+@pytest.mark.parametrize(
+    ("override", "name", "reason"),
+    [
+        ({"ephemeral": "keep"}, "eng-132-handoff", "kept by strategy"),
+        ({}, "eng-3-handoff", "live"),  # the open eng-3 worktree carries it
+        ({}, "scratch", "unlinked"),
+    ],
+)
+def test_clear_refuses_kept_live_and_unlinked_bundles(
+    primary: Path, override: dict[str, object], name: str, reason: str
+) -> None:
+    strategy_settings(primary, **override)
+    write(primary, f"docs/work/{name}/a.md", "x")
+    assert clear(primary, f"docs/work/{name}") == (1, f"blocked docs/work/{name}: {reason}")
+    assert (primary / f"docs/work/{name}/a.md").exists() and not trash_folders(primary)
+    assert clear(primary, "docs/work/missing")[1] == "blocked docs/work/missing: not a bundle"
+
+
+def test_clear_delete_with_markdown_scope_leaves_other_files(primary: Path) -> None:
+    strategy_settings(primary, ephemeral="delete", scope="markdown")
+    write(primary, "docs/work/eng-133-draft/a.md", "Ticket: eng-133\n")
+    write(primary, "docs/work/eng-133-draft/deep/b.MD", "x")
+    write(primary, "docs/work/eng-133-draft/out.log", "keep")
+    assert clear(primary, "docs/work/eng-133-draft") == (
+        0, "cleared docs/work/eng-133-draft: deleted"
+    )
+    left = [p.name for p in (primary / "docs/work/eng-133-draft").rglob("*") if p.is_file()]
+    assert left == ["out.log"] and not trash_folders(primary)
+
+
+def test_reference_bundle_needs_a_pushed_copy_before_it_is_trashed(primary: Path) -> None:
+    strategy_settings(primary)
+    bundle = "docs/work/eng-134-research"
+    write(primary, f"{bundle}/a.md", "Ticket: eng-134\n")
+    need = f"blocked {bundle}: promote it first (--promoted)"
+    assert clear(primary, bundle) == (1, need)
+    gone = "blocked {}: the promoted copy is not on origin".format(bundle)
+    assert clear(primary, bundle, "--promoted", "prototype/eng-65-demo") == (1, gone)  # local only
+    assert clear(primary, bundle, "--promoted", "findings.md") == (1, gone)
+    git(primary, "push", "-q", "origin", "prototype/eng-65-demo")
+    git(primary, "fetch", "-q", "origin")
+    assert clear(primary, bundle, "--promoted", "prototype/eng-65-demo")[0] == 0
+    assert not (primary / bundle).exists() and len(trash_folders(primary)) == 1
+
+
+def test_reference_bundle_is_cleared_once_a_tracked_doc_is_on_origin(primary: Path) -> None:
+    strategy_settings(primary)
+    bundle = "docs/work/eng-135-prototype"
+    write(primary, f"{bundle}/a.md", "Ticket: eng-135\n")
+    write(primary, "findings.md", "promoted\n")
+    git(primary, "add", "findings.md")
+    git(primary, "commit", "-q", "-m", "findings")
+    git(primary, "push", "-q", "origin", "main")
+    git(primary, "fetch", "-q", "origin")
+    assert clear(primary, bundle, "--promoted", "findings.md")[0] == 0
+    strategy_settings(primary, reference="keep")
+    write(primary, f"{bundle}/a.md", "Ticket: eng-135\n")
+    assert clear(primary, bundle, "--promoted", "findings.md") == (
+        1, f"blocked {bundle}: kept by strategy"
+    )
+
+
+def test_sweep_reports_trash_past_retention_and_only_purge_removes_it(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    strategy_settings(primary, trash_days=7)
+    trash = primary / ".git" / "lumberjack-trash"
+    write(trash, "20200101T000000Z/docs/work/old/a.md", "x")
+    fresh = time.strftime(sweep_worktrees.TRASH_STAMP, time.gmtime())
+    write(trash, f"{fresh}/docs/work/new/a.md", "x")
+    write(trash, "stray/a.md", "not ours")
+    out = cleanup(primary)
+    assert out[0].endswith("docs 0, trash 1")
+    assert any(l.startswith("trash 20200101T000000Z: ") and l.endswith("days old; 1 B") for l in out)
+    assert [t["name"] for t in report(capsys)["trash"]] == ["20200101T000000Z"]  # type: ignore[attr-defined]
+    assert (trash / "20200101T000000Z").exists()  # reporting never deletes
+    done = sweep(primary, "--purge-trash")
+    assert done.stdout.splitlines() == ["purged 20200101T000000Z"]
+    assert sorted(p.name for p in trash.iterdir()) == sorted([fresh, "stray"])
+    assert sweep(primary, "--purge-trash").stdout.strip() == "trash: nothing past retention"
