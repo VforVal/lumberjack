@@ -83,7 +83,7 @@ def test_unknown_key_exits_naming_it(
 
 @pytest.mark.parametrize(
     ("body", "message"),
-    [('owners = "val"', "owners must be list"), ('doc_roots = "docs"', "doc_roots must be list"), ('prototype_prefix = ""', "prototype_prefix must not be empty")],
+    [('owners = "val"', "owners must be list"), ('doc_roots = "docs"', "doc_roots must be list"), ('prototype_prefix = ""', "prototype_prefix must not be empty"), ('doc_reference = {a = "x"}', "doc_reference must map")],
 )
 def test_bad_type_and_empty_prototype_prefix_are_rejected(
     tmp_path: Path, body: str, message: str

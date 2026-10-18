@@ -24,6 +24,7 @@ ANSWERS = {
     "primary_branch": "trunk",
     "evidence_dir": "evidence",
     "doc_roots": ["docs/work"],
+    "doc_reference": {},
     "worktree_roots": [".wt", "~/worktrees/{name}"],
     "cleanup": "report",
     "stop_gate": False,

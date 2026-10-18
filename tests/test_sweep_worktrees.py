@@ -6,11 +6,12 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 from conftest import REAL_WHICH
-from helpers import git
+from helpers import git, write
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import sweep_worktrees  # noqa: E402
@@ -129,7 +130,7 @@ def test_orphan_classification(
     out = capsys.readouterr().out.splitlines()
     assert {"cleaned orphan orphans/only", "orphan mixed orphans/mixed"} <= set(out)
     assert "orphan not-git orphans/plain" in out
-    assert out[0].endswith("orphans 4")
+    assert out[0].endswith("orphans 4, docs 0")
     assert not only.exists() and mixed.exists() and plain.exists() and empty.exists()
 
 
@@ -425,7 +426,7 @@ def test_cleanup_without_work_to_do_is_one_exact_line(primary: Path) -> None:
     (primary / ".git" / "info" / "exclude").write_text("ignored.txt\n")
     (primary.parent / "wt" / "eng-1-clean" / "ignored.txt").write_text("not dirty\n")
     assert cleanup(primary) == [
-        "sweep: cleaned 0, landed 2, dependents 0, blocked 2, unverified 3, orphans 0",
+        "sweep: cleaned 0, landed 2, dependents 0, blocked 2, unverified 3, orphans 0, docs 0",
         "blocked claude/eng-1-clean wt/eng-1-clean: unpushed",
         "blocked claude/eng-2-dirty wt/eng-2-dirty: dirty",
     ]
@@ -443,7 +444,7 @@ def test_cleanup_removes_squash_landed_bottom_of_stack_and_hints_twice(
     )
     out = cleanup(primary)
     assert out[0] == (
-        "sweep: cleaned 1, landed 3, dependents 1, blocked 2, unverified 4, orphans 0"
+        "sweep: cleaned 1, landed 3, dependents 1, blocked 2, unverified 4, orphans 0, docs 0"
         ", origin stale"
     )
     assert "cleaned claude/eng-20-a wt/eng-20-a (local branch kept)" in out
@@ -555,6 +556,116 @@ def test_evidence_dir_still_reports_evidence_beside_doc_roots(primary: Path) -> 
     assert remove(primary, path) == (
         1, ["blocked claude/eng-45-evidence wt/eng-45-evidence: evidence"]
     )
+
+
+def docs_by_path(primary: Path, capsys: pytest.CaptureFixture[str]) -> dict[str, dict[str, object]]:
+    return {d["path"]: d for d in report(capsys)["docs"]}  # type: ignore[attr-defined]
+
+
+def test_doc_bundles_are_untracked_entries_with_tickets_class_and_state(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/guide.md", "Ticket: eng-70\n")  # tracked: never a bundle
+    git(primary, "add", "docs")
+    git(primary, "commit", "-q", "-m", "guide")
+    head = "Tickets: eng-91, eng-92\n"
+    write(primary, "docs/work/eng-90-handoff/notes.md", head)
+    write(primary, "docs/work/eng-90-handoff/pad.bin", "x" * (1024 - len(head)))
+    write(primary, "docs/work/eng-3-plan/plan.md", "x")  # a worktree carries eng-3
+    write(primary, "docs/work/research-notes/README.md", "# R\n\n**Ticket:** eng-95\n")
+    write(primary, "docs/work/loose/x.md", "no ticket here\n")
+    write(primary, "docs/work/eng-96-note.md", "x" * 2048)
+    docs = docs_by_path(primary, capsys)
+    assert "docs/work/guide.md" not in docs
+    got = {p: (d["class"], d["state"], d["tickets"]) for p, d in docs.items()}
+    assert got == {
+        "docs/work/eng-90-handoff": ("ephemeral", "linked", ["eng-90", "eng-91", "eng-92"]),
+        "docs/work/eng-3-plan": ("ephemeral", "live", ["eng-3"]),
+        "docs/work/research-notes": ("reference", "linked", ["eng-95"]),
+        "docs/work/loose": ("ephemeral", "unlinked", []),
+        "docs/work/eng-96-note.md": ("ephemeral", "linked", ["eng-96"]),
+    }
+    out = cleanup(primary)
+    assert out[0].endswith("orphans 0, docs 3")
+    assert "doc ephemeral docs/work/eng-90-handoff: tickets eng-90, eng-91, eng-92; 1.0 KB" in out
+    assert "doc reference docs/work/research-notes: tickets eng-95; 24 B" in out
+    assert "doc ephemeral docs/work/eng-96-note.md: tickets eng-96; 2.0 KB" in out
+    assert not any("eng-3-plan" in line or "loose" in line for line in out if line.startswith("doc"))
+    assert (primary / "docs/work/eng-90-handoff/notes.md").exists()  # nothing is deleted
+
+
+def test_wholly_untracked_doc_root_lists_its_children(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/eng-80-a/x.md", "x")
+    write(primary, "docs/work/eng-81-b/x.md", "x")
+    assert sorted(docs_by_path(primary, capsys)) == ["docs/work/eng-80-a", "docs/work/eng-81-b"]
+
+
+def test_detached_worktree_folder_name_makes_a_bundle_live(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/spec/a.md", "Ticket: eng-97\n")
+    write(primary, "docs/work/other/a.md", "Ticket: eng-98\n")
+    write(primary, "docs/work/none/a.md", "Ticket: eng-99\n")
+    git(primary, "worktree", "add", "-q", "--detach", str(primary.parent / "wt" / "eng-97-codex"))
+    git(primary, "branch", "claude/eng-98-later")
+    states = {p: d["state"] for p, d in docs_by_path(primary, capsys).items()}
+    assert states == {  # detached worktree folder, local branch, neither
+        "docs/work/spec": "live",
+        "docs/work/other": "live",
+        "docs/work/none": "linked",
+    }
+
+
+def test_worktrees_inside_a_doc_root_are_not_bundles(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/eng-60-plan/a.md", "x")
+    git(primary, "worktree", "add", "-q", "--detach", str(primary / "docs/work/eng-61-wt"))
+    git(primary, "worktree", "add", "-q", "--detach", str(primary / "docs/work/trees/eng-62-wt"))
+    assert sorted(docs_by_path(primary, capsys)) == ["docs/work/eng-60-plan"]
+
+
+def test_doc_reference_overrides_the_class_words_per_root(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(
+        primary,
+        'doc_roots = ["docs/work", "notes"]\n[doc_reference]\n"docs/work" = ["spike"]\n',
+    )
+    for path in ("docs/work/research-a", "docs/work/spike-b", "notes/research-c"):
+        write(primary, f"{path}/x.md", "x")
+    classes = {p: d["class"] for p, d in docs_by_path(primary, capsys).items()}
+    assert classes == {
+        "docs/work/research-a": "ephemeral",
+        "docs/work/spike-b": "reference",
+        "notes/research-c": "reference",
+    }
+
+
+def test_doc_sizes_stay_fast_on_a_large_tree_and_degrade_when_over_budget(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    for bundle in range(3):
+        for sub in range(10):
+            for n in range(100):
+                write(primary, f"docs/work/eng-5{bundle}-x/s{sub}/f{n}.txt", "abcd")
+    cfg = sweep_worktrees.load_config(primary)
+    trees = sweep_worktrees.registered(primary)
+    start = time.monotonic()
+    rows = sweep_worktrees.doc_rows(primary, cfg, trees, [])
+    assert time.monotonic() - start < 5
+    assert [r["size"] for r in rows] == [4000] * 3
+    monkeypatch.setattr(sweep_worktrees, "DOC_SECONDS", -1)
+    rows = sweep_worktrees.doc_rows(primary, cfg, trees, [])
+    assert [r["size"] for r in rows] == [None] * 3
+    assert "size unknown" in sweep_worktrees.doc_line(rows[0])
 
 
 @pytest.mark.parametrize("mode", ["report", "keep"])

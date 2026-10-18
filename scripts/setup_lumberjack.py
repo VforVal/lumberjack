@@ -179,6 +179,7 @@ CONFIG_DOC = {
     "worktree_roots": "Where worktrees live: ~ is the home directory, * a glob, {name} the repo name.",
     "cleanup": "What SessionStart does with landed worktrees: prune, report or keep.",
     "stop_gate": "Whether the Stop hook blocks on branch and primary-checkout debt.",
+    "doc_reference": "Per doc root, folder-name words that make a bundle reference; default research, prototype.",
 }
 HARNESSES = ("claude", "codex")
 ANSWER_KEYS = {*DEFAULTS, "harnesses", "hook", "pin_claude_settings"}
