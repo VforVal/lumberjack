@@ -128,12 +128,20 @@ def doc_root_candidates(repo: Path) -> list[Facts]:
     found = {}
     if repo.joinpath(".scratch").is_dir():
         found[".scratch"] = "conventional scratch folder for agent work documents"
+    holders = set()  # top-level folders that hold worktrees, whose checkouts carry Markdown too
+    for tree in registered(repo)[1:]:
+        try:
+            holders.add(Path(tree["path"]).resolve().relative_to(repo.resolve()).parts[0])
+        except (ValueError, IndexError):
+            pass
     # --directory prints an ignored folder as one line without descending into it.
     ignored = git_out(repo, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory")
     for line in ignored.splitlines():
         name = line.rstrip("/")
         if line.endswith("/") and "/" not in name and name not in NOT_DOCS | found.keys():
-            if has_markdown(repo / name):
+            if name in holders:
+                found[name] = "ignored folder holding worktrees; name its document subfolders instead"
+            elif has_markdown(repo / name):
                 found[name] = "ignored folder holding Markdown"
     return [{"path": path, "reason": reason} for path, reason in sorted(found.items())]
 

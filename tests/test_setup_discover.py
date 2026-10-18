@@ -213,6 +213,17 @@ def test_doc_root_candidates(repo: Path, capsys: pytest.CaptureFixture[str]) -> 
     assert discover(capsys, repo)["config"]["doc_roots"] == ["docs/work"]
 
 
+def test_doc_root_candidate_holding_worktrees(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    write(repo, ".gitignore", ".work/\n")
+    write(repo, "README.md", "x")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "readme")
+    git(repo, "worktree", "add", "-q", "-b", "claude/a", str(repo / ".work" / "worktrees" / "a"))
+    assert discover(capsys, repo)["doc_root_candidates"] == [
+        {"path": ".work", "reason": "ignored folder holding worktrees; name its document subfolders instead"},
+    ]  # fmt: skip
+
+
 def test_doc_root_scan_is_bounded(
     repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
