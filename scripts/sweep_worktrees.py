@@ -489,8 +489,10 @@ def block_reason(cfg: Config, w: Row, here: Path | None, pushed: bool = True) ->
     if evidence and evidence.is_dir() and any(evidence.iterdir()):
         return "evidence"
     # Tracked files come back with any worktree; only untracked or ignored ones would be lost.
+    # --directory prints one line per untracked folder, so huge doc roots stay cheap.
     if cfg["doc_roots"]:
-        found = git(Path(w["path"]), "ls-files", "--others", "--", *cfg["doc_roots"])
+        found = git(Path(w["path"]), "ls-files", "--others", "--directory",
+                    "--no-empty-directory", "--", *cfg["doc_roots"])
         if found.returncode or found.stdout.strip():  # a failed listing keeps the worktree
             return "docs"
     return ""
