@@ -25,6 +25,10 @@ ANSWERS = {
     "evidence_dir": "evidence",
     "doc_roots": ["docs/work"],
     "doc_reference": {"docs/work": ["spec", "research"]},
+    "doc_strategy": {
+        "scope": "bundle", "ephemeral": "trash", "reference": "promote",
+        "trash_days": 14, "tracker": "github", "roots": {"docs/handoffs": "keep"},
+    },
     "worktree_roots": [".wt", "~/worktrees/{name}"],
     "cleanup": "report",
     "stop_gate": False,
@@ -71,6 +75,24 @@ def test_config_round_trips_through_load_config(
     for key in expected:  # every key has a comment line directly above it
         before = text.split(f"\n{key} = ")[0].splitlines()[-1]
         assert before.startswith("# ") and key not in before.split()[0:1]
+
+
+def test_strategy_command_saves_only_the_strategy_and_a_rerun_keeps_it(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    apply(repo, capsys, doc_strategy={})
+    strategy = ANSWERS["doc_strategy"]
+    write(repo, "strategy.json", json.dumps(strategy))
+    assert setup_lumberjack.main(["strategy", str(repo / "strategy.json"), "--repo", str(repo)]) == 0
+    saved = load_config(repo)
+    assert saved["doc_strategy"] == strategy
+    assert saved == {k: v for k, v in ANSWERS.items() if k in saved}  # nothing else moved
+    apply(repo, capsys, doc_strategy=saved["doc_strategy"])  # setup copies the saved value
+    assert load_config(repo)["doc_strategy"] == strategy
+    write(repo, "strategy.json", json.dumps({**strategy, "ephemeral": "burn"}))
+    with pytest.raises(SystemExit) as error:
+        setup_lumberjack.main(["strategy", str(repo / "strategy.json"), "--repo", str(repo)])
+    assert error.value.code == 2 and load_config(repo)["doc_strategy"] == strategy
 
 
 def test_unknown_key_exits_2_and_writes_nothing(

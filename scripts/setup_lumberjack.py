@@ -224,6 +224,7 @@ CONFIG_DOC = {
     "worktree_roots": "Where worktrees live: ~ is the home directory, * a glob, {name} the repo name.",
     "cleanup": "What SessionStart does with landed worktrees: prune, report or keep.",
     "stop_gate": "Whether the Stop hook blocks on branch and primary-checkout debt.",
+    "doc_strategy": "What /lumberjack:cleanup may do with doc bundles; empty until the maintainer answers once.",
     "doc_reference": "Per doc root, folder-name words that make a bundle reference; default research, prototype.",
 }
 HARNESSES = ("claude", "codex")
@@ -545,13 +546,23 @@ def apply(answers: Facts, repo: Path) -> None:
         print("gh missing or unauthenticated: landed detection is offline-only until gh auth login")
 
 
+def save_strategy(strategy: Any, repo: Path) -> None:
+    """Write a doc strategy into the config, keeping every other saved value."""
+    try:
+        write_file(repo, ".lumberjack.toml", config_text({**load_config(repo), "doc_strategy": strategy}))
+    except ConfigError as error:
+        raise abort(str(error)) from error
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     find = sub.add_parser("discover", help="print repository facts as JSON")
     put = sub.add_parser("apply", help="write config, hook, settings and instructions")
     put.add_argument("answers", type=Path, help="JSON file of setup answers")
-    for command in (find, put):
+    keep = sub.add_parser("strategy", help="save the doc strategy in the config")
+    keep.add_argument("strategy", type=Path, help="JSON file: scope, ephemeral, reference, trash_days, tracker")
+    for command in (find, put, keep):
         command.add_argument(
             "--repo", type=Path, help="repository path (default: the current repository)"
         )
@@ -568,6 +579,12 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as error:
             raise abort(f"cannot read answers: {error}") from error
         apply(answers, Path(top))
+        return 0
+    if args.command == "strategy":
+        try:
+            save_strategy(json.loads(args.strategy.read_text(encoding="utf-8")), Path(top))
+        except (OSError, ValueError) as error:
+            raise abort(f"cannot read strategy: {error}") from error
         return 0
     print(json.dumps(discover(Path(top)), indent=2))
     return 0

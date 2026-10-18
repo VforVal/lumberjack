@@ -32,6 +32,19 @@ local branch carries one of its tickets, or a tracked file or an unlanded branch
 message names its path or ticketed folder name), `linked` (tickets, none live) or `unlinked`.
 The sweep reports linked bundles (`docs N`) and deletes nothing.
 
+**strategy**: the saved `doc_strategy`: scope (Markdown only or whole bundles), the action per
+class (`delete`, `trash` or `keep` for ephemeral; `promote` or `keep` for reference), the trash
+retention in days, the tracker that says whether a ticket is closed and, optionally, an action per
+doc root (`roots`) that overrides the class action. `/lumberjack:cleanup`
+asks for it once; with none saved nothing is removed.
+
+**trash**: `lumberjack-trash/` inside the git directory, where `--clear` moves bundle files into a
+UTC-timestamped folder. A folder older than `trash_days` is reported by the sweep and deleted only
+by `--purge-trash` in cleanup.
+
+**promote**: save a reference bundle's findings as a document tracked on the primary branch or on
+a pushed prototype branch. Only then is the bundle cleared (into the trash).
+
 **cleanup**: removing a landed worktree at session start while keeping its branch.
 
 **confirmed removal**: removing one worktree the maintainer named and approved in
