@@ -296,11 +296,12 @@ bundle, always into the trash. `scope = "markdown"` acts on `.md` files only, `"
 run output included. The script does the removal:
 
 ```
-sweep_worktrees.py --clear <bundle path> [--promoted <doc path or prototype branch>]
+sweep_worktrees.py --clear <bundle path>... [--promoted <doc path or prototype branch>]
 sweep_worktrees.py --purge-trash
 ```
 
-`--clear` prints one line and exits 0 when done, 1 when blocked:
+`--clear` prints one line per path and exits 0 when all are done, 1 when any is blocked.
+With `--promoted` it fetches `origin` first (5 second limit), so a just-merged promotion counts:
 
 ```
 cleared docs/work/eng-9-handoff: trashed 20260101T120000Z
@@ -308,7 +309,7 @@ blocked docs/work/eng-9-handoff: kept by strategy
 ```
 
 Reasons: `no strategy saved`, `not a bundle`, `live`, `unlinked` (only a `linked` bundle is
-cleared), `links outside the repository` (the bundle, or a file `scope` selects in it, resolves outside the repository through a symbolic link or Windows junction; a link inside a bundle cleared whole is removed, not followed), `kept by strategy`
+cleared), `links outside the repository` (the bundle, or with `scope = "markdown"` any entry in it, resolves outside the repository through a symbolic link or Windows junction; a link inside a bundle cleared whole is removed, not followed), `kept by strategy`
 (its class or doc root says keep), `no Markdown in scope` (`scope = "markdown"` and the bundle holds no `.md` file), `promote it first (--promoted)` and `the promoted copy is not on
 origin`. A trashed bundle moves to `<git dir>/lumberjack-trash/<UTC timestamp>/<its path>`, which
 git never sees. `--purge-trash` deletes the timestamp folders older than `trash_days`, printing

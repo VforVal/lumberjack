@@ -1158,6 +1158,19 @@ def test_root_override_keeps_a_bundle_the_class_action_would_trash(primary: Path
     assert (primary / "docs/handoffs/eng-139-a/a.md").exists()
 
 
+def test_clear_takes_a_group_and_exits_1_when_one_is_blocked(primary: Path) -> None:
+    strategy_settings(primary)
+    write(primary, "docs/work/eng-140-a/a.md", "Ticket: eng-140\n")
+    write(primary, "docs/work/eng-141-b/a.md", "Ticket: eng-141\n")
+    code, out = clear(primary, "docs/work/eng-140-a", "docs/work/missing", "docs/work/eng-141-b")
+    (folder,) = trash_folders(primary)
+    assert (code, out.splitlines()) == (1, [
+        f"cleared docs/work/eng-140-a: trashed {folder.name}",
+        "blocked docs/work/missing: not a bundle",
+        f"cleared docs/work/eng-141-b: trashed {folder.name}",
+    ])
+
+
 def test_reference_bundle_needs_a_pushed_copy_before_it_is_trashed(primary: Path) -> None:
     strategy_settings(primary)
     bundle = "docs/work/eng-134-research"
@@ -1181,7 +1194,8 @@ def test_reference_bundle_is_cleared_once_a_tracked_doc_is_on_origin(primary: Pa
     git(primary, "add", "findings.md")
     git(primary, "commit", "-q", "-m", "findings")
     git(primary, "push", "-q", "origin", "main")
-    git(primary, "fetch", "-q", "origin")
+    # Stale origin/main, as when the promotion merged after the session's fetch: --clear fetches.
+    git(primary, "update-ref", "refs/remotes/origin/main", "HEAD~1")
     assert clear(primary, bundle, "--promoted", "findings.md")[0] == 0
     strategy_settings(primary, reference="keep")
     write(primary, f"{bundle}/a.md", "Ticket: eng-135\n")

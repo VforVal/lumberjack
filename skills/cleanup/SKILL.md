@@ -99,7 +99,8 @@ When `doc_strategy` is `{}`, ask in one message, with these choices, then save t
 - doc roots to always keep, if any (saved as `roots`, each root mapped to `keep`)
 
 Write them as JSON with keys `scope`, `ephemeral`, `reference`, `trash_days`, `tracker`
-(plus `roots`, a table of root to `keep`, when they named any) to a temporary file and run `python "HELPER" strategy FILE`, where `HELPER` is
+(plus `roots`, a table of root to `keep`, when they named any) to a temporary file and
+run `python "HELPER" strategy FILE`, where `HELPER` is
 `../../scripts/setup_lumberjack.py` relative to this skill's directory. Relay its output and
 say the maintainer commits `.lumberjack.toml`. If they decline, remove nothing and go to
 step 5. A saved strategy is never asked for again; follow it.
@@ -113,16 +114,18 @@ connector). Offer a bundle only when all of its tickets are confirmed closed; an
 tracker or an unknown ticket means skip it. Ask once per group (same class and doc root),
 never bundle by bundle, listing the paths, tickets and sizes. Only an explicit yes counts.
 
-- **ephemeral**: say whether the strategy trashes (kept `trash_days` days) or deletes
-  (permanent, no copy). On a yes, run `python "SWEEP" --clear "PATH"` for each path.
+- **ephemeral**: say each bundle's action (its root's in `doc_strategy.roots`, else the
+  `ephemeral` one): trash (kept `trash_days` days) or delete (permanent, no copy). On a yes,
+  run `python "SWEEP" --clear "PATH" "PATH" ...` once with the group's paths.
 - **reference**: offer only *promote* or *keep*; keep is the default. To promote, write
   the findings into a document without naming the bundle's folder and get it tracked on
   `origin/<primary_branch>` through its pull request, or push the work as a
   `prototype_prefix` branch. Only then run
-  `python "SWEEP" --clear "PATH" --promoted "REF"` with that document's path or branch name.
+  `python "SWEEP" --clear "PATH" --promoted "REF"` with that document's path or branch name;
+  it fetches `origin` first, so a just-merged pull request counts.
 
-Relay each line verbatim. A `blocked` line (exit 1) means the bundle stays; do not work
-around it.
+Relay each line verbatim. A `blocked` line (exit 1 when any path is blocked) means that
+bundle stays; do not work around it.
 
 ### Trash
 

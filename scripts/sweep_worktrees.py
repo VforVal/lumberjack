@@ -766,21 +766,32 @@ def remove_named(start: Path, target: str) -> tuple[bool, str]:
     return outcome == "cleaned", line
 
 
-def clear_bundle(start: Path, target: str, promoted: str = "") -> tuple[bool, str]:
-    """Trash or delete one linked bundle as the saved strategy says; (done, output line)."""
+def clear_bundles(start: Path, targets: list[str], promoted: str = "") -> list[tuple[bool, str]]:
+    """Trash or delete linked bundles as the saved strategy says; (done, output line) each."""
     primary = find_primary(start)
     cfg = load_config(primary)
+    if promoted:
+        fetch(primary)  # the promotion may have merged after this session's fetch
+    docs = {d["path"]: d for d in build_report(primary, cfg)["docs"]}
+    stamp = datetime.now(timezone.utc).strftime(TRASH_STAMP)  # one trash folder per call
+    return [clear_bundle(primary, cfg, docs, target, promoted, stamp) for target in targets]
+
+
+def clear_bundle(
+    primary: Path, cfg: Config, docs: dict[str, Row], target: str, promoted: str, stamp: str
+) -> tuple[bool, str]:
     strategy, rel = cfg["doc_strategy"], posixpath.normpath(target.replace("\\", "/"))
-    doc = next((d for d in build_report(primary, cfg)["docs"] if d["path"] == rel), None)
+    doc = docs.get(rel)
     # An override that does not fit the bundle's class (delete on a reference bundle) keeps it.
     action = strategy.get("roots", {}).get(doc["root"], strategy.get(doc["class"])) if doc else None
     if doc and action not in STRATEGY[doc["class"]]:
         action = "keep"
-    base = f"origin/{cfg['primary_branch']}"
-    if promoted.startswith(cfg["prototype_prefix"]):  # a pushed prototype branch ...
+    saved = False
+    if action == "promote" and promoted.startswith(cfg["prototype_prefix"]):  # a pushed prototype
         copy = git(primary, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{promoted}")
         saved = copy.returncode == 0
-    else:  # ... or a document tracked on the primary branch
+    elif action == "promote" and promoted:  # ... or a document tracked on the primary branch
+        base = f"origin/{cfg['primary_branch']}"
         saved = git(primary, "cat-file", "-t", f"{base}:{promoted}").stdout.strip() == "blob"
     reason = (
         "no strategy saved" if not strategy
@@ -794,17 +805,18 @@ def clear_bundle(start: Path, target: str, promoted: str = "") -> tuple[bool, st
     if reason:
         return False, f"blocked {rel}: {reason}"
     path = primary / rel
+    # rglob("*") yields a nested link itself on every platform (Windows also walks into junctions).
+    inner = list(path.rglob("*")) if strategy["scope"] == "markdown" and path.is_dir() else []
     # shortcut: markdown scope matches the .md suffix only; widen it if other text formats matter.
     units = [path] if strategy["scope"] == "bundle" else [
-        f for f in ([path] if path.is_file() else path.rglob("*.md")) if f.suffix.lower() == ".md"
+        f for f in (inner if path.is_dir() else [path]) if f.suffix.lower() == ".md"
     ]
-    # A link (symlink or Windows junction) can lead a bundle or a file in it out of the repository;
-    # rmtree and move only unlink a link nested in a bundle, so the target survives.
-    if any(not u.resolve().is_relative_to(primary.resolve()) for u in [path, *units]):
+    # A link (symlink or Windows junction) can lead a bundle or an entry in it out of the
+    # repository; rmtree and move only unlink a link nested in a bundle, so the target survives.
+    if any(not u.resolve().is_relative_to(primary.resolve()) for u in [path, *inner]):
         return False, f"blocked {rel}: links outside the repository"
     if not units:
         return False, f"blocked {rel}: no Markdown in scope"
-    stamp = datetime.now(timezone.utc).strftime(TRASH_STAMP)
     for unit in units:
         if action in ("trash", "promote"):  # a promoted reference bundle is trashed, never deleted
             dest = trash_dir(primary) / stamp / unit.relative_to(primary)
@@ -1098,8 +1110,9 @@ def main(argv: list[str] | None = None) -> int:
         help="remove only this worktree, any tier, keeping its branch; exit 1 when blocked",
     )
     parser.add_argument(
-        "--clear", metavar="PATH",
-        help="trash or delete this linked doc bundle as doc_strategy says; exit 1 when blocked",
+        "--clear", metavar="PATH", nargs="+",
+        help="trash or delete these linked doc bundles as doc_strategy says; exit 1 when one is"
+        " blocked",
     )
     parser.add_argument(
         "--promoted", metavar="REF", default="",
@@ -1113,11 +1126,11 @@ def main(argv: list[str] | None = None) -> int:
             if args.purge_trash:
                 print("\n".join(purge_trash(Path.cwd())))
                 return 0
-            cleared, line = clear_bundle(Path.cwd(), args.clear, args.promoted)
+            results = clear_bundles(Path.cwd(), args.clear, args.promoted)
         except ConfigError as error:
             raise SystemExit(error) from error
-        print(line)
-        return 0 if cleared else 1
+        print("\n".join(line for _, line in results))
+        return 0 if all(cleared for cleared, _ in results) else 1
     if args.remove is not None:
         try:
             removed, line = remove_named(Path.cwd(), args.remove)

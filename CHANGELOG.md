@@ -51,6 +51,8 @@
   refuses a bundle whose path or files lead outside the repository through a symlink or junction
   (`links outside the repository`) and a markdown-scope bundle with no `.md` file
   (`no Markdown in scope`) instead of reporting success.
+- `--clear` takes several paths (one line each, one trash folder, exit 1 when any is blocked) and,
+  with `--promoted`, fetches `origin` first so a promotion merged during the session counts.
 
 ## 1.1.1
 
