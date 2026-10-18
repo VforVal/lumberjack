@@ -15,11 +15,13 @@ It stays on `primary_branch`, clean, and only fast-forwards from `origin/<primar
 Do not edit features there. Create a worktree from fresh `origin/<primary_branch>`
 under one of `worktree_roots`, one per task, so it inherits nothing uncommitted.
 
-## Branch names
+## Branch names and documents
 
 `<owner>/<ticket_prefix><n>-<slug>` or `<owner>/<slug>`, where `<owner>` is one of
 `owners` (empty means any lowercase owner). Throwaway captures use
 `<prototype_prefix><ticket_prefix><n>-<slug>`. Other shapes fail the Stop gate.
+Write work documents (plans, notes, research, output) only under a `doc_roots` folder, in a
+folder named `<ticket_prefix><n>-<slug>` or the branch slug, never loose at the repo root.
 
 ## Cleanup rule
 
@@ -31,11 +33,11 @@ Each session start the sweep fetches `origin` (5 second limit; on failure it say
    rebase merges count; a guessed match or an unreachable `gh` leaves it unverified.
 2. `git status --porcelain` is empty. Ignored files do not count; untracked ones do.
 3. The tip is pushed (upstream contains it); waived when a merged pull request had this tip.
-4. `evidence_dir`, when set, is empty or absent inside the worktree.
+4. `evidence_dir` is empty or absent; no `doc_roots` folder holds an untracked or ignored file.
 5. The branch is not a `prototype_prefix` branch, which is never touched.
 
 A worktree that fails a check stays, and the sweep names the reason: `dirty`, `unpushed`,
-`evidence`, `tip diverged` (the pull request merged a different tip), `current checkout`
+`evidence`, `docs`, `tip diverged` (the pull request merged a different tip), `current checkout`
 (the sweep runs inside it), `locked` (`git worktree lock`) or `fresh` (added <24h ago, no commits).
 The local branch is always kept. Orphan directories in a worktree root holding only caches
 (`node_modules`, `.venv`, `__pycache__`, tool caches) are deleted; other orphans are listed.
@@ -52,8 +54,7 @@ before pushing `<b>`, otherwise its pull request still carries the squashed comm
 - `cleanup = "prune"` (default) removes eligible worktrees. `"report"` prints
   `landed <branch> <path>: would remove` and keeps them. `"keep"` keeps them silently.
 - `stop_gate = false` turns the Stop hook off; it then exits 0 without output.
-- A config error (including a wrong value type or an empty `prototype_prefix`) is printed
-  at session start and the cleanup does nothing; the Stop gate blocks until it is fixed.
+- A config error is printed at session start; cleanup does nothing and the Stop gate blocks.
 
 ## What the sweep prints
 
@@ -69,8 +70,7 @@ Paths are relative to the primary's parent directory, or start with `~`.
 At turn end, the Stop hook sends a JSON block decision with a reason when the current
 branch breaks naming rules or the primary checkout is off `primary_branch`. Rename
 with `git branch -m`, move work to a worktree, then return the primary to `primary_branch`.
-A second stop in the same turn passes; `stop_gate = false` disables the gate. Plain
-`--gate` uses exit 2 and stderr; the plugin's `--hook` returns exit 0 and JSON.
+A second stop in the same turn passes; `stop_gate = false` disables the gate.
 
 ## Recovery
 

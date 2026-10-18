@@ -80,7 +80,7 @@ or `claude plugin --help` and upgrade to a tested version before continuing.
 In Claude Code, run `/lumberjack:setup` once per repository. In Codex, choose
 `lumberjack:setup` from the skill picker. The agent reads facts about the repository
 (`discover`, read-only), then asks about harnesses, branch shape, worktree roots,
-cleanup and Stop gate behaviour, the git hook and an evidence directory, each with a
+cleanup and Stop gate behaviour, the git hook and an evidence directory and doc roots, each with a
 recommended answer. After your yes it writes `.lumberjack.toml`, the post-merge hook,
 the `CLAUDE.md` (else `AGENTS.md`) block (creating `AGENTS.md` when neither exists),
 optional `.claude/settings.json` pinning and
@@ -110,6 +110,7 @@ SessionStart prints the error and cleans nothing.
 | `prototype_prefix` | `"prototype/"` | Prototype capture branch prefix; such branches are never cleaned |
 | `primary_branch` | `"main"` | Branch the primary checkout stays on and work lands in |
 | `evidence_dir` | `""` | Directory inside a worktree whose contents block cleanup; empty protects nothing extra |
+| `doc_roots` | `[]` | Folders inside a worktree for work documents (handoffs, plans, research, run output); an untracked or ignored file under one blocks cleanup with `docs`. `evidence_dir` is one more such folder but keeps its own reason, `evidence` |
 | `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where worktrees live: `~` is home, `*` a glob, `{name}` the repo name |
 | `cleanup` | `"prune"` | `prune` removes landed worktrees; `report` lists them as `would remove`; `keep` does nothing |
 | `stop_gate` | `true` | `false` turns the Stop hook off |
@@ -119,13 +120,14 @@ owners = ["alice", "codex", "claude"]
 ticket_prefix = "eng-"
 primary_branch = "trunk"
 evidence_dir = ".evidence"
+doc_roots = ["docs/work"]
 ```
 
 ## Cleanup rule
 
 After fetching `origin` (5 second limit; on failure the summary says `origin stale`),
 a worktree is removed only when its tip is verified landed in `origin/<primary_branch>`
-and nothing blocks it. Seven reasons block it, and the sweep names the one it hit:
+and nothing blocks it. Eight reasons block it, and the sweep names the one it hit:
 
 - `current checkout`: the sweep is running inside this worktree
 - `locked`: the worktree is locked with `git worktree lock`
@@ -133,6 +135,7 @@ and nothing blocks it. Seven reasons block it, and the sweep names the one it hi
 - `unpushed`: no upstream, or the tip is not contained in it; waived when a merged pull
   request had exactly this tip
 - `evidence`: `evidence_dir` is set and not empty in the worktree
+- `docs`: a `doc_roots` folder holds a file that git does not track, ignored files included
 - `tip diverged`: a pull request from this branch merged into the primary branch with a
   different tip
 - `fresh`: the worktree was added less than 24 hours ago and its branch has not moved since
@@ -238,8 +241,8 @@ directory), the note adds `directory left`, as in `(local branch kept; directory
 and the exit is 0; delete the leftover directory by hand. A failure that leaves the
 worktree registered prints `blocked` with git's error.
 
-It refuses with `current checkout`, `locked`, `fresh`, `dirty` or `evidence` as in the
-cleanup rule (an unpushed tip is no loss, since the branch keeps it), and also with:
+It refuses with `current checkout`, `locked`, `fresh`, `dirty`, `evidence` or `docs` as in
+the cleanup rule (an unpushed tip is no loss, since the branch keeps it), and also with:
 
 - `ignored files`: ignored files other than caches (`node_modules`, `.venv`,
   `__pycache__`, tool caches), which removal would delete

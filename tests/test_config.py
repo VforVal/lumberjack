@@ -83,7 +83,7 @@ def test_unknown_key_exits_naming_it(
 
 @pytest.mark.parametrize(
     ("body", "message"),
-    [('owners = "val"', "owners must be list"), ('prototype_prefix = ""', "prototype_prefix must not be empty")],
+    [('owners = "val"', "owners must be list"), ('doc_roots = "docs"', "doc_roots must be list"), ('prototype_prefix = ""', "prototype_prefix must not be empty")],
 )
 def test_bad_type_and_empty_prototype_prefix_are_rejected(
     tmp_path: Path, body: str, message: str
@@ -328,6 +328,20 @@ def test_empty_evidence_dir_protects_nothing_extra(primary: Path) -> None:
     assert sweep_worktrees.DEFAULTS["evidence_dir"] == ""
     assert sweep_worktrees.main(["--cleanup"]) == 0
     assert not path.exists()
+
+
+def test_session_start_keeps_a_worktree_with_a_file_under_a_doc_root(
+    primary: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = evidence_worktree(primary)
+    write(path, "docs/work/plan.md", "keep\n")
+    write(primary, ".git/info/exclude", ".evidence/\ndocs/work/\n")
+    configure(primary, 'doc_roots = ["docs/work"]')
+    monkeypatch.setattr("sys.stdin", io.StringIO(SESSION_START))
+    assert sweep_worktrees.main(["--hook"]) == 0
+    context = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "blocked claude/eng-9-done wt/claude-eng-9-done: docs" in context
+    assert path.exists()
 
 
 def orphan_paths(capsys: pytest.CaptureFixture[str]) -> set[Path]:
