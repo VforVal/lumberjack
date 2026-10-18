@@ -31,7 +31,8 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
   `conftest.py` isolates HOME, git identity and `shutil.which`, `helpers.py` holds `git` and
   `write`. Main seams: each script's `main()` against temp git repos, a `gh` shim on PATH, and
   a real merge through the Python hook. A few tests call `classify`, `short_path`,
-  `load_config`, `parse_config`, `block_reason` and `manager_wired` directly and patch `orphan_candidates`, `GH_TIMEOUT` and `gh_facts`.
+  `load_config`, `parse_config`, `block_reason` and `manager_wired` directly and patch
+  `orphan_candidates`, `GH_TIMEOUT` and `gh_facts`.
 
 ## Tests
 
