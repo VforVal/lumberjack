@@ -626,6 +626,73 @@ def test_detached_worktree_folder_name_makes_a_bundle_live(
     }
 
 
+def merge_to_main(primary: Path, branch: str) -> None:
+    git(primary, "merge", "-q", "--no-edit", branch)
+    git(primary, "push", "-q", "origin", "main")
+
+
+def test_two_ticket_bundle_stays_live_across_the_first_ticket_landing(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/eng-100-research/notes.md", "Tickets: eng-101\n")
+    wt = primary.parent / "wt"
+    first = add_worktree(primary, wt, "claude/eng-100-first", merge=False)
+    second = add_worktree(primary, wt, "claude/eng-101-second", merge=False)
+    bundle = "docs/work/eng-100-research"
+    assert docs_by_path(primary, capsys)[bundle]["state"] == "live"
+    merge_to_main(primary, "claude/eng-100-first")  # the first ticket lands; the second is open
+    git(primary, "worktree", "remove", "--force", str(first))
+    assert docs_by_path(primary, capsys)[bundle]["state"] == "live"
+    assert not any(line.startswith("doc ") for line in cleanup(primary))
+    merge_to_main(primary, "claude/eng-101-second")
+    git(primary, "worktree", "remove", "--force", str(second))
+    assert docs_by_path(primary, capsys)[bundle]["state"] == "linked"
+
+
+def test_bundle_named_in_a_tracked_document_is_live(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/eng-110-plan/a.md", "Ticket: eng-110\n")
+    write(primary, "docs/work/eng-111-plan/a.md", "Ticket: eng-111\n")
+    write(primary, "docs/work/scratch/a.md", "no ticket\n")
+    write(primary, "docs/work/quiet/a.md", "no ticket\n")
+    states = {d["state"] for d in docs_by_path(primary, capsys).values()}
+    assert states == {"linked", "unlinked"}
+    write(primary, "guide.md", "Background: docs/work/eng-110-plan and docs/work/scratch.\n")
+    git(primary, "add", "guide.md")  # tracked, uncommitted: git grep reads the index
+    states = {p: d["state"] for p, d in docs_by_path(primary, capsys).items()}
+    assert states == {
+        "docs/work/eng-110-plan": "live",
+        "docs/work/eng-111-plan": "linked",
+        "docs/work/scratch": "live",
+        "docs/work/quiet": "unlinked",
+    }
+
+
+def test_bundle_named_in_an_unlanded_branch_commit_message_is_live(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    for name in ("open-spec", "landed-spec", "unseen-spec"):
+        write(primary, f"docs/work/eng-120-{name}/a.md", "Ticket: eng-129\n")
+    for branch, name in (("claude/eng-121-x", "open-spec"), ("claude/eng-122-y", "landed-spec")):
+        path = primary.parent / "wt" / branch.split("/")[1]
+        git(primary, "worktree", "add", "-q", "-b", branch, str(path))
+        write(path, f"{path.name}.txt", "x")
+        git(path, "add", ".")
+        git(path, "commit", "-q", "-m", f"Build on docs/work/eng-120-{name}")
+    merge_to_main(primary, "claude/eng-122-y")
+    git(primary, "worktree", "remove", "--force", str(primary.parent / "wt" / "eng-121-x"))
+    states = {p.split("/")[-1]: d["state"] for p, d in docs_by_path(primary, capsys).items()}
+    assert states == {  # the open branch outlives its worktree and keeps its message live
+        "eng-120-open-spec": "live",
+        "eng-120-landed-spec": "linked",
+        "eng-120-unseen-spec": "linked",
+    }
+
+
 def test_worktrees_inside_a_doc_root_are_not_bundles(
     primary: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

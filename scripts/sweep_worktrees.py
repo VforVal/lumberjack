@@ -46,6 +46,7 @@ CLEANUP_MODES = ("prune", "report", "keep")
 CACHE_DIRS = {"node_modules", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist"}
 CACHE_DIRS.add(".codex-worktree-name")
 DOC_REFERENCE = ["research", "prototype"]  # bundle name words that make a bundle reference
+DOC_COMMITS = 1000  # newest commits read from unlanded branches when looking for bundle names
 DOC_SECONDS = 10  # budget for sizing bundles; the SessionStart hook times out at 30
 
 
@@ -109,12 +110,13 @@ def load_config(primary: Path) -> Config:
     return cfg
 
 
-def git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def git(cwd: Path, *args: str, input: str | None = None) -> subprocess.CompletedProcess[str]:
     # A git hook exports GIT_DIR and friends; they would point every call at the merging worktree.
     leaked = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
     env = {key: value for key, value in os.environ.items() if key not in leaked}
     return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", env=env
+        ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=env, input=input,
     )
 
 
@@ -486,6 +488,21 @@ def human_size(size: int | None) -> str:
     return f"{value:.1f} GB"
 
 
+def mentioned(primary: Path, cfg: Config, names: list[str], tiers: dict[Tip, Verdict]) -> set[str]:
+    """Names in a tracked file, or in a commit message only an unlanded branch holds."""
+    if not names:
+        return set()
+    # One grep for every name (patterns on stdin); matched lines only, so the cost is the repo's size.
+    grep = git(primary, "grep", "-I", "-h", "-F", "-f", "-", input="\n".join(names) + "\n")
+    shas = sorted({sha for (sha, _), (tier, _) in tiers.items() if tier not in VERIFIED})
+    text = grep.stdout if grep.returncode == 0 else ""
+    if shas:  # shortcut: the newest DOC_COMMITS commits, not all of them; raise it if bundles go unseen
+        log = git(primary, "log", "--format=%B", f"-n{DOC_COMMITS}", *shas, "--not",
+                  f"origin/{cfg['primary_branch']}")
+        text += log.stdout if log.returncode == 0 else ""
+    return {name for name in names if name in text}
+
+
 def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verdict]) -> list[Row]:
     """Untracked doc-root bundles: class, tickets and live/linked/unlinked; size for linked."""
     # Any worktree counts, by branch or folder name, so a detached Codex worktree does too.
@@ -495,14 +512,19 @@ def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verd
     carried = {t for name in names for t in ticket_ids(cfg, name)}
     deadline = time.monotonic() + DOC_SECONDS
     worktrees = [Path(tree["path"]).resolve() for tree in trees[1:]]
+    bundles = [
+        (root, rel) for root, rel in doc_entries(primary, cfg)
+        # a worktree, or a folder holding worktrees, is not a document bundle
+        if not any(w.is_relative_to((primary / rel).resolve()) for w in worktrees)
+    ]
+    named = mentioned(primary, cfg, sorted({posixpath.basename(rel) for _, rel in bundles}), tiers)
     rows = []
-    for root, rel in doc_entries(primary, cfg):
+    for root, rel in bundles:
         name, path = posixpath.basename(rel), primary / rel
-        if any(w.is_relative_to(path.resolve()) for w in worktrees):
-            continue  # a worktree, or a folder holding worktrees, is not a document bundle
         tickets = list(dict.fromkeys(ticket_ids(cfg, name) + top_file_tickets(cfg, path)))
         words = cfg["doc_reference"].get(root, DOC_REFERENCE)
-        state = "unlinked" if not tickets else "live" if carried & set(tickets) else "linked"
+        live = name in named or carried & set(tickets)
+        state = "live" if live else "linked" if tickets else "unlinked"
         rows.append({
             "path": rel,
             "class": "reference" if any(w.lower() in name.lower() for w in words) else "ephemeral",

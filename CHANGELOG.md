@@ -16,6 +16,10 @@
   `doc_reference` setting) and live, linked or unlinked state. The summary line gains
   `docs N` and each linked bundle prints `doc <class> <path>: tickets <ids>; <size>`.
   Nothing is deleted.
+- A bundle is also live while its folder name appears in a tracked file or in a commit
+  message of an unlanded branch, and the `lumberjack` skill tells agents to add the current
+  ticket to a bundle's `Tickets:` line when they read or extend it. A bundle listing two
+  tickets stays live after the first one's branch lands.
 - Run hooks, setup and cleanup directly with Python 3.11+ (`python` on PATH).
   No uv or runtime packages are required. Re-run setup to upgrade existing git hooks,
   and review the updated plugin hook commands in the harness. The plugin hooks run through
