@@ -116,16 +116,23 @@ def load_config(primary: Path) -> Config:
     ):
         raise ConfigError("lumberjack: doc_reference must map each root to a list of words", source)
     strategy = cfg["doc_strategy"]
+    roots = strategy.get("roots", {})  # optional: an action per doc root, ahead of the class action
     if strategy and not (
-        strategy.keys() == {*STRATEGY, "trash_days", "tracker"}
+        strategy.keys() - {"roots"} == {*STRATEGY, "trash_days", "tracker"}
+        and isinstance(roots, dict) and all(
+            isinstance(r, str) and a in ("delete", "trash", "promote", "keep")
+            for r, a in roots.items()
+        )
         and all(strategy[k] in choices for k, choices in STRATEGY.items())
         and type(strategy["trash_days"]) is int and strategy["trash_days"] > 0
         and isinstance(strategy["tracker"], str) and strategy["tracker"]
     ):
         raise ConfigError(
             "lumberjack: doc_strategy must be empty or set scope, ephemeral, reference,"
-            " trash_days and tracker to valid values", source,
+            " trash_days and tracker (and optionally roots) to valid values", source,
         )
+    if roots:
+        strategy["roots"] = {posixpath.normpath(r): a for r, a in roots.items()}
     # One spelling per root, so "docs/work/" in doc_reference finds the root "./docs/work".
     cfg["doc_roots"] = [posixpath.normpath(root) for root in cfg["doc_roots"]]
     cfg["doc_reference"] = {posixpath.normpath(k): v for k, v in cfg["doc_reference"].items()}
@@ -563,6 +570,7 @@ def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verd
         state = "live" if live else "linked" if tickets else "unlinked"
         rows.append({
             "path": rel,
+            "root": root,
             "class": "reference" if any(w.lower() in name.lower() for w in words) else "ephemeral",
             "state": state,
             "tickets": tickets,
@@ -764,7 +772,10 @@ def clear_bundle(start: Path, target: str, promoted: str = "") -> tuple[bool, st
     cfg = load_config(primary)
     strategy, rel = cfg["doc_strategy"], posixpath.normpath(target.replace("\\", "/"))
     doc = next((d for d in build_report(primary, cfg)["docs"] if d["path"] == rel), None)
-    action = strategy.get(doc["class"]) if doc else None
+    # An override that does not fit the bundle's class (delete on a reference bundle) keeps it.
+    action = strategy.get("roots", {}).get(doc["root"], strategy.get(doc["class"])) if doc else None
+    if doc and action not in STRATEGY[doc["class"]]:
+        action = "keep"
     base = f"origin/{cfg['primary_branch']}"
     if promoted.startswith(cfg["prototype_prefix"]):  # a pushed prototype branch ...
         copy = git(primary, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{promoted}")
@@ -775,6 +786,7 @@ def clear_bundle(start: Path, target: str, promoted: str = "") -> tuple[bool, st
         "no strategy saved" if not strategy
         else "not a bundle" if doc is None
         else doc["state"] if doc["state"] != "linked"  # live or unlinked
+        else "symlink" if (primary / rel).is_symlink()  # its target may lie outside the repository
         else "kept by strategy" if action == "keep"
         else "promote it first (--promoted)" if action == "promote" and not promoted
         else "the promoted copy is not on origin" if action == "promote" and not saved
@@ -787,6 +799,8 @@ def clear_bundle(start: Path, target: str, promoted: str = "") -> tuple[bool, st
     units = [path] if strategy["scope"] == "bundle" else [
         f for f in ([path] if path.is_file() else path.rglob("*.md")) if f.suffix.lower() == ".md"
     ]
+    if not units:
+        return False, f"blocked {rel}: no Markdown in scope"
     stamp = datetime.now(timezone.utc).strftime(TRASH_STAMP)
     for unit in units:
         if action in ("trash", "promote"):  # a promoted reference bundle is trashed, never deleted
@@ -796,7 +810,8 @@ def clear_bundle(start: Path, target: str, promoted: str = "") -> tuple[bool, st
         elif unit.is_dir() and not unit.is_symlink():
             shutil.rmtree(unit, **{RMTREE_HANDLER: make_writable})
         else:
-            os.chmod(unit, stat.S_IWRITE)
+            if not unit.is_symlink():  # chmod would follow the link
+                os.chmod(unit, stat.S_IWRITE)
             unit.unlink()
     return True, f"cleared {rel}: " + ("deleted" if action == "delete" else f"trashed {stamp}")
 

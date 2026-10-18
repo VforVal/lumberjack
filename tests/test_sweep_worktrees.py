@@ -1071,6 +1071,52 @@ def test_clear_delete_with_markdown_scope_leaves_other_files(primary: Path) -> N
     assert left == ["out.log"] and not trash_folders(primary)
 
 
+def test_clear_refuses_a_symlinked_bundle_and_leaves_its_target(primary: Path) -> None:
+    strategy_settings(primary, ephemeral="delete", scope="markdown")
+    outside = primary.parent / "outside"
+    write(outside, "keep.md", "x")
+    try:
+        os.symlink(outside, primary / "docs-link", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not permitted here")
+    (primary / "docs/work").mkdir(parents=True)
+    os.replace(primary / "docs-link", primary / "docs/work/eng-136-notes")
+    assert clear(primary, "docs/work/eng-136-notes") == (
+        1, "blocked docs/work/eng-136-notes: symlink"
+    )
+    strategy_settings(primary, ephemeral="delete", scope="bundle")
+    assert clear(primary, "docs/work/eng-136-notes")[0] == 1
+    assert (outside / "keep.md").exists() and os.access(outside / "keep.md", os.W_OK)
+
+
+def test_clear_with_markdown_scope_blocks_when_nothing_is_in_scope(primary: Path) -> None:
+    strategy_settings(primary, scope="markdown")
+    write(primary, "docs/work/eng-137-out.json", "Ticket: eng-137\n")
+    write(primary, "docs/work/eng-138-logs/run.log", "Ticket: eng-138\n")
+    for name in ("eng-137-out.json", "eng-138-logs"):
+        assert clear(primary, f"docs/work/{name}") == (
+            1, f"blocked docs/work/{name}: no Markdown in scope"
+        )
+        assert (primary / "docs/work" / name).exists()
+    assert not trash_folders(primary)
+
+
+def test_root_override_keeps_a_bundle_the_class_action_would_trash(primary: Path) -> None:
+    settings(
+        primary,
+        'doc_roots = ["docs/work", "docs/handoffs"]\n'
+        'doc_strategy = {scope = "bundle", ephemeral = "trash", reference = "promote",'
+        ' trash_days = 30, tracker = "github", roots = {"./docs/handoffs/" = "keep"}}\n',
+    )
+    write(primary, "docs/handoffs/eng-139-a/a.md", "Ticket: eng-139\n")
+    write(primary, "docs/work/eng-139-b/a.md", "Ticket: eng-139\n")
+    assert clear(primary, "docs/handoffs/eng-139-a") == (
+        1, "blocked docs/handoffs/eng-139-a: kept by strategy"
+    )
+    assert clear(primary, "docs/work/eng-139-b")[0] == 0
+    assert (primary / "docs/handoffs/eng-139-a/a.md").exists()
+
+
 def test_reference_bundle_needs_a_pushed_copy_before_it_is_trashed(primary: Path) -> None:
     strategy_settings(primary)
     bundle = "docs/work/eng-134-research"

@@ -46,6 +46,10 @@
   and an unpromoted reference bundle). Trash lives in `<git dir>/lumberjack-trash/<UTC timestamp>/`.
   The sweep prints a `trash <timestamp>: N days old; <size>` line (and `, trash N` in the summary)
   for folders past `trash_days`; only `--purge-trash` deletes them.
+- `doc_strategy.roots` (optional): an action per doc root that overrides the class action, so
+  `roots = {"docs/handoffs" = "keep"}` keeps one root's bundles while others are trashed. `--clear` also
+  refuses a symlinked bundle (`symlink`) and a markdown-scope bundle with no `.md` file
+  (`no Markdown in scope`) instead of reporting success.
 
 ## 1.1.1
 

@@ -34,7 +34,8 @@ The sweep reports linked bundles (`docs N`) and deletes nothing.
 
 **strategy**: the saved `doc_strategy`: scope (Markdown only or whole bundles), the action per
 class (`delete`, `trash` or `keep` for ephemeral; `promote` or `keep` for reference), the trash
-retention in days and the tracker that says whether a ticket is closed. `/lumberjack:cleanup`
+retention in days, the tracker that says whether a ticket is closed and, optionally, an action per
+doc root (`roots`) that overrides the class action. `/lumberjack:cleanup`
 asks for it once; with none saved nothing is removed.
 
 **trash**: `lumberjack-trash/` inside the git directory, where `--clear` moves bundle files into a

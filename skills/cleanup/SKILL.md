@@ -96,16 +96,18 @@ When `doc_strategy` is `{}`, ask in one message, with these choices, then save t
 - reference bundles: `promote` or `keep`
 - trash days: whole days a trashed folder is kept (suggest 30)
 - tracker: where tickets are checked, in words (for example `github issues`)
+- doc roots to always keep, if any (saved as `roots`, each root mapped to `keep`)
 
 Write them as JSON with keys `scope`, `ephemeral`, `reference`, `trash_days`, `tracker`
-to a temporary file and run `python "HELPER" strategy FILE`, where `HELPER` is
+(plus `roots`, a table of root to `keep`, when they named any) to a temporary file and run `python "HELPER" strategy FILE`, where `HELPER` is
 `../../scripts/setup_lumberjack.py` relative to this skill's directory. Relay its output and
 say the maintainer commits `.lumberjack.toml`. If they decline, remove nothing and go to
 step 5. A saved strategy is never asked for again; follow it.
 
 ### Offer
 
-Take the `linked` docs whose class is not `keep` in the strategy. For each, check every id
+Take the `linked` docs whose class is not `keep` in the strategy and whose `root` is not
+mapped to `keep` in `doc_strategy.roots`. For each, check every id
 in `tickets` in the tracker with your own tools (for example `gh issue view` or a tracker
 connector). Offer a bundle only when all of its tickets are confirmed closed; an unreachable
 tracker or an unknown ticket means skip it. Ask once per group (same class and doc root),

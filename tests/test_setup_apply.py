@@ -27,7 +27,7 @@ ANSWERS = {
     "doc_reference": {"docs/work": ["spec", "research"]},
     "doc_strategy": {
         "scope": "bundle", "ephemeral": "trash", "reference": "promote",
-        "trash_days": 14, "tracker": "github",
+        "trash_days": 14, "tracker": "github", "roots": {"docs/handoffs": "keep"},
     },
     "worktree_roots": [".wt", "~/worktrees/{name}"],
     "cleanup": "report",
