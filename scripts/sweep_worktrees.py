@@ -131,6 +131,8 @@ def registered(primary: Path) -> list[Row]:
             rows[-1]["branch"] = value.removeprefix("refs/heads/")
         elif key == "prunable":
             rows[-1]["gone"] = "yes"
+        elif key == "locked":
+            rows[-1]["locked"] = "yes"
     # A worktree whose directory is gone has nothing to sweep; git worktree prune would drop it.
     return [row for row in rows if "gone" not in row]
 
@@ -274,6 +276,7 @@ def worktree_rows(trees: list[Row], tiers: dict[Tip, Verdict]) -> list[Row]:
                 "node_modules": "yes" if (path / "node_modules").is_dir() else "no",
                 "branch": tree["branch"],
                 "path": tree["path"],
+                "locked": tree.get("locked", ""),
             }
         )
     return result
@@ -440,6 +443,13 @@ def unpushed(path: Path) -> bool:
     return git(path, "merge-base", "--is-ancestor", "HEAD", "@{u}").returncode != 0
 
 
+def fresh(path: Path, branch: str, head: str) -> bool:
+    """The branch still points at the commit it was created at; False without that reflog entry."""
+    log = lines(git(path, "reflog", "show", "--format=%H %gs", f"refs/heads/{branch}"))
+    sha, _, subject = log[-1].partition(" ") if branch and log else ("", "", "")
+    return sha == head and subject.startswith("branch: Created from")
+
+
 def short_path(primary: Path, path: str | Path) -> str:
     """Path relative to the primary's parent directory, else with home as ~."""
     full = Path(path).resolve()
@@ -450,12 +460,17 @@ def short_path(primary: Path, path: str | Path) -> str:
 
 
 def block_reason(cfg: Config, w: Row, here: Path | None, pushed: bool = True) -> str:
-    """Why a worktree stays, or an empty string; pushed=False skips the upstream check."""
+    """Why a worktree stays, or empty; pushed=False skips the upstream and fresh checks."""
     evidence = cfg["evidence_dir"] and Path(w["path"]) / cfg["evidence_dir"]
     if here is not None and same_dir(w["path"], here):
         return "current checkout"  # never pull the directory from under the running session
+    if w.get("locked"):
+        return "locked"
     if w["dirty"]:  # -1 (status failed) counts as dirty
         return "dirty"
+    # A new branch from origin/main looks integrated and pushed; its session may have just begun.
+    if pushed and fresh(Path(w["path"]), w["branch"], w["head"]):
+        return "fresh"
     # landed-pr: the forge saw this exact tip, and delete-on-merge drops the upstream.
     if pushed and w["tier"] != "landed-pr" and unpushed(Path(w["path"])):
         return "unpushed"

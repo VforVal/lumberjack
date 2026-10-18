@@ -565,6 +565,31 @@ def test_current_checkout_is_never_removed(primary: Path) -> None:
     assert path.exists()
 
 
+def test_fresh_worktree_is_kept_until_it_has_its_own_commits(primary: Path) -> None:
+    wt = primary.parent / "wt"
+    fresh, merged = wt / "eng-40-fresh", wt / "eng-41-merged"
+    for path in (fresh, merged):  # tracks origin/main: looks integrated and pushed
+        git(primary, "worktree", "add", "-q", "-b", f"claude/{path.name}", str(path), "origin/main")
+    (merged / "m.txt").write_text("m\n")
+    git(merged, "add", ".")
+    git(merged, "commit", "-q", "-m", "m")
+    git(merged, "push", "-q", "-u", "origin", "claude/eng-41-merged")
+    git(primary, "merge", "-q", "--ff-only", "claude/eng-41-merged")
+    git(primary, "push", "-q", "origin", "main")
+    out = cleanup(primary)
+    assert "blocked claude/eng-40-fresh wt/eng-40-fresh: fresh" in out
+    assert "cleaned claude/eng-41-merged wt/eng-41-merged (local branch kept)" in out
+    assert fresh.exists() and not merged.exists()
+
+
+def test_locked_worktree_is_never_removed(primary: Path) -> None:
+    path = landed_worktree(primary, "eng-42-locked")
+    git(primary, "worktree", "lock", "--reason", "busy", str(path))
+    assert "blocked claude/eng-42-locked wt/eng-42-locked: locked" in cleanup(primary)
+    assert remove(primary, path) == (1, ["blocked claude/eng-42-locked wt/eng-42-locked: locked"])
+    assert path.exists()
+
+
 def test_self_heal_sets_script_and_hooks_path_only_when_free(primary: Path) -> None:
     cleanup(primary)
     assert config_value(primary, "lumberjack.script") == SCRIPT.as_posix()

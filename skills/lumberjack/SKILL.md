@@ -34,12 +34,12 @@ Each session start the sweep fetches `origin` (5 second limit; on failure it say
 4. `evidence_dir`, when set, is empty or absent inside the worktree.
 5. The branch is not a `prototype_prefix` branch, which is never touched.
 
-A worktree that fails a check stays, and the sweep names the reason: `dirty`,
-`unpushed`, `evidence`, `tip diverged` (the pull request merged a different tip) or
-`current checkout` (the sweep runs inside it). The local branch is always kept. Orphan
-directories in a worktree root holding only caches (`node_modules`, `.venv`,
-`__pycache__`, tool caches) are deleted; other orphans are listed. With the primary
-off `primary_branch`, or a post-merge run in another worktree, nothing is cleaned.
+A worktree that fails a check stays, and the sweep names the reason: `dirty`, `unpushed`,
+`evidence`, `tip diverged` (the pull request merged a different tip), `current checkout`
+(the sweep runs inside it), `locked` (`git worktree lock`) or `fresh` (no own commits yet).
+The local branch is always kept. Orphan directories in a worktree root holding only caches
+(`node_modules`, `.venv`, `__pycache__`, tool caches) are deleted; other orphans are listed.
+With the primary off `primary_branch`, or a post-merge run in another worktree, nothing is cleaned.
 On `dirty`, list the stray files grouped by what produced them and ask the maintainer once
 per group (delete, ignore or commit), never file by file; `/lumberjack:cleanup` has the steps.
 
