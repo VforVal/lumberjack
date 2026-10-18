@@ -81,7 +81,9 @@ In Claude Code, run `/lumberjack:setup` once per repository. In Codex, choose
 `lumberjack:setup` from the skill picker. The agent reads facts about the repository
 (`discover`, read-only), then asks about harnesses, branch shape, worktree roots,
 cleanup and Stop gate behaviour, the git hook and an evidence directory and doc roots, each with a
-recommended answer. After your yes it writes `.lumberjack.toml`, the post-merge hook,
+recommended answer. Doc roots are suggested from a `.scratch/` folder and ignored top-level
+folders that hold Markdown (found by file name, without reading any file), each with a reason;
+a re-run keeps your saved `doc_roots`. After your yes it writes `.lumberjack.toml`, the post-merge hook,
 the `CLAUDE.md` (else `AGENTS.md`) block (creating `AGENTS.md` when neither exists),
 optional `.claude/settings.json` pinning and
 `.gitignore` lines for worktree roots inside the repository. It never commits; review

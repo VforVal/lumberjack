@@ -11,6 +11,9 @@
   cleanup, session start and `--remove`. `evidence_dir` is unchanged and still reports
   `evidence`. The `lumberjack` skill tells agents to write work documents only under a
   doc root, in a folder named for the ticket or branch slug.
+- Setup suggests `doc_roots`: `discover` lists a `.scratch/` folder and ignored top-level
+  folders holding Markdown as `doc_root_candidates` (names only, a bounded scan, no file
+  reads), and the interview proposes them with a reason. A re-run keeps the saved value.
 - Run hooks, setup and cleanup directly with Python 3.11+ (`python` on PATH).
   No uv or runtime packages are required. Re-run setup to upgrade existing git hooks,
   and review the updated plugin hook commands in the harness. The plugin hooks run through

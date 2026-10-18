@@ -1,5 +1,6 @@
 """setup_lumberjack discover, through main() against temporary repositories."""
 
+import contextlib
 import json
 import os
 import sys
@@ -15,7 +16,7 @@ import setup_lumberjack  # noqa: E402
 KEYS = {
     "repo", "name", "harness", "origin", "remote_shapes", "ticket_prefix_guess",
     "owners_guess", "worktree_parents", "tracker", "hook_manager", "post_merge_hook",
-    "hooks_path", "git_version", "python", "gh", "config",
+    "hooks_path", "git_version", "python", "gh", "config", "doc_root_candidates",
 }  # fmt: skip
 
 
@@ -193,6 +194,42 @@ def test_config_echoed_and_errors(repo: Path, capsys: pytest.CaptureFixture[str]
     write(repo, ".lumberjack.toml", "owners = [\n")
     config = discover(capsys, repo)["config"]
     assert config["source"] == ".lumberjack.toml" and "bad TOML" in config["error"]
+
+
+def test_doc_root_candidates(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert discover(capsys, repo)["doc_root_candidates"] == []
+    write(repo, ".gitignore", "work/\nbuild/\nnode_modules/\n.claude/\nsub/inner/\n")
+    write(repo, ".scratch/handoff.txt", "x")
+    write(repo, "work/deep/plan.MD", "x")
+    write(repo, "build/out.bin", "x")
+    write(repo, "node_modules/pkg/README.md", "x")
+    write(repo, ".claude/worktrees/a/README.md", "x")
+    write(repo, "untracked/notes.md", "x")
+    assert discover(capsys, repo)["doc_root_candidates"] == [
+        {"path": ".scratch", "reason": "conventional scratch folder for agent work documents"},
+        {"path": "work", "reason": "ignored folder holding Markdown"},
+    ]  # fmt: skip
+    write(repo, ".lumberjack.toml", 'doc_roots = ["docs/work"]\n')  # a re-run sees the saved value
+    assert discover(capsys, repo)["config"]["doc_roots"] == ["docs/work"]
+
+
+def test_doc_root_scan_is_bounded(
+    repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write(repo, ".gitignore", "work/\n")
+    for number in range(300):
+        write(repo, f"work/f{number}.txt", "x")
+    examined = []
+    real = os.scandir
+
+    @contextlib.contextmanager
+    def counting(path):  # type: ignore[no-untyped-def]
+        with real(path) as entries:
+            yield (examined.append(entry) or entry for entry in entries)
+
+    monkeypatch.setattr(setup_lumberjack.os, "scandir", counting)
+    assert discover(capsys, repo)["doc_root_candidates"] == []
+    assert len(examined) <= setup_lumberjack.DOC_SCAN + 1
 
 
 def shim_gh(root: Path, monkeypatch: pytest.MonkeyPatch, code: int) -> None:

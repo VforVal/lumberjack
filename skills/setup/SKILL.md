@@ -63,9 +63,10 @@ set, or a directory named `.evidence`, `evidence` or `.<name>` sits at the root 
 looks like scratch or handoff output. Its contents block cleanup of a worktree.
 Otherwise set `""` without asking.
 
-**G. Doc roots** (`doc_roots`). Ask only when `config.doc_roots` is set, or the repo has an
-ignored folder holding agent work documents (handoffs, plans, research, run output). A landed
-worktree with an untracked or ignored file under a doc root stays, reason `docs`. Otherwise
+**G. Doc roots** (`doc_roots`). Ask only when `config.doc_roots` is set or
+`doc_root_candidates` is not empty. Recommend the candidate `path`s, each with its one-line
+`reason`, and say a landed worktree with an untracked or ignored file under a doc root stays,
+reason `docs`. On a re-run keep `config.doc_roots` unless the maintainer changes it. Otherwise
 set `[]` without asking.
 
 ## 3. Confirm

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from sweep_worktrees import (
+    CACHE_DIRS,
     DEFAULTS,
     ConfigError,
     config_table,
@@ -34,6 +35,8 @@ HERE = Path(__file__).resolve().parent
 REMOTE = "refs/remotes/origin/"
 TICKET = re.compile(r"\b([a-z]+-)\d+")
 TRACKER_DOC = Path("docs", "agents", "issue-tracker.md")  # the matt-pocock-skills convention
+DOC_SCAN = 200  # directory entries examined per ignored folder
+NOT_DOCS = CACHE_DIRS | {".claude", ".codex"}  # tool caches and harness folders, never doc roots
 
 
 def git_out(cwd: Path, *args: str) -> str:
@@ -102,6 +105,39 @@ def tracker_facts(repo: Path) -> Facts:
     return {"doc": str(doc), "ticket_key": key.group() if key else None, "prefix": prefix}
 
 
+def has_markdown(folder: Path) -> bool:
+    """Whether a .md name shows up in the first DOC_SCAN entries; names only, no file reads."""
+    # shortcut: a huge folder whose Markdown sits past the budget is missed, raise DOC_SCAN then.
+    pending, seen = [folder], 0
+    while pending:
+        try:
+            with os.scandir(pending.pop()) as entries:
+                for entry in entries:
+                    if (seen := seen + 1) > DOC_SCAN:
+                        return False
+                    if entry.name.lower().endswith(".md"):
+                        return True
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(Path(entry.path))
+        except OSError:
+            continue
+    return False
+
+
+def doc_root_candidates(repo: Path) -> list[Facts]:
+    found = {}
+    if repo.joinpath(".scratch").is_dir():
+        found[".scratch"] = "conventional scratch folder for agent work documents"
+    # --directory prints an ignored folder as one line without descending into it.
+    ignored = git_out(repo, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory")
+    for line in ignored.splitlines():
+        name = line.rstrip("/")
+        if line.endswith("/") and "/" not in name and name not in NOT_DOCS | found.keys():
+            if has_markdown(repo / name):
+                found[name] = "ignored folder holding Markdown"
+    return [{"path": path, "reason": reason} for path, reason in sorted(found.items())]
+
+
 def hook_facts(repo: Path, hooks_path: str | None) -> Facts | None:
     if hooks_path:
         base = repo / hooks_path
@@ -166,6 +202,7 @@ def discover(repo: Path) -> Facts:
         "python": sys.version.split()[0],
         "gh": gh_facts(),
         "config": config_facts(repo),
+        "doc_root_candidates": doc_root_candidates(repo),
     }
 
 
