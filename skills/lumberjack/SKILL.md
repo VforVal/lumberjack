@@ -36,7 +36,7 @@ Each session start the sweep fetches `origin` (5 second limit; on failure it say
 
 A worktree that fails a check stays, and the sweep names the reason: `dirty`, `unpushed`,
 `evidence`, `tip diverged` (the pull request merged a different tip), `current checkout`
-(the sweep runs inside it), `locked` (`git worktree lock`) or `fresh` (no own commits yet).
+(the sweep runs inside it), `locked` (`git worktree lock`) or `fresh` (added <24h ago, no commits).
 The local branch is always kept. Orphan directories in a worktree root holding only caches
 (`node_modules`, `.venv`, `__pycache__`, tool caches) are deleted; other orphans are listed.
 With the primary off `primary_branch`, or a post-merge run in another worktree, nothing is cleaned.

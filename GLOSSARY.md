@@ -15,8 +15,8 @@ confirmed removal.
 **dependent**: a branch built on top of a landed branch. It needs a rebase onto the
 primary branch before it is pushed, or its pull request carries the squashed commits.
 
-**fresh**: a worktree whose branch still points at the commit it was created at, so it has
-no commits of its own. Never removed by cleanup, even though it looks integrated.
+**fresh**: a worktree added less than 24 hours ago whose branch still points at the commit
+it was created at. Kept, even though it looks integrated; after 24 hours the usual rules apply.
 
 **locked**: a worktree locked with `git worktree lock`. Never removed by lumberjack.
 

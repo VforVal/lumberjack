@@ -2,10 +2,10 @@
 
 ## Unreleased
 
-- The sweep no longer removes a worktree created moments ago: a branch whose tip is still
-  the commit it was created at (per its reflog) is blocked as `fresh`, and a worktree
-  locked with `git worktree lock` is blocked as `locked` by the sweep, `--cleanup` and
-  `--remove`.
+- The sweep, `--cleanup` and `--remove` no longer remove a worktree a session may have
+  just started in: one added less than 24 hours ago whose branch has not moved since it
+  was created is blocked as `fresh`, and one locked with `git worktree lock` is blocked as
+  `locked`.
 - Run hooks, setup and cleanup directly with Python 3.11+ (`python` on PATH).
   No uv or runtime packages are required. Re-run setup to upgrade existing git hooks,
   and review the updated plugin hook commands in the harness. The plugin hooks run through

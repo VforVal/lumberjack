@@ -135,9 +135,9 @@ and nothing blocks it. Seven reasons block it, and the sweep names the one it hi
 - `evidence`: `evidence_dir` is set and not empty in the worktree
 - `tip diverged`: a pull request from this branch merged into the primary branch with a
   different tip
-- `fresh`: the branch still points at the commit it was created at (its reflog says so). A
-  new branch from `origin/<primary_branch>` looks landed and pushed, but its session may
-  have just started; a branch without that reflog entry gets no such protection
+- `fresh`: the worktree was added less than 24 hours ago and its branch has not moved since
+  it was created (its reflog has only the creation entry, or no entry at all). A new branch
+  from `origin/<primary_branch>` looks landed and pushed, but its session may have just started
 
 If git itself refuses the removal, git's message is the reason. Removal deletes no commits:
 the branch is kept. Bring the work back with `git worktree add <path> <branch>`.
@@ -238,8 +238,8 @@ directory), the note adds `directory left`, as in `(local branch kept; directory
 and the exit is 0; delete the leftover directory by hand. A failure that leaves the
 worktree registered prints `blocked` with git's error.
 
-It refuses with `current checkout`, `locked`, `dirty` or `evidence` as in the cleanup rule
-(an unpushed or `fresh` tip is no loss, since the branch keeps it), and also with:
+It refuses with `current checkout`, `locked`, `fresh`, `dirty` or `evidence` as in the
+cleanup rule (an unpushed tip is no loss, since the branch keeps it), and also with:
 
 - `ignored files`: ignored files other than caches (`node_modules`, `.venv`,
   `__pycache__`, tool caches), which removal would delete

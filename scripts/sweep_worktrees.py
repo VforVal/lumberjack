@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 
 if sys.version_info < (3, 11):  # before tomllib: a plain message instead of a traceback
     sys.exit(f"lumberjack: Python 3.11+ required, found {sys.version.split()[0]}")
@@ -142,6 +143,7 @@ VERIFIED = {"integrated", "content-integrated", "landed-pr"}
 GH_TIMEOUT = 5
 GH_BATCH = 100
 FETCH_TIMEOUT = 5
+FRESH_HOURS = 24
 Tip = tuple[str, str]  # (commit sha, branch name; empty when detached)
 Verdict = tuple[str, str]  # (tier, reason; the reason is empty unless unverified)
 
@@ -444,9 +446,18 @@ def unpushed(path: Path) -> bool:
 
 
 def fresh(path: Path, branch: str, head: str) -> bool:
-    """The branch still points at the commit it was created at; False without that reflog entry."""
+    """Added under FRESH_HOURS ago, and its branch has not moved since it was created."""
+    admin = git(path, "rev-parse", "--absolute-git-dir").stdout.strip()
+    try:  # git writes commondir once, when the worktree is added
+        age = time.time() - Path(admin, "commondir").stat().st_mtime
+    except OSError:
+        return False
+    if not branch or age > FRESH_HOURS * 3600:
+        return False
     log = lines(git(path, "reflog", "show", "--format=%H %gs", f"refs/heads/{branch}"))
-    sha, _, subject = log[-1].partition(" ") if branch and log else ("", "", "")
+    if not log:  # some tools (the Claude desktop app) create branches without a reflog entry
+        return True  # and any later commit or reset would have written one
+    sha, _, subject = log[-1].partition(" ")
     return sha == head and subject.startswith("branch: Created from")
 
 
@@ -460,7 +471,7 @@ def short_path(primary: Path, path: str | Path) -> str:
 
 
 def block_reason(cfg: Config, w: Row, here: Path | None, pushed: bool = True) -> str:
-    """Why a worktree stays, or empty; pushed=False skips the upstream and fresh checks."""
+    """Why a worktree stays, or an empty string; pushed=False skips the upstream check."""
     evidence = cfg["evidence_dir"] and Path(w["path"]) / cfg["evidence_dir"]
     if here is not None and same_dir(w["path"], here):
         return "current checkout"  # never pull the directory from under the running session
@@ -469,7 +480,7 @@ def block_reason(cfg: Config, w: Row, here: Path | None, pushed: bool = True) ->
     if w["dirty"]:  # -1 (status failed) counts as dirty
         return "dirty"
     # A new branch from origin/main looks integrated and pushed; its session may have just begun.
-    if pushed and fresh(Path(w["path"]), w["branch"], w["head"]):
+    if fresh(Path(w["path"]), w["branch"], w["head"]):
         return "fresh"
     # landed-pr: the forge saw this exact tip, and delete-on-merge drops the upstream.
     if pushed and w["tier"] != "landed-pr" and unpushed(Path(w["path"])):

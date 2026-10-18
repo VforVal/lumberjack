@@ -580,6 +580,13 @@ def test_fresh_worktree_is_kept_until_it_has_its_own_commits(primary: Path) -> N
     assert "blocked claude/eng-40-fresh wt/eng-40-fresh: fresh" in out
     assert "cleaned claude/eng-41-merged wt/eng-41-merged (local branch kept)" in out
     assert fresh.exists() and not merged.exists()
+    assert remove(primary, fresh) == (1, ["blocked claude/eng-40-fresh wt/eng-40-fresh: fresh"])
+    (primary / ".git" / "logs" / "refs" / "heads" / "claude" / "eng-40-fresh").unlink()
+    assert "blocked claude/eng-40-fresh wt/eng-40-fresh: fresh" in cleanup(primary)  # no reflog
+    added = primary / ".git" / "worktrees" / "eng-40-fresh" / "commondir"
+    old = added.stat().st_mtime - sweep_worktrees.FRESH_HOURS * 3600 - 60
+    os.utime(added, (old, old))
+    assert "cleaned claude/eng-40-fresh wt/eng-40-fresh (local branch kept)" in cleanup(primary)
 
 
 def test_locked_worktree_is_never_removed(primary: Path) -> None:
