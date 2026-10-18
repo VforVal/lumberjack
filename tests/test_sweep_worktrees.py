@@ -958,6 +958,19 @@ def test_remove_refuses_a_blocked_worktree_with_its_reason(primary: Path) -> Non
     assert dirty.exists() and open_.exists() and proto.exists() and detached.exists()
 
 
+def test_the_sweep_and_remove_both_keep_the_primary_and_prototypes(primary: Path) -> None:
+    cfg = sweep_worktrees.load_config(primary)
+    proto = primary.parent / "wt" / "proto"
+    git(primary, "worktree", "add", "-q", str(proto), "prototype/eng-65-demo")
+    for path, branch, reason in (
+        (primary, "main", "primary checkout"),
+        (proto, "prototype/eng-65-demo", "prototype"),
+    ):
+        row = {"path": str(path), "branch": branch, "head": "", "dirty": 0, "tier": "integrated"}
+        for explicit in (False, True):
+            assert sweep_worktrees.block_reason(primary, cfg, row, None, explicit) == reason
+
+
 def test_remove_takes_a_detached_worktree_whose_commit_is_on_a_branch(primary: Path) -> None:
     detached = primary.parent / "wt" / "detached"
     git(primary, "worktree", "add", "-q", "--detach", str(detached), "claude/eng-3-open")
@@ -1156,6 +1169,31 @@ def test_root_override_keeps_a_bundle_the_class_action_would_trash(primary: Path
     )
     assert clear(primary, "docs/work/eng-139-b")[0] == 0
     assert (primary / "docs/handoffs/eng-139-a/a.md").exists()
+
+
+def test_each_doc_row_names_the_action_its_strategy_gives_it(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(primary, "docs/work/eng-142-handoff/a.md", "Ticket: eng-142\n")
+    write(primary, "docs/work/eng-143-research/a.md", "Ticket: eng-143\n")
+    write(primary, "docs/handoffs/eng-144-a/a.md", "Ticket: eng-144\n")
+    write(primary, "docs/lab/eng-145-research/a.md", "Ticket: eng-145\n")
+    settings(primary, 'doc_roots = ["docs/work", "docs/handoffs", "docs/lab"]\n')
+    assert {d["action"] for d in docs_by_path(primary, capsys).values()} == {""}  # no strategy
+    settings(
+        primary,
+        'doc_roots = ["docs/work", "docs/handoffs", "docs/lab"]\n'
+        'doc_strategy = {scope = "bundle", ephemeral = "trash", reference = "promote",'
+        ' trash_days = 30, tracker = "github",'
+        ' roots = {"docs/handoffs" = "keep", "docs/lab" = "delete"}}\n',
+    )
+    actions = {p: d["action"] for p, d in docs_by_path(primary, capsys).items()}
+    assert actions == {
+        "docs/work/eng-142-handoff": "trash",
+        "docs/work/eng-143-research": "promote",
+        "docs/handoffs/eng-144-a": "keep",  # the root's entry wins over the class action
+        "docs/lab/eng-145-research": "keep",  # delete does not fit a reference bundle
+    }
 
 
 def test_clear_takes_a_group_and_exits_1_when_one_is_blocked(primary: Path) -> None:

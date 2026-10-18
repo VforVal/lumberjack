@@ -107,17 +107,16 @@ step 5. A saved strategy is never asked for again; follow it.
 
 ### Offer
 
-Take the `linked` docs whose class is not `keep` in the strategy and whose `root` is not
-mapped to `keep` in `doc_strategy.roots`. For each, check every id
+Take the `linked` docs whose `action` is not `keep`; the sweep sets `action` from the
+strategy, so never work it out yourself. For each, check every id
 in `tickets` in the tracker with your own tools (for example `gh issue view` or a tracker
 connector). Offer a bundle only when all of its tickets are confirmed closed; an unreachable
-tracker or an unknown ticket means skip it. Ask once per group (same class and doc root),
+tracker or an unknown ticket means skip it. Ask once per group (same `action` and doc root),
 never bundle by bundle, listing the paths, tickets and sizes. Only an explicit yes counts.
 
-- **ephemeral**: say each bundle's action (its root's in `doc_strategy.roots`, else the
-  `ephemeral` one): trash (kept `trash_days` days) or delete (permanent, no copy). On a yes,
-  run `python "SWEEP" --clear "PATH" "PATH" ...` once with the group's paths.
-- **reference**: offer only *promote* or *keep*; keep is the default. To promote, write
+- **trash** or **delete**: say which: trash (kept `trash_days` days) or delete (permanent,
+  no copy). On a yes, run `python "SWEEP" --clear "PATH" "PATH" ...` once with the group's paths.
+- **promote**: offer only *promote* or *keep*; keep is the default. To promote, write
   the findings into a document without naming the bundle's folder and get it tracked on
   `origin/<primary_branch>` through its pull request, or push the work as a
   `prototype_prefix` branch. Only then run

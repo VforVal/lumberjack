@@ -95,6 +95,11 @@ def config_table(primary: Path) -> tuple[str, Config]:
 
 def load_config(primary: Path) -> Config:
     source, table = config_table(primary)
+    return parse_config(table, source)
+
+
+def parse_config(table: Config, source: str = "") -> Config:
+    """The validated config for a raw table; source names its file in errors."""
     if unknown := sorted(table.keys() - DEFAULTS.keys()):
         raise ConfigError("lumberjack: unknown key: " + ", ".join(unknown), source)
     cfg = {**DEFAULTS, **table}
@@ -120,7 +125,7 @@ def load_config(primary: Path) -> Config:
     if strategy and not (
         strategy.keys() - {"roots"} == {*STRATEGY, "trash_days", "tracker"}
         and isinstance(roots, dict) and all(
-            isinstance(r, str) and a in ("delete", "trash", "promote", "keep")
+            isinstance(r, str) and a in {*STRATEGY["ephemeral"], *STRATEGY["reference"]}
             for r, a in roots.items()
         )
         and all(strategy[k] in choices for k, choices in STRATEGY.items())
@@ -561,17 +566,21 @@ def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verd
     named = mentioned(primary, cfg["primary_branch"],
                       sorted({rel for _, rel in bundles} | {n for n in names if ticket_ids(cfg, n)}),
                       sorted({sha for sha, _ in unlanded}))
-    rows = []
+    rows, strategy = [], cfg["doc_strategy"]
     for root, rel in bundles:
         name, path = posixpath.basename(rel), primary / rel
         tickets = list(dict.fromkeys(ticket_ids(cfg, name) + top_file_tickets(cfg, path)))
         words = cfg["doc_reference"].get(root, DOC_REFERENCE)
         live = rel in named or name in named or carried & set(tickets)
         state = "live" if live else "linked" if tickets else "unlinked"
+        kind = "reference" if any(w.lower() in name.lower() for w in words) else "ephemeral"
+        # The root's entry wins over the class action; one that does not fit the class keeps it.
+        action = strategy.get("roots", {}).get(root, strategy.get(kind, ""))
         rows.append({
             "path": rel,
             "root": root,
-            "class": "reference" if any(w.lower() in name.lower() for w in words) else "ephemeral",
+            "class": kind,
+            "action": action if not strategy or action in STRATEGY[kind] else "keep",
             "state": state,
             "tickets": tickets,
             "size": tree_size(path, deadline) if state == "linked" else None,
@@ -690,9 +699,18 @@ def short_path(primary: Path, path: str | Path) -> str:
     return full.as_posix()
 
 
-def block_reason(cfg: Config, w: Row, here: Path | None, pushed: bool = True) -> str:
-    """Why a worktree stays, or an empty string; pushed=False skips the upstream check."""
+def block_reason(
+    primary: Path, cfg: Config, w: Row, here: Path | None, explicit: bool = False
+) -> str:
+    """Why a worktree stays, or an empty string; explicit is a named --remove of any tier."""
     evidence = cfg["evidence_dir"] and Path(w["path"]) / cfg["evidence_dir"]
+    if same_dir(w["path"], primary):
+        return "primary checkout"
+    if w["branch"].startswith(cfg["prototype_prefix"]):
+        return "prototype"
+    on_branch = ("for-each-ref", "--contains", w["head"], "--count=1", "refs/heads")
+    if explicit and not w["branch"] and not lines(git(primary, *on_branch)):
+        return "no branch"  # removal would orphan the commits of a detached tip
     if here is not None and same_dir(w["path"], here):
         return "current checkout"  # never pull the directory from under the running session
     if w.get("locked"):
@@ -703,7 +721,8 @@ def block_reason(cfg: Config, w: Row, here: Path | None, pushed: bool = True) ->
     if fresh(Path(w["path"]), w["branch"], w["head"]):
         return "fresh"
     # landed-pr: the forge saw this exact tip, and delete-on-merge drops the upstream.
-    if pushed and w["tier"] != "landed-pr" and unpushed(Path(w["path"])):
+    # Explicit: the kept branch holds the commits, so unpushed is no loss; ignored files are.
+    if not explicit and w["tier"] != "landed-pr" and unpushed(Path(w["path"])):
         return "unpushed"
     if evidence and evidence.is_dir() and any(evidence.iterdir()):
         return "evidence"
@@ -712,7 +731,7 @@ def block_reason(cfg: Config, w: Row, here: Path | None, pushed: bool = True) ->
         found = untracked_docs(Path(w["path"]), cfg["doc_roots"])
         if found is None or found:  # a failed listing keeps the worktree
             return "docs"
-    return ""
+    return "ignored files" if explicit and stray_ignored(Path(w["path"])) else ""
 
 
 def tag(primary: Path, w: Row) -> str:
@@ -721,7 +740,7 @@ def tag(primary: Path, w: Row) -> str:
 
 def worktree_event(primary: Path, cfg: Config, w: Row, here: Path | None) -> tuple[str, str]:
     """(count key or empty, output line) for a verified-landed worktree outside keep mode."""
-    if reason := block_reason(cfg, w, here):
+    if reason := block_reason(primary, cfg, w, here):
         return "blocked", f"blocked {tag(primary, w)}: {reason}"
     if cfg["cleanup"] == "report":
         return "", f"landed {tag(primary, w)}: would remove"
@@ -749,18 +768,7 @@ def remove_named(start: Path, target: str) -> tuple[bool, str]:
     status = git(Path(tree["path"]), "status", "--porcelain")
     w = {**tree, "tier": "", "dirty": len(lines(status)) if status.returncode == 0 else -1}
     here = Path(git(start, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
-    on_branch = ("for-each-ref", "--contains", w["head"], "--count=1", "refs/heads")
-    if tree is trees[0]:
-        reason = "primary checkout"
-    elif tree["branch"].startswith(cfg["prototype_prefix"]):
-        reason = "prototype"
-    elif not tree["branch"] and not lines(git(primary, *on_branch)):
-        reason = "no branch"  # removal would orphan the commits of a detached tip
-    else:
-        # The kept branch holds the commits, so unpushed is no loss; ignored files are.
-        reason = block_reason(cfg, w, here, pushed=False)
-        reason = reason or ("ignored files" if stray_ignored(Path(tree["path"])) else "")
-    if reason:
+    if reason := block_reason(primary, cfg, w, here, explicit=True):
         return False, f"blocked {tag(primary, w)}: {reason}"
     outcome, line = remove_worktree(primary, w)
     return outcome == "cleaned", line
@@ -782,10 +790,7 @@ def clear_bundle(
 ) -> tuple[bool, str]:
     strategy, rel = cfg["doc_strategy"], posixpath.normpath(target.replace("\\", "/"))
     doc = docs.get(rel)
-    # An override that does not fit the bundle's class (delete on a reference bundle) keeps it.
-    action = strategy.get("roots", {}).get(doc["root"], strategy.get(doc["class"])) if doc else None
-    if doc and action not in STRATEGY[doc["class"]]:
-        action = "keep"
+    action = doc["action"] if doc else ""
     saved = False
     if action == "promote" and promoted.startswith(cfg["prototype_prefix"]):  # a pushed prototype
         copy = git(primary, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{promoted}")
@@ -923,36 +928,39 @@ def run_cleanup(
     return [summary, *out]
 
 
+HOOK_MARKERS = ("# >>> lumberjack", "# <<< lumberjack")  # around setup's block in a hook file
+
+
+def package_has(primary: Path, key: str) -> bool:
+    try:
+        data = json.loads((primary / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and key in data
+
+
+# Manager: (whether the repository uses it, the files setup writes its post-merge run to);
+# detection goes in this order. Every such run names the script by lumberjack.script.
+HOOK_MANAGERS: dict[str, tuple[Callable[[Path], bool], tuple[str, ...]]] = {
+    "husky": (lambda p: (p / ".husky").is_dir(), (".husky/post-merge",)),
+    "lefthook": (
+        lambda p: (p / "lefthook.yml").is_file() or (p / ".lefthook.yml").is_file(),
+        ("lefthook.yml", ".lefthook.yml", "lefthook-local.yml"),
+    ),
+    "pre-commit": (
+        lambda p: (p / ".pre-commit-config.yaml").is_file(), (".pre-commit-config.yaml",)
+    ),
+    "simple-git-hooks": (lambda p: package_has(p, "simple-git-hooks"), ("package.json",)),
+}
+
+
 def hook_manager(primary: Path) -> str:
     """The git hook manager the repository already uses, or an empty string."""
-    has = primary.joinpath
-    for name, found in (
-        ("husky", has(".husky").is_dir()),
-        ("lefthook", has("lefthook.yml").is_file() or has(".lefthook.yml").is_file()),
-        ("pre-commit", has(".pre-commit-config.yaml").is_file()),
-    ):
-        if found:
-            return name
-    try:
-        data = json.loads(has("package.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return ""
-    return "simple-git-hooks" if isinstance(data, dict) and "simple-git-hooks" in data else ""
-
-
-# Every hook setup writes for a manager runs the script named by lumberjack.script.
-MANAGER_FILES = (
-    ".husky/post-merge",
-    "lefthook.yml",
-    ".lefthook.yml",
-    "lefthook-local.yml",
-    ".pre-commit-config.yaml",
-    "package.json",
-)
+    return next((name for name, (used, _) in HOOK_MANAGERS.items() if used(primary)), "")
 
 
 def manager_wired(primary: Path) -> bool:
-    for rel in MANAGER_FILES:
+    for rel in (rel for _, files in HOOK_MANAGERS.values() for rel in files):
         try:
             if "lumberjack.script" in (primary / rel).read_text(encoding="utf-8", errors="replace"):
                 return True
@@ -983,7 +991,7 @@ def self_heal(primary: Path) -> list[str]:
     hooks_path = git(primary, "config", "core.hooksPath").stdout.strip()
     hook = primary / ".githooks" / "post-merge"
     # Only our own hook (marked by setup) may claim core.hooksPath.
-    if hook.is_file() and "# >>> lumberjack" in hook.read_text(encoding="utf-8", errors="replace") and not hooks_path:
+    if hook.is_file() and HOOK_MARKERS[0] in hook.read_text(encoding="utf-8", errors="replace") and not hooks_path:
         git(primary, "config", "core.hooksPath", ".githooks")
     return []
 

@@ -10,7 +10,7 @@ import sys
 
 if sys.version_info < (3, 11):  # before tomllib: a plain message instead of a traceback
     sys.exit(f"lumberjack: Python 3.11+ required, found {sys.version.split()[0]}")
-import tempfile
+import tomllib
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -18,6 +18,7 @@ from typing import Any
 from sweep_worktrees import (
     CACHE_DIRS,
     DEFAULTS,
+    HOOK_MARKERS,
     ConfigError,
     config_table,
     find_primary,
@@ -27,6 +28,7 @@ from sweep_worktrees import (
     lines,
     load_config,
     origin_parts,
+    parse_config,
     registered,
 )
 
@@ -156,7 +158,7 @@ def hook_facts(repo: Path, hooks_path: str | None) -> Facts | None:
         return None
     text = path.read_text(encoding="utf-8", errors="replace")
     first = text.splitlines()[0] if text else ""
-    has_marker = "# >>> lumberjack" in text
+    has_marker = BEGIN in text
     if has_marker:
         first = re.match(r"(?:[ \t]*(?:#(?!\!)[^\n]*)?\n)*(.*)", text).group(1)
     return {
@@ -282,18 +284,15 @@ def config_text(answers: Facts) -> str:
     number = version.read_text(encoding="utf-8").strip() if version else "unknown"
     keys = (f"# {CONFIG_DOC[k]}\n{k} = {toml_value(answers[k])}\n" for k in DEFAULTS)
     text = f"# written by lumberjack setup {number}\n\n" + "\n".join(keys)
-    with tempfile.TemporaryDirectory() as tmp:  # validate through the loader sweep uses
-        Path(tmp, ".lumberjack.toml").write_text(text, encoding="utf-8", newline="\n")
-        try:
-            load_config(Path(tmp))
-        except ConfigError as error:
-            raise abort(str(error)) from error
+    try:  # validate through the parser sweep uses
+        parse_config(tomllib.loads(text), ".lumberjack.toml")
+    except ConfigError as error:
+        raise abort(str(error)) from error
     return text
 
 
-SH_MARKERS = ("# >>> lumberjack", "# <<< lumberjack")
 MD_MARKERS = ("<!-- >>> lumberjack -->", "<!-- <<< lumberjack -->")
-BEGIN, END = SH_MARKERS
+BEGIN, END = HOOK_MARKERS
 LEGACY_RUN = 'uv run --quiet --script "$(git config --get lumberjack.script)" --cleanup'
 # First of python3, python that reports 3.11+; empty when none does. No quotes: pre-commit
 # wraps it in sh -c '...'.
@@ -343,7 +342,7 @@ def marked(markers: tuple[str, str]) -> re.Pattern[str]:
 
 
 def merge_block(
-    text: str, block: str, markers: tuple[str, str] = SH_MARKERS, after: str | None = None
+    text: str, block: str, markers: tuple[str, str] = HOOK_MARKERS, after: str | None = None
 ) -> str:
     """Replace the marked block, else insert it after the `after` line, else append it."""
     span = marked(markers)
@@ -376,7 +375,7 @@ def write_merged(
     rel: str,
     block: str,
     start: str = "",
-    markers: tuple[str, str] = SH_MARKERS,
+    markers: tuple[str, str] = HOOK_MARKERS,
     after: str | None = None,
 ) -> None:
     path = repo / rel

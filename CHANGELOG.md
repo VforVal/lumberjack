@@ -53,6 +53,9 @@
   (`no Markdown in scope`) instead of reporting success.
 - `--clear` takes several paths (one line each, one trash folder, exit 1 when any is blocked) and,
   with `--promoted`, fetches `origin` first so a promotion merged during the session counts.
+- `--json` gives each doc its resolved `action` (empty until a strategy is saved), which `--clear`
+  and `/lumberjack:cleanup` follow; a root's action that does not fit the class (`delete` on a
+  reference bundle) keeps the bundle.
 
 ## 1.1.1
 

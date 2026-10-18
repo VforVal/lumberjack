@@ -13,7 +13,7 @@ from helpers import git, write
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import setup_lumberjack  # noqa: E402
-from sweep_worktrees import load_config  # noqa: E402
+from sweep_worktrees import HOOK_MANAGERS, load_config, manager_wired  # noqa: E402
 
 BEGIN, END = "# >>> lumberjack", "# <<< lumberjack"
 ANSWERS = {
@@ -253,6 +253,17 @@ def test_python_hook_with_lumberjack_comment_is_still_wrapped(
         capture_output=True, text=True, check=True,
     )
     assert (done.stdout + done.stderr).strip() == "python hook ran"
+
+
+@pytest.mark.parametrize("hook", sorted(HOOK_MANAGERS))
+def test_each_manager_hook_lands_where_the_sweep_looks(
+    repo: Path, capsys: pytest.CaptureFixture[str], hook: str
+) -> None:
+    assert set(setup_lumberjack.HOOK_WRITERS) == {"plain", *HOOK_MANAGERS}
+    write(repo, "package.json", "{}\n")  # simple-git-hooks needs one
+    assert not manager_wired(repo)
+    assert apply(repo, capsys, hook=hook)[0] == 0
+    assert manager_wired(repo)
 
 
 def test_husky_hook(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
