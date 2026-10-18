@@ -24,6 +24,12 @@ it was created at. Kept, even though it looks integrated; after 24 hours the usu
 research, run output). A landed worktree with an untracked or ignored file under one stays,
 reason `docs`; documents go in a folder named for the ticket or branch slug.
 
+**bundle**: an untracked top-level entry under a doc root. Its tickets come from its folder
+name (via `ticket_prefix`) and a `Ticket:`/`Tickets:` line in its top file. It is `ephemeral`
+or `reference` (research and prototypes), and `live` (a worktree or an unlanded local branch carries
+one of its tickets), `linked` (tickets, none live) or `unlinked`. The sweep reports linked bundles
+(`docs N`) and deletes nothing.
+
 **cleanup**: removing a landed worktree at session start while keeping its branch.
 
 **confirmed removal**: removing one worktree the maintainer named and approved in

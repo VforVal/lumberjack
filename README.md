@@ -111,6 +111,7 @@ SessionStart prints the error and cleans nothing.
 | `primary_branch` | `"main"` | Branch the primary checkout stays on and work lands in |
 | `evidence_dir` | `""` | Directory inside a worktree whose contents block cleanup; empty protects nothing extra |
 | `doc_roots` | `[]` | Folders inside a worktree for work documents (handoffs, plans, research, run output); an untracked or ignored file under one blocks cleanup with `docs`. `evidence_dir` is one more such folder but keeps its own reason, `evidence` |
+| `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); a root not listed uses `["research", "prototype"]`. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
 | `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where worktrees live: `~` is home, `*` a glob, `{name}` the repo name |
 | `cleanup` | `"prune"` | `prune` removes landed worktrees; `report` lists them as `would remove`; `keep` does nothing |
 | `stop_gate` | `true` | `false` turns the Stop hook off |
@@ -174,18 +175,31 @@ when the fetch failed. Only the first 100 branches go to `gh` in one query; the 
 ## Summary line
 
 Plain `--cleanup` prints one summary line, then one line per event (`cleaned`, `landed`,
-`blocked`, `dependent`, `orphan`, `hint`), and exits 0. When the cleanup was skipped
+`blocked`, `dependent`, `orphan`, `doc`, `hint`), and exits 0. When the cleanup was skipped
 (see above) or the config is invalid, the only line says why instead:
 
 ```
-sweep: cleaned 1, landed 2, dependents 1, blocked 1, unverified 3, orphans 0, origin stale
+sweep: cleaned 1, landed 2, dependents 1, blocked 1, unverified 3, orphans 0, docs 1, origin stale
 cleaned alice/eng-12-login ~/worktrees/app (local branch kept)
 blocked alice/eng-13-search ~/worktrees/app2: dirty
+doc ephemeral docs/work/eng-9-handoff: tickets eng-9, eng-11; 3.2 MB
 dependent alice/eng-14-ui of alice/eng-12-login: git rebase --onto main 0123456789ab alice/eng-14-ui
 ```
 
 A `dependent` line is a branch built on top of a landed one; run the printed rebase
-before pushing it. Orphans are leftover directories in a worktree root: those holding
+before pushing it.
+A `doc` line is a bundle: an untracked top-level entry (file or folder) of a `doc_roots`
+folder in the primary checkout; tracked files and registered worktrees (or folders holding
+them) are never listed. Its tickets are the
+`ticket_prefix` ids in its folder name plus those on a `Ticket:` or `Tickets:` line in the head
+of its top file (the first Markdown file, else the first file); without a `ticket_prefix` no
+ticket is found. The class is `reference` when the name holds `research` or `prototype`
+(`doc_reference` changes the words per root), else `ephemeral`. A bundle is `live` when a
+worktree's branch or folder name, or an unlanded local branch, carries one of its tickets
+(so a Codex worktree on a detached HEAD counts), `linked` when it has tickets and none is live,
+`unlinked` without tickets. `docs N` and the lines cover linked bundles only (`--json` lists
+all three states under `docs`); the size comes from file metadata, never file contents, and
+reads `size unknown` if sizing runs past 10 seconds. Nothing is deleted. Orphans are leftover directories in a worktree root: those holding
 only caches (`node_modules-only`) are deleted, others (`mixed`, `not-git`; an empty directory counts as `not-git`) are listed.
 A root outside the repository without `{name}` is shared with other repositories, so only
 its `<dir>/<name>` subdirectories count (the Codex layout); scope your own roots with `{name}`,

@@ -4,6 +4,7 @@ import argparse
 import glob
 import json
 import os
+import posixpath
 import re
 import shutil
 import stat
@@ -29,6 +30,7 @@ DEFAULTS: Config = {
     "primary_branch": "main",
     "evidence_dir": "",
     "doc_roots": [],
+    "doc_reference": {},
     "worktree_roots": [
         "~/.codex/worktrees/*",
         ".claude/worktrees",
@@ -43,6 +45,8 @@ RMTREE_HANDLER = "onexc" if sys.version_info >= (3, 12) else "onerror"
 CLEANUP_MODES = ("prune", "report", "keep")
 CACHE_DIRS = {"node_modules", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist"}
 CACHE_DIRS.add(".codex-worktree-name")
+DOC_REFERENCE = ["research", "prototype"]  # bundle name words that make a bundle reference
+DOC_SECONDS = 10  # budget for sizing bundles; the SessionStart hook times out at 30
 
 
 def branch_pattern(cfg: Config) -> re.Pattern[str]:
@@ -93,6 +97,11 @@ def load_config(primary: Path) -> Config:
             raise ConfigError(f"lumberjack: {key} must be {type(default).__name__}", source)
     if not cfg["prototype_prefix"]:
         raise ConfigError("lumberjack: prototype_prefix must not be empty", source)
+    if not all(
+        isinstance(words, list) and all(isinstance(w, str) for w in words)
+        for words in cfg["doc_reference"].values()
+    ):
+        raise ConfigError("lumberjack: doc_reference must map each root to a list of words", source)
     if cfg["cleanup"] not in CLEANUP_MODES:
         raise ConfigError(
             f"lumberjack: cleanup must be one of {', '.join(CLEANUP_MODES)}", source
@@ -389,6 +398,7 @@ def format_rows(report: Row) -> list[str]:
         for w in report["worktrees"]
     ]
     out += [f"orphan {o['kind']} {o['path']}" for o in report["orphans"]]
+    out += map(doc_line, linked_docs(report))
     out += [f"branch {b['state']}{detail(b)} {b['name']}" for b in report["branches"]]
     out += [f"prototype {p['issue']} {p['name']}" for p in report["prototypes"]]
     p = report["primary"]
@@ -398,6 +408,118 @@ def format_rows(report: Row) -> list[str]:
     )
     out += [f"name violation {name}" for name in report["name_violations"]]
     return out
+
+
+def ticket_ids(cfg: Config, text: str) -> list[str]:
+    """Ticket ids (`ticket_prefix` + digits) in text, in order; none without a prefix."""
+    prefix = cfg["ticket_prefix"]
+    return re.findall(rf"(?<![A-Za-z0-9]){re.escape(prefix)}\d+", text) if prefix else []
+
+
+def doc_entries(primary: Path, cfg: Config) -> list[tuple[str, str]]:
+    """(doc root, repo-relative path) of each untracked top-level entry under a doc root."""
+    found: dict[str, str] = {}
+    for root in map(posixpath.normpath, cfg["doc_roots"]):
+        # --directory prints one line per untracked folder, so huge doc roots stay cheap.
+        listed = git(primary, "ls-files", "-z", "--others", "--directory",
+                     "--no-empty-directory", "--", root).stdout
+        for entry in (e.rstrip("/") for e in listed.split("\0")):
+            if entry == root:  # the whole root is untracked: its children are the bundles
+                try:
+                    found |= {f"{root}/{e.name}": root for e in os.scandir(primary / root)}
+                except OSError:
+                    pass
+            elif entry and posixpath.dirname(entry) == root:
+                found[entry] = root
+    return [(root, path) for path, root in sorted(found.items())]
+
+
+def top_file_tickets(cfg: Config, path: Path) -> list[str]:
+    """Ids on a `Ticket:` or `Tickets:` line in the head of the bundle's top file."""
+    try:
+        if path.is_dir():  # shortcut: top file = first Markdown file, else first file, by name
+            files = [e for e in os.scandir(path) if e.is_file()]
+            if not files:
+                return []
+            path = Path(min(files, key=lambda e: (not e.name.endswith(".md"), e.name.lower())).path)
+        with path.open(encoding="utf-8", errors="replace") as file:
+            head = file.read(4096)  # the one place file contents are read
+    except OSError:
+        return []
+    return [
+        t for line in head.splitlines() if re.match(r"[\W_]*tickets?\W*:", line, re.I)
+        for t in ticket_ids(cfg, line)
+    ]
+
+
+def tree_size(path: Path, deadline: float) -> int | None:
+    """Bytes under path from stat alone (no file is opened); None once the deadline passes."""
+    if not path.is_dir():
+        try:
+            return path.lstat().st_size
+        except OSError:
+            return None
+    total, stack = 0, [path]
+    while stack:
+        if time.monotonic() > deadline:  # shortcut: checked per folder, not per file
+            return None
+        try:
+            with os.scandir(stack.pop()) as entries:
+                for entry in entries:
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                    else:
+                        total += entry.stat(follow_symlinks=False).st_size
+        except OSError:
+            continue
+    return total
+
+
+def human_size(size: int | None) -> str:
+    if size is None:
+        return "size unknown"
+    value = float(size)
+    for unit in ("B", "KB", "MB"):
+        if value < 1024:
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} GB"
+
+
+def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verdict]) -> list[Row]:
+    """Untracked doc-root bundles: class, tickets and live/linked/unlinked; size for linked."""
+    # Any worktree counts, by branch or folder name, so a detached Codex worktree does too.
+    # A branch without one counts until it lands: landed local branches are never deleted.
+    names = [n for t in trees[1:] for n in (t["branch"], Path(t["path"]).name) if n]
+    names += [n for (_, n), (tier, _) in tiers.items() if n and tier not in VERIFIED]
+    carried = {t for name in names for t in ticket_ids(cfg, name)}
+    deadline = time.monotonic() + DOC_SECONDS
+    worktrees = [Path(tree["path"]).resolve() for tree in trees[1:]]
+    rows = []
+    for root, rel in doc_entries(primary, cfg):
+        name, path = posixpath.basename(rel), primary / rel
+        if any(w.is_relative_to(path.resolve()) for w in worktrees):
+            continue  # a worktree, or a folder holding worktrees, is not a document bundle
+        tickets = list(dict.fromkeys(ticket_ids(cfg, name) + top_file_tickets(cfg, path)))
+        words = cfg["doc_reference"].get(root, DOC_REFERENCE)
+        state = "unlinked" if not tickets else "live" if carried & set(tickets) else "linked"
+        rows.append({
+            "path": rel,
+            "class": "reference" if any(w.lower() in name.lower() for w in words) else "ephemeral",
+            "state": state,
+            "tickets": tickets,
+            "size": tree_size(path, deadline) if state == "linked" else None,
+        })
+    return rows
+
+
+def doc_line(doc: Row) -> str:
+    return (f"doc {doc['class']} {doc['path']}: tickets {', '.join(doc['tickets'])};"
+            f" {human_size(doc['size'])}")
+
+
+def linked_docs(report: Row) -> list[Row]:
+    return [d for d in report["docs"] if d["state"] == "linked"]
 
 
 def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
@@ -411,6 +533,7 @@ def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
     return {
         "worktrees": worktree_rows(trees, tiers),
         "orphans": orphan_rows(primary, cfg, trees),
+        "docs": doc_rows(primary, cfg, trees, tiers),
         "branches": branch_rows(loose, tiers),
         "prototypes": prototype_rows(primary, cfg),
         "primary": primary_row(primary, cfg),
@@ -617,10 +740,13 @@ def run_cleanup(
     cleaned, orphan_lines = clean_orphans(primary, report["orphans"], mode)
     counts["cleaned"] += cleaned
     out += orphan_lines
+    docs = linked_docs(report)
+    out += map(doc_line, docs) if mode != "keep" else []
     summary = (
         f"sweep: cleaned {counts['cleaned']}, landed {counts['landed']},"
         f" dependents {counts['dependents']}, blocked {counts['blocked']},"
-        f" unverified {counts['unverified']}, orphans {len(report['orphans'])}"
+        f" unverified {counts['unverified']}, orphans {len(report['orphans'])},"
+        f" docs {len(docs)}"
         + (", origin stale" if stale else "")
     )
     return [summary, *out]
