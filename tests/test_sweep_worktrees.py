@@ -607,6 +607,15 @@ def test_wholly_untracked_doc_root_lists_its_children(
     assert sorted(docs_by_path(primary, capsys)) == ["docs/work/eng-80-a", "docs/work/eng-81-b"]
 
 
+def test_doc_roots_and_doc_reference_keys_match_in_any_spelling(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["./docs/work"]' + "\n"
+             + 'doc_reference = {"docs/work/" = ["spec"]}' + "\n")
+    write(primary, "docs/work/eng-82-spec/a.md", "x")
+    assert docs_by_path(primary, capsys)["docs/work/eng-82-spec"]["class"] == "reference"
+
+
 def test_detached_worktree_folder_name_makes_a_bundle_live(
     primary: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

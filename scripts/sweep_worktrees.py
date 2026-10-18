@@ -110,6 +110,9 @@ def load_config(primary: Path) -> Config:
         for words in cfg["doc_reference"].values()
     ):
         raise ConfigError("lumberjack: doc_reference must map each root to a list of words", source)
+    # One spelling per root, so "docs/work/" in doc_reference finds the root "./docs/work".
+    cfg["doc_roots"] = [posixpath.normpath(root) for root in cfg["doc_roots"]]
+    cfg["doc_reference"] = {posixpath.normpath(k): v for k, v in cfg["doc_reference"].items()}
     if cfg["cleanup"] not in CLEANUP_MODES:
         raise ConfigError(
             f"lumberjack: cleanup must be one of {', '.join(CLEANUP_MODES)}", source
@@ -425,20 +428,25 @@ def ticket_ids(cfg: Config, text: str) -> list[str]:
     return re.findall(rf"(?<![A-Za-z0-9]){re.escape(prefix)}\d+", text) if prefix else []
 
 
+def untracked_docs(path: Path, roots: list[str]) -> list[str] | None:
+    """Untracked or ignored entries under roots, outermost only; None when git fails."""
+    # --directory prints one line per untracked folder, so huge doc roots stay cheap.
+    found = git(path, "ls-files", "-z", "--others", "--directory", "--no-empty-directory",
+                "--", *roots)
+    return None if found.returncode else [e.rstrip("/") for e in found.stdout.split("\0") if e]
+
+
 def doc_entries(primary: Path, cfg: Config) -> list[tuple[str, str]]:
     """(doc root, repo-relative path) of each outermost untracked entry under a doc root."""
     found: dict[str, str] = {}
-    for root in map(posixpath.normpath, cfg["doc_roots"]):
-        # --directory prints one line per untracked folder, so huge doc roots stay cheap.
-        listed = git(primary, "ls-files", "-z", "--others", "--directory",
-                     "--no-empty-directory", "--", root).stdout
-        for entry in (e.rstrip("/") for e in listed.split("\0")):
+    for root in cfg["doc_roots"]:
+        for entry in untracked_docs(primary, [root]) or []:
             if entry == root:  # the whole root is untracked: its children are the bundles
                 try:
                     found |= {f"{root}/{e.name}": root for e in os.scandir(primary / root)}
                 except OSError:
                     pass
-            elif entry:  # the outermost untracked file or folder, below tracked folders too
+            else:  # the outermost untracked file or folder, below tracked folders too
                 found[entry] = root
     return [(root, path) for path, root in sorted(found.items())]
 
@@ -495,17 +503,16 @@ def human_size(size: int | None) -> str:
     return f"{value:.1f} GB"
 
 
-def mentioned(primary: Path, cfg: Config, names: list[str], tiers: dict[Tip, Verdict]) -> set[str]:
-    """Names in a tracked file, or in a commit message only an unlanded branch holds."""
+def mentioned(primary: Path, primary_branch: str, names: list[str], shas: list[str]) -> set[str]:
+    """Names in a tracked file, or in a commit message of shas not on origin/<primary_branch>."""
     if not names:
         return set()
     # One grep for every name (patterns on stdin); matched lines only, so the cost is the repo's size.
     grep = git(primary, "grep", "-I", "-h", "-F", "-f", "-", input="\n".join(names) + "\n")
-    shas = sorted({sha for (sha, _), (tier, _) in tiers.items() if tier not in VERIFIED})
     text = grep.stdout if grep.returncode == 0 else ""
     if shas:  # shortcut: the newest DOC_COMMITS commits, not all of them; raise it if bundles go unseen
         log = git(primary, "log", "--format=%B", f"-n{DOC_COMMITS}", *shas, "--not",
-                  f"origin/{cfg['primary_branch']}")
+                  f"origin/{primary_branch}")
         text += log.stdout if log.returncode == 0 else ""
     return {name for name in names if name in text}
 
@@ -514,8 +521,9 @@ def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verd
     """Untracked doc-root bundles: class, tickets and live/linked/unlinked; size for linked."""
     # Any worktree counts, by branch or folder name, so a detached Codex worktree does too.
     # A branch without one counts until it lands: landed local branches are never deleted.
+    unlanded = {tip for tip, (tier, _) in tiers.items() if tier not in VERIFIED}
     names = [n for t in trees[1:] for n in (t["branch"], Path(t["path"]).name) if n]
-    names += [n for (_, n), (tier, _) in tiers.items() if n and tier not in VERIFIED]
+    names += [n for _, n in unlanded if n]
     carried = {t for name in names for t in ticket_ids(cfg, name)}
     deadline = time.monotonic() + DOC_SECONDS
     worktrees = [Path(tree["path"]).resolve() for tree in trees[1:]]
@@ -526,8 +534,9 @@ def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verd
     ]
     # A bundle's path is specific; its bare name only when it carries a ticket ("archive" is not).
     names = {posixpath.basename(rel) for _, rel in bundles}
-    named = mentioned(primary, cfg, sorted({rel for _, rel in bundles}
-                                           | {n for n in names if ticket_ids(cfg, n)}), tiers)
+    named = mentioned(primary, cfg["primary_branch"],
+                      sorted({rel for _, rel in bundles} | {n for n in names if ticket_ids(cfg, n)}),
+                      sorted({sha for sha, _ in unlanded}))
     rows = []
     for root, rel in bundles:
         name, path = posixpath.basename(rel), primary / rel
@@ -644,11 +653,9 @@ def block_reason(cfg: Config, w: Row, here: Path | None, pushed: bool = True) ->
     if evidence and evidence.is_dir() and any(evidence.iterdir()):
         return "evidence"
     # Tracked files come back with any worktree; only untracked or ignored ones would be lost.
-    # --directory prints one line per untracked folder, so huge doc roots stay cheap.
     if cfg["doc_roots"]:
-        found = git(Path(w["path"]), "ls-files", "--others", "--directory",
-                    "--no-empty-directory", "--", *cfg["doc_roots"])
-        if found.returncode or found.stdout.strip():  # a failed listing keeps the worktree
+        found = untracked_docs(Path(w["path"]), cfg["doc_roots"])
+        if found is None or found:  # a failed listing keeps the worktree
             return "docs"
     return ""
 
