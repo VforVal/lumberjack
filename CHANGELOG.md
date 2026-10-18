@@ -6,6 +6,11 @@
   just started in: one added less than 24 hours ago whose branch has not moved since it
   was created is blocked as `fresh`, and one locked with `git worktree lock` is blocked as
   `locked`.
+- `doc_roots`: a new list setting naming the folders that hold work documents. A landed
+  worktree with an untracked or ignored file under one is kept with reason `docs` in
+  cleanup, session start and `--remove`. `evidence_dir` is unchanged and still reports
+  `evidence`. The `lumberjack` skill tells agents to write work documents only under a
+  doc root, in a folder named for the ticket or branch slug.
 - Run hooks, setup and cleanup directly with Python 3.11+ (`python` on PATH).
   No uv or runtime packages are required. Re-run setup to upgrade existing git hooks,
   and review the updated plugin hook commands in the harness. The plugin hooks run through

@@ -20,6 +20,10 @@ it was created at. Kept, even though it looks integrated; after 24 hours the usu
 
 **locked**: a worktree locked with `git worktree lock`. Never removed by lumberjack.
 
+**doc root**: a folder named in `doc_roots` that holds work documents (handoffs, plans,
+research, run output). A landed worktree with an untracked or ignored file under one stays,
+reason `docs`; documents go in a folder named for the ticket or branch slug.
+
 **cleanup**: removing a landed worktree at session start while keeping its branch.
 
 **confirmed removal**: removing one worktree the maintainer named and approved in

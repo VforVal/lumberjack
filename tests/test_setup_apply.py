@@ -23,6 +23,7 @@ ANSWERS = {
     "prototype_prefix": "proto/",
     "primary_branch": "trunk",
     "evidence_dir": "evidence",
+    "doc_roots": ["docs/work"],
     "worktree_roots": [".wt", "~/worktrees/{name}"],
     "cleanup": "report",
     "stop_gate": False,

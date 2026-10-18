@@ -63,13 +63,18 @@ set, or a directory named `.evidence`, `evidence` or `.<name>` sits at the root 
 looks like scratch or handoff output. Its contents block cleanup of a worktree.
 Otherwise set `""` without asking.
 
+**G. Doc roots** (`doc_roots`). Ask only when `config.doc_roots` is set, or the repo has an
+ignored folder holding agent work documents (handoffs, plans, research, run output). A landed
+worktree with an untracked or ignored file under a doc root stays, reason `docs`. Otherwise
+set `[]` without asking.
+
 ## 3. Confirm
 
 Show one consolidated summary and wait for an explicit yes:
 
 1. The full answers JSON. Keys: `harnesses`, `pin_claude_settings`, `ticket_prefix`,
    `owners`, `prototype_prefix`, `primary_branch`, `worktree_roots`, `cleanup`,
-   `stop_gate`, `hook`, `evidence_dir`.
+   `stop_gate`, `hook`, `evidence_dir`, `doc_roots`.
 2. The files apply will write or edit: `.lumberjack.toml`; the hook file for `hook`;
    `.claude/settings.json` when pinning; the `CLAUDE.md` (else `AGENTS.md`) block
    (creating `AGENTS.md` when neither exists);

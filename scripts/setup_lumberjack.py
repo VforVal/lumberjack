@@ -175,6 +175,7 @@ CONFIG_DOC = {
     "prototype_prefix": "Prefix of throwaway prototype branches, which skip the owner rule.",
     "primary_branch": "Trunk branch the primary checkout stays on; landed work merges into it.",
     "evidence_dir": "Directory whose files protect a worktree from cleanup; empty for none.",
+    "doc_roots": "Folders for work documents; a worktree holding an untracked or ignored file there stays.",
     "worktree_roots": "Where worktrees live: ~ is the home directory, * a glob, {name} the repo name.",
     "cleanup": "What SessionStart does with landed worktrees: prune, report or keep.",
     "stop_gate": "Whether the Stop hook blocks on branch and primary-checkout debt.",

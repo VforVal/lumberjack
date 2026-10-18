@@ -28,6 +28,7 @@ DEFAULTS: Config = {
     "prototype_prefix": "prototype/",
     "primary_branch": "main",
     "evidence_dir": "",
+    "doc_roots": [],
     "worktree_roots": [
         "~/.codex/worktrees/*",
         ".claude/worktrees",
@@ -487,6 +488,11 @@ def block_reason(cfg: Config, w: Row, here: Path | None, pushed: bool = True) ->
         return "unpushed"
     if evidence and evidence.is_dir() and any(evidence.iterdir()):
         return "evidence"
+    # Tracked files come back with any worktree; only untracked or ignored ones would be lost.
+    if cfg["doc_roots"]:
+        found = git(Path(w["path"]), "ls-files", "--others", "--", *cfg["doc_roots"])
+        if found.returncode or found.stdout.strip():  # a failed listing keeps the worktree
+            return "docs"
     return ""
 
 

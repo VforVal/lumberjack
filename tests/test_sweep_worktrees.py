@@ -504,6 +504,59 @@ def test_cleanup_keeps_blocked_and_prototype_worktrees(
     assert not ignored.exists()  # ignored files are disposable
 
 
+def doc_worktree(primary: Path, name: str, doc: str | None, extra: str = 'doc_roots = ["docs/work"]\n') -> Path:
+    """A landed worktree, optionally holding an ignored file at doc, with doc_roots configured."""
+    (primary / ".git" / "info" / "exclude").write_text("docs/work/\n.evidence/\n")
+    settings(primary, extra)
+    path = landed_worktree(primary, name)
+    if doc:
+        (path / doc).parent.mkdir(parents=True, exist_ok=True)
+        (path / doc).write_text("keep\n")
+    return path
+
+
+def test_doc_root_file_keeps_a_landed_worktree_in_cleanup_and_remove(primary: Path) -> None:
+    path = doc_worktree(primary, "eng-40-docs", "docs/work/eng-40-docs/plan.md")
+    assert "blocked claude/eng-40-docs wt/eng-40-docs: docs" in cleanup(primary)
+    assert path.exists()
+    assert remove(primary, path) == (1, ["blocked claude/eng-40-docs wt/eng-40-docs: docs"])
+    assert path.exists()
+
+
+def test_empty_or_absent_doc_root_does_not_keep_a_worktree(primary: Path) -> None:
+    absent = doc_worktree(primary, "eng-41-absent", None)
+    empty = landed_worktree(primary, "eng-42-empty")
+    (empty / "docs" / "work" / "eng-42-empty").mkdir(parents=True)  # directories hold no document
+    out = cleanup(primary)
+    assert "cleaned claude/eng-41-absent wt/eng-41-absent (local branch kept)" in out
+    assert "cleaned claude/eng-42-empty wt/eng-42-empty (local branch kept)" in out
+    assert not absent.exists() and not empty.exists()
+
+
+def test_tracked_files_in_a_doc_root_do_not_keep_a_worktree(primary: Path) -> None:
+    path = doc_worktree(primary, "eng-43-tracked", None)
+    (primary / ".git" / "info" / "exclude").write_text("")
+    docs = add_worktree(primary, primary.parent / "wt", "claude/eng-44-tracked", merge=True)
+    (docs / "docs" / "work").mkdir(parents=True)
+    (docs / "docs" / "work" / "guide.md").write_text("committed\n")
+    git(docs, "add", ".")
+    git(docs, "commit", "-q", "-m", "docs")
+    git(primary, "merge", "-q", "--ff-only", "claude/eng-44-tracked")
+    git(primary, "push", "-q", "origin", "main")
+    git(docs, "push", "-q", "-u", "origin", "claude/eng-44-tracked")
+    out = cleanup(primary)
+    assert "cleaned claude/eng-44-tracked wt/eng-44-tracked (local branch kept)" in out
+    assert not docs.exists() and not path.exists()
+
+
+def test_evidence_dir_still_reports_evidence_beside_doc_roots(primary: Path) -> None:
+    path = doc_worktree(primary, "eng-45-evidence", ".evidence/receipt.txt")
+    assert "blocked claude/eng-45-evidence wt/eng-45-evidence: evidence" in cleanup(primary)
+    assert remove(primary, path) == (
+        1, ["blocked claude/eng-45-evidence wt/eng-45-evidence: evidence"]
+    )
+
+
 @pytest.mark.parametrize("mode", ["report", "keep"])
 def test_report_and_keep_modes_remove_nothing(
     primary: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
