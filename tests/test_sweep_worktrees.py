@@ -6,11 +6,12 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 from conftest import REAL_WHICH
-from helpers import git
+from helpers import git, write
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import sweep_worktrees  # noqa: E402
@@ -129,7 +130,7 @@ def test_orphan_classification(
     out = capsys.readouterr().out.splitlines()
     assert {"cleaned orphan orphans/only", "orphan mixed orphans/mixed"} <= set(out)
     assert "orphan not-git orphans/plain" in out
-    assert out[0].endswith("orphans 4")
+    assert out[0].endswith("orphans 4, docs 0")
     assert not only.exists() and mixed.exists() and plain.exists() and empty.exists()
 
 
@@ -425,7 +426,7 @@ def test_cleanup_without_work_to_do_is_one_exact_line(primary: Path) -> None:
     (primary / ".git" / "info" / "exclude").write_text("ignored.txt\n")
     (primary.parent / "wt" / "eng-1-clean" / "ignored.txt").write_text("not dirty\n")
     assert cleanup(primary) == [
-        "sweep: cleaned 0, landed 2, dependents 0, blocked 2, unverified 3, orphans 0",
+        "sweep: cleaned 0, landed 2, dependents 0, blocked 2, unverified 3, orphans 0, docs 0",
         "blocked claude/eng-1-clean wt/eng-1-clean: unpushed",
         "blocked claude/eng-2-dirty wt/eng-2-dirty: dirty",
     ]
@@ -443,7 +444,7 @@ def test_cleanup_removes_squash_landed_bottom_of_stack_and_hints_twice(
     )
     out = cleanup(primary)
     assert out[0] == (
-        "sweep: cleaned 1, landed 3, dependents 1, blocked 2, unverified 4, orphans 0"
+        "sweep: cleaned 1, landed 3, dependents 1, blocked 2, unverified 4, orphans 0, docs 0"
         ", origin stale"
     )
     assert "cleaned claude/eng-20-a wt/eng-20-a (local branch kept)" in out
@@ -504,6 +505,256 @@ def test_cleanup_keeps_blocked_and_prototype_worktrees(
     assert not ignored.exists()  # ignored files are disposable
 
 
+def doc_worktree(primary: Path, name: str, doc: str | None, extra: str = 'doc_roots = ["docs/work"]\n') -> Path:
+    """A landed worktree, optionally holding an ignored file at doc, with doc_roots configured."""
+    (primary / ".git" / "info" / "exclude").write_text("docs/work/\n.evidence/\n")
+    settings(primary, extra)
+    path = landed_worktree(primary, name)
+    if doc:
+        (path / doc).parent.mkdir(parents=True, exist_ok=True)
+        (path / doc).write_text("keep\n")
+    return path
+
+
+def test_doc_root_file_keeps_a_landed_worktree_in_cleanup_and_remove(primary: Path) -> None:
+    path = doc_worktree(primary, "eng-40-docs", "docs/work/eng-40-docs/plan.md")
+    assert "blocked claude/eng-40-docs wt/eng-40-docs: docs" in cleanup(primary)
+    assert path.exists()
+    assert remove(primary, path) == (1, ["blocked claude/eng-40-docs wt/eng-40-docs: docs"])
+    assert path.exists()
+
+
+def test_empty_or_absent_doc_root_does_not_keep_a_worktree(primary: Path) -> None:
+    absent = doc_worktree(primary, "eng-41-absent", None)
+    empty = landed_worktree(primary, "eng-42-empty")
+    (empty / "docs" / "work" / "eng-42-empty").mkdir(parents=True)  # directories hold no document
+    out = cleanup(primary)
+    assert "cleaned claude/eng-41-absent wt/eng-41-absent (local branch kept)" in out
+    assert "cleaned claude/eng-42-empty wt/eng-42-empty (local branch kept)" in out
+    assert not absent.exists() and not empty.exists()
+
+
+def test_tracked_files_in_a_doc_root_do_not_keep_a_worktree(primary: Path) -> None:
+    path = doc_worktree(primary, "eng-43-tracked", None)
+    (primary / ".git" / "info" / "exclude").write_text("")
+    docs = add_worktree(primary, primary.parent / "wt", "claude/eng-44-tracked", merge=True)
+    (docs / "docs" / "work").mkdir(parents=True)
+    (docs / "docs" / "work" / "guide.md").write_text("committed\n")
+    git(docs, "add", ".")
+    git(docs, "commit", "-q", "-m", "docs")
+    git(primary, "merge", "-q", "--ff-only", "claude/eng-44-tracked")
+    git(primary, "push", "-q", "origin", "main")
+    git(docs, "push", "-q", "-u", "origin", "claude/eng-44-tracked")
+    out = cleanup(primary)
+    assert "cleaned claude/eng-44-tracked wt/eng-44-tracked (local branch kept)" in out
+    assert not docs.exists() and not path.exists()
+
+
+def test_evidence_dir_still_reports_evidence_beside_doc_roots(primary: Path) -> None:
+    path = doc_worktree(primary, "eng-45-evidence", ".evidence/receipt.txt")
+    assert "blocked claude/eng-45-evidence wt/eng-45-evidence: evidence" in cleanup(primary)
+    assert remove(primary, path) == (
+        1, ["blocked claude/eng-45-evidence wt/eng-45-evidence: evidence"]
+    )
+
+
+def docs_by_path(primary: Path, capsys: pytest.CaptureFixture[str]) -> dict[str, dict[str, object]]:
+    return {d["path"]: d for d in report(capsys)["docs"]}  # type: ignore[attr-defined]
+
+
+def test_doc_bundles_are_untracked_entries_with_tickets_class_and_state(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/guide.md", "Ticket: eng-70\n")  # tracked: never a bundle
+    write(primary, "docs/work/agents/index.md", "tracked\n")
+    git(primary, "add", "docs")
+    git(primary, "commit", "-q", "-m", "guide")
+    head = "Tickets: eng-91, eng-92\n"
+    write(primary, "docs/work/eng-90-handoff/notes.md", head)
+    write(primary, "docs/work/eng-90-handoff/pad.bin", "x" * (1024 - len(head)))
+    write(primary, "docs/work/eng-3-plan/plan.md", "x")  # a worktree carries eng-3
+    write(primary, "docs/work/research-notes/README.md", "# R\n\n**Ticket:** eng-95\n")
+    write(primary, "docs/work/loose/x.md", "no ticket here\n")
+    write(primary, "docs/work/eng-96-note.md", "x" * 2048)
+    write(primary, "docs/work/agents/eng-97-plan/plan.md", "x")  # below a tracked folder
+    docs = docs_by_path(primary, capsys)
+    assert "docs/work/guide.md" not in docs
+    got = {p: (d["class"], d["state"], d["tickets"]) for p, d in docs.items()}
+    assert got == {
+        "docs/work/eng-90-handoff": ("ephemeral", "linked", ["eng-90", "eng-91", "eng-92"]),
+        "docs/work/eng-3-plan": ("ephemeral", "live", ["eng-3"]),
+        "docs/work/research-notes": ("reference", "linked", ["eng-95"]),
+        "docs/work/loose": ("ephemeral", "unlinked", []),
+        "docs/work/eng-96-note.md": ("ephemeral", "linked", ["eng-96"]),
+        "docs/work/agents/eng-97-plan": ("ephemeral", "linked", ["eng-97"]),
+    }
+    out = cleanup(primary)
+    assert out[0].endswith("orphans 0, docs 4")
+    assert "doc ephemeral docs/work/eng-90-handoff: tickets eng-90, eng-91, eng-92; 1.0 KB" in out
+    assert "doc reference docs/work/research-notes: tickets eng-95; 24 B" in out
+    assert "doc ephemeral docs/work/eng-96-note.md: tickets eng-96; 2.0 KB" in out
+    assert not any("eng-3-plan" in line or "loose" in line for line in out if line.startswith("doc"))
+    assert (primary / "docs/work/eng-90-handoff/notes.md").exists()  # nothing is deleted
+
+
+def test_wholly_untracked_doc_root_lists_its_children(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/eng-80-a/x.md", "x")
+    write(primary, "docs/work/eng-81-b/x.md", "x")
+    assert sorted(docs_by_path(primary, capsys)) == ["docs/work/eng-80-a", "docs/work/eng-81-b"]
+
+
+def test_doc_roots_and_doc_reference_keys_match_in_any_spelling(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["./docs/work"]' + "\n"
+             + 'doc_reference = {"docs/work/" = ["spec"]}' + "\n")
+    write(primary, "docs/work/eng-82-spec/a.md", "x")
+    assert docs_by_path(primary, capsys)["docs/work/eng-82-spec"]["class"] == "reference"
+
+
+def test_detached_worktree_folder_name_makes_a_bundle_live(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/spec/a.md", "Ticket: eng-97\n")
+    write(primary, "docs/work/other/a.md", "Ticket: eng-98\n")
+    write(primary, "docs/work/none/a.md", "Ticket: eng-99\n")
+    git(primary, "worktree", "add", "-q", "--detach", str(primary.parent / "wt" / "eng-97-codex"))
+    git(primary, "branch", "claude/eng-99-landed")  # its tip is on main: landed
+    git(primary, "checkout", "-q", "-b", "claude/eng-98-later")
+    write(primary, "later.txt", "x")
+    git(primary, "add", "later.txt")
+    git(primary, "commit", "-q", "-m", "unlanded")
+    git(primary, "checkout", "-q", "main")
+    states = {p: d["state"] for p, d in docs_by_path(primary, capsys).items()}
+    assert states == {  # detached worktree folder, unlanded branch, landed branch only
+        "docs/work/spec": "live",
+        "docs/work/other": "live",
+        "docs/work/none": "linked",
+    }
+
+
+def merge_to_main(primary: Path, branch: str) -> None:
+    git(primary, "merge", "-q", "--no-edit", branch)
+    git(primary, "push", "-q", "origin", "main")
+
+
+def test_two_ticket_bundle_stays_live_across_the_first_ticket_landing(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/eng-100-research/notes.md", "Tickets: eng-101\n")
+    wt = primary.parent / "wt"
+    first = add_worktree(primary, wt, "claude/eng-100-first", merge=False)
+    second = add_worktree(primary, wt, "claude/eng-101-second", merge=False)
+    bundle = "docs/work/eng-100-research"
+    assert docs_by_path(primary, capsys)[bundle]["state"] == "live"
+    merge_to_main(primary, "claude/eng-100-first")  # the first ticket lands; the second is open
+    git(primary, "worktree", "remove", "--force", str(first))
+    assert docs_by_path(primary, capsys)[bundle]["state"] == "live"
+    assert not any(line.startswith("doc ") for line in cleanup(primary))
+    merge_to_main(primary, "claude/eng-101-second")
+    git(primary, "worktree", "remove", "--force", str(second))
+    assert docs_by_path(primary, capsys)[bundle]["state"] == "linked"
+
+
+def test_bundle_named_in_a_tracked_document_is_live(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/eng-110-plan/a.md", "Ticket: eng-110\n")
+    write(primary, "docs/work/eng-111-plan/a.md", "Ticket: eng-111\n")
+    write(primary, "docs/work/scratch/a.md", "no ticket\n")
+    write(primary, "docs/work/quiet/a.md", "no ticket\n")
+    write(primary, "docs/work/eng-112-spec/a.md", "x")
+    states = {d["state"] for d in docs_by_path(primary, capsys).values()}
+    assert states == {"linked", "unlinked"}
+    write(primary, "guide.md", "Background: docs/work/eng-110-plan and docs/work/scratch.\n"
+          "See eng-112-spec; keep it quiet.\n")  # a bare name counts only with a ticket in it
+    git(primary, "add", "guide.md")  # tracked, uncommitted: git grep reads the index
+    states = {p: d["state"] for p, d in docs_by_path(primary, capsys).items()}
+    assert states == {
+        "docs/work/eng-110-plan": "live",
+        "docs/work/eng-111-plan": "linked",
+        "docs/work/scratch": "live",
+        "docs/work/quiet": "unlinked",
+        "docs/work/eng-112-spec": "live",
+    }
+
+
+def test_bundle_named_in_an_unlanded_branch_commit_message_is_live(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    for name in ("open-spec", "landed-spec", "unseen-spec"):
+        write(primary, f"docs/work/eng-120-{name}/a.md", "Ticket: eng-129\n")
+    for branch, name in (("claude/eng-121-x", "open-spec"), ("claude/eng-122-y", "landed-spec")):
+        path = primary.parent / "wt" / branch.split("/")[1]
+        git(primary, "worktree", "add", "-q", "-b", branch, str(path))
+        write(path, f"{path.name}.txt", "x")
+        git(path, "add", ".")
+        git(path, "commit", "-q", "-m", f"Build on docs/work/eng-120-{name}")
+    merge_to_main(primary, "claude/eng-122-y")
+    git(primary, "worktree", "remove", "--force", str(primary.parent / "wt" / "eng-121-x"))
+    states = {p.split("/")[-1]: d["state"] for p, d in docs_by_path(primary, capsys).items()}
+    assert states == {  # the open branch outlives its worktree and keeps its message live
+        "eng-120-open-spec": "live",
+        "eng-120-landed-spec": "linked",
+        "eng-120-unseen-spec": "linked",
+    }
+
+
+def test_worktrees_inside_a_doc_root_are_not_bundles(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/eng-60-plan/a.md", "x")
+    git(primary, "worktree", "add", "-q", "--detach", str(primary / "docs/work/eng-61-wt"))
+    git(primary, "worktree", "add", "-q", "--detach", str(primary / "docs/work/trees/eng-62-wt"))
+    assert sorted(docs_by_path(primary, capsys)) == ["docs/work/eng-60-plan"]
+
+
+def test_doc_reference_overrides_the_class_words_per_root(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(
+        primary,
+        'doc_roots = ["docs/work", "notes"]\n[doc_reference]\n"docs/work" = ["spike"]\n',
+    )
+    for path in ("docs/work/research-a", "docs/work/spike-b", "notes/research-c"):
+        write(primary, f"{path}/x.md", "x")
+    classes = {p: d["class"] for p, d in docs_by_path(primary, capsys).items()}
+    assert classes == {
+        "docs/work/research-a": "ephemeral",
+        "docs/work/spike-b": "reference",
+        "notes/research-c": "reference",
+    }
+
+
+def test_doc_sizes_stay_fast_on_a_large_tree_and_degrade_when_over_budget(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    for bundle in range(3):
+        for sub in range(10):
+            for n in range(100):
+                write(primary, f"docs/work/eng-5{bundle}-x/s{sub}/f{n}.txt", "abcd")
+    cfg = sweep_worktrees.load_config(primary)
+    trees = sweep_worktrees.registered(primary)
+    start = time.monotonic()
+    rows = sweep_worktrees.doc_rows(primary, cfg, trees, {})
+    assert time.monotonic() - start < 5
+    assert [r["size"] for r in rows] == [4000] * 3
+    monkeypatch.setattr(sweep_worktrees, "DOC_SECONDS", -1)
+    rows = sweep_worktrees.doc_rows(primary, cfg, trees, {})
+    assert [r["size"] for r in rows] == [None] * 3
+    assert "size unknown" in sweep_worktrees.doc_line(rows[0])
+
+
 @pytest.mark.parametrize("mode", ["report", "keep"])
 def test_report_and_keep_modes_remove_nothing(
     primary: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
@@ -562,6 +813,48 @@ def test_current_checkout_is_never_removed(primary: Path) -> None:
     done = sweep(primary, "--cleanup", cwd=path)
     assert done.returncode == 0, done.stderr
     assert "blocked claude/eng-30-here wt/eng-30-here: current checkout" in done.stdout.splitlines()
+    assert path.exists()
+
+
+def test_fresh_worktree_is_kept_until_it_has_its_own_commits(primary: Path) -> None:
+    wt = primary.parent / "wt"
+    fresh, merged = wt / "eng-40-fresh", wt / "eng-41-merged"
+    for path in (fresh, merged):  # tracks origin/main: looks integrated and pushed
+        git(primary, "worktree", "add", "-q", "-b", f"claude/{path.name}", str(path), "origin/main")
+    (merged / "m.txt").write_text("m\n")
+    git(merged, "add", ".")
+    git(merged, "commit", "-q", "-m", "m")
+    git(merged, "push", "-q", "-u", "origin", "claude/eng-41-merged")
+    git(primary, "merge", "-q", "--ff-only", "claude/eng-41-merged")
+    git(primary, "push", "-q", "origin", "main")
+    out = cleanup(primary)
+    assert "blocked claude/eng-40-fresh wt/eng-40-fresh: fresh" in out
+    assert "cleaned claude/eng-41-merged wt/eng-41-merged (local branch kept)" in out
+    assert fresh.exists() and not merged.exists()
+    assert remove(primary, fresh) == (1, ["blocked claude/eng-40-fresh wt/eng-40-fresh: fresh"])
+    (primary / ".git" / "logs" / "refs" / "heads" / "claude" / "eng-40-fresh").unlink()
+    assert "blocked claude/eng-40-fresh wt/eng-40-fresh: fresh" in cleanup(primary)  # no reflog
+    added = primary / ".git" / "worktrees" / "eng-40-fresh" / "commondir"
+    old = added.stat().st_mtime - sweep_worktrees.FRESH_HOURS * 3600 - 60
+    os.utime(added, (old, old))
+    assert "cleaned claude/eng-40-fresh wt/eng-40-fresh (local branch kept)" in cleanup(primary)
+
+
+def test_branch_reset_to_its_creation_commit_is_not_fresh(primary: Path) -> None:
+    path = primary.parent / "wt" / "eng-43-reset"
+    git(primary, "worktree", "add", "-q", "-b", "claude/eng-43-reset", str(path), "origin/main")
+    (path / "r.txt").write_text("r")
+    git(path, "add", ".")
+    git(path, "commit", "-q", "-m", "r")
+    git(path, "reset", "-q", "--hard", "origin/main")
+    assert "cleaned claude/eng-43-reset wt/eng-43-reset (local branch kept)" in cleanup(primary)
+
+
+def test_locked_worktree_is_never_removed(primary: Path) -> None:
+    path = landed_worktree(primary, "eng-42-locked")
+    git(primary, "worktree", "lock", "--reason", "busy", str(path))
+    assert "blocked claude/eng-42-locked wt/eng-42-locked: locked" in cleanup(primary)
+    assert remove(primary, path) == (1, ["blocked claude/eng-42-locked wt/eng-42-locked: locked"])
     assert path.exists()
 
 
@@ -706,3 +999,226 @@ def test_remove_reports_a_failed_removal_as_blocked(
     assert sweep_worktrees.remove_named(primary, str(open_)) == (
         False, "blocked claude/eng-3-open wt/eng-3-open: error: Permission denied"
     )
+
+
+STRATEGY = {"scope": "bundle", "ephemeral": "trash", "reference": "promote",
+            "trash_days": 30, "tracker": "github"}
+
+
+def strategy_settings(primary: Path, **override: object) -> None:
+    table = ", ".join(f"{k} = {json.dumps(v)}" for k, v in {**STRATEGY, **override}.items())
+    settings(primary, f'doc_roots = ["docs/work"]\ndoc_strategy = {{{table}}}\n')
+
+
+def clear(primary: Path, target: str, *args: str) -> tuple[int, str]:
+    done = sweep(primary, "--clear", target, *args)
+    return done.returncode, done.stdout.strip()
+
+
+def trash_folders(primary: Path) -> list[Path]:
+    folder = primary / ".git" / "lumberjack-trash"
+    return sorted(folder.iterdir()) if folder.is_dir() else []
+
+
+def test_clear_removes_nothing_until_a_strategy_is_saved(primary: Path) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/eng-130-handoff/a.md", "Ticket: eng-130\n")
+    assert clear(primary, "docs/work/eng-130-handoff") == (
+        1, "blocked docs/work/eng-130-handoff: no strategy saved"
+    )
+    assert (primary / "docs/work/eng-130-handoff/a.md").exists() and not trash_folders(primary)
+
+
+def test_clear_trashes_a_linked_bundle_with_a_timestamp(primary: Path) -> None:
+    strategy_settings(primary)
+    write(primary, "docs/work/eng-131-handoff/a.md", "Ticket: eng-131\n")
+    write(primary, "docs/work/eng-131-handoff/run/out.log", "log")
+    code, line = clear(primary, "docs/work/eng-131-handoff")
+    (folder,) = trash_folders(primary)
+    assert (code, line) == (0, f"cleared docs/work/eng-131-handoff: trashed {folder.name}")
+    assert time.strptime(folder.name, sweep_worktrees.TRASH_STAMP)
+    assert not (primary / "docs/work/eng-131-handoff").exists()
+    assert (folder / "docs/work/eng-131-handoff/run/out.log").read_text() == "log"
+
+
+@pytest.mark.parametrize(
+    ("override", "name", "reason"),
+    [
+        ({"ephemeral": "keep"}, "eng-132-handoff", "kept by strategy"),
+        ({}, "eng-3-handoff", "live"),  # the open eng-3 worktree carries it
+        ({}, "scratch", "unlinked"),
+    ],
+)
+def test_clear_refuses_kept_live_and_unlinked_bundles(
+    primary: Path, override: dict[str, object], name: str, reason: str
+) -> None:
+    strategy_settings(primary, **override)
+    write(primary, f"docs/work/{name}/a.md", "x")
+    assert clear(primary, f"docs/work/{name}") == (1, f"blocked docs/work/{name}: {reason}")
+    assert (primary / f"docs/work/{name}/a.md").exists() and not trash_folders(primary)
+    assert clear(primary, "docs/work/missing")[1] == "blocked docs/work/missing: not a bundle"
+
+
+def test_clear_delete_with_markdown_scope_leaves_other_files(primary: Path) -> None:
+    strategy_settings(primary, ephemeral="delete", scope="markdown")
+    write(primary, "docs/work/eng-133-draft/a.md", "Ticket: eng-133\n")
+    write(primary, "docs/work/eng-133-draft/deep/b.MD", "x")
+    write(primary, "docs/work/eng-133-draft/out.log", "keep")
+    assert clear(primary, "docs/work/eng-133-draft") == (
+        0, "cleared docs/work/eng-133-draft: deleted"
+    )
+    left = [p.name for p in (primary / "docs/work/eng-133-draft").rglob("*") if p.is_file()]
+    assert left == ["out.log"] and not trash_folders(primary)
+
+
+def link_dir(link: Path, target: Path) -> None:
+    """A directory link: a junction on Windows (no privilege needed), else a symlink."""
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "win32":
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                       check=True, capture_output=True)
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def outside_dir(primary: Path) -> Path:
+    outside = primary.parent / "outside"
+    write(outside, "keep.md", "x")
+    write(outside, "sub/deep.md", "x")
+    return outside
+
+
+@pytest.mark.parametrize("scope", ["markdown", "bundle"])
+def test_clear_refuses_a_bundle_that_is_a_link_out_of_the_repository(
+    primary: Path, scope: str
+) -> None:
+    strategy_settings(primary, ephemeral="delete", scope=scope)
+    outside = outside_dir(primary)
+    link_dir(primary / "docs/work/eng-136-notes", outside)
+    assert clear(primary, "docs/work/eng-136-notes") == (
+        1, "blocked docs/work/eng-136-notes: links outside the repository"
+    )
+    assert sorted(p.name for p in outside.rglob("*.md")) == ["deep.md", "keep.md"]
+    assert os.access(outside / "keep.md", os.W_OK)
+
+
+@pytest.mark.parametrize("action", ["delete", "trash"])
+def test_clear_refuses_a_link_nested_in_a_markdown_scope_bundle(
+    primary: Path, action: str
+) -> None:
+    strategy_settings(primary, ephemeral=action, scope="markdown")
+    outside = outside_dir(primary)
+    write(primary, "docs/work/eng-136-notes/own.md", "Ticket: eng-136\n")
+    link_dir(primary / "docs/work/eng-136-notes/linked", outside)
+    assert clear(primary, "docs/work/eng-136-notes") == (
+        1, "blocked docs/work/eng-136-notes: links outside the repository"
+    )
+    assert sorted(p.name for p in outside.rglob("*.md")) == ["deep.md", "keep.md"]
+    assert (primary / "docs/work/eng-136-notes/own.md").exists() and not trash_folders(primary)
+
+
+@pytest.mark.parametrize("action", ["delete", "trash"])
+def test_clearing_a_whole_bundle_drops_a_nested_link_but_not_its_target(
+    primary: Path, action: str
+) -> None:
+    strategy_settings(primary, ephemeral=action, scope="bundle")
+    outside = outside_dir(primary)
+    write(primary, "docs/work/eng-136-notes/own.md", "Ticket: eng-136\n")
+    link_dir(primary / "docs/work/eng-136-notes/linked", outside)
+    assert clear(primary, "docs/work/eng-136-notes")[0] == 0
+    assert not (primary / "docs/work/eng-136-notes").exists()
+    assert sorted(p.name for p in outside.rglob("*.md")) == ["deep.md", "keep.md"]
+
+
+def test_clear_with_markdown_scope_blocks_when_nothing_is_in_scope(primary: Path) -> None:
+    strategy_settings(primary, scope="markdown")
+    write(primary, "docs/work/eng-137-out.json", "Ticket: eng-137\n")
+    write(primary, "docs/work/eng-138-logs/run.log", "Ticket: eng-138\n")
+    for name in ("eng-137-out.json", "eng-138-logs"):
+        assert clear(primary, f"docs/work/{name}") == (
+            1, f"blocked docs/work/{name}: no Markdown in scope"
+        )
+        assert (primary / "docs/work" / name).exists()
+    assert not trash_folders(primary)
+
+
+def test_root_override_keeps_a_bundle_the_class_action_would_trash(primary: Path) -> None:
+    settings(
+        primary,
+        'doc_roots = ["docs/work", "docs/handoffs"]\n'
+        'doc_strategy = {scope = "bundle", ephemeral = "trash", reference = "promote",'
+        ' trash_days = 30, tracker = "github", roots = {"./docs/handoffs/" = "keep"}}\n',
+    )
+    write(primary, "docs/handoffs/eng-139-a/a.md", "Ticket: eng-139\n")
+    write(primary, "docs/work/eng-139-b/a.md", "Ticket: eng-139\n")
+    assert clear(primary, "docs/handoffs/eng-139-a") == (
+        1, "blocked docs/handoffs/eng-139-a: kept by strategy"
+    )
+    assert clear(primary, "docs/work/eng-139-b")[0] == 0
+    assert (primary / "docs/handoffs/eng-139-a/a.md").exists()
+
+
+def test_clear_takes_a_group_and_exits_1_when_one_is_blocked(primary: Path) -> None:
+    strategy_settings(primary)
+    write(primary, "docs/work/eng-140-a/a.md", "Ticket: eng-140\n")
+    write(primary, "docs/work/eng-141-b/a.md", "Ticket: eng-141\n")
+    code, out = clear(primary, "docs/work/eng-140-a", "docs/work/missing", "docs/work/eng-141-b")
+    (folder,) = trash_folders(primary)
+    assert (code, out.splitlines()) == (1, [
+        f"cleared docs/work/eng-140-a: trashed {folder.name}",
+        "blocked docs/work/missing: not a bundle",
+        f"cleared docs/work/eng-141-b: trashed {folder.name}",
+    ])
+
+
+def test_reference_bundle_needs_a_pushed_copy_before_it_is_trashed(primary: Path) -> None:
+    strategy_settings(primary)
+    bundle = "docs/work/eng-134-research"
+    write(primary, f"{bundle}/a.md", "Ticket: eng-134\n")
+    need = f"blocked {bundle}: promote it first (--promoted)"
+    assert clear(primary, bundle) == (1, need)
+    gone = "blocked {}: the promoted copy is not on origin".format(bundle)
+    assert clear(primary, bundle, "--promoted", "prototype/eng-65-demo") == (1, gone)  # local only
+    assert clear(primary, bundle, "--promoted", "findings.md") == (1, gone)
+    git(primary, "push", "-q", "origin", "prototype/eng-65-demo")
+    git(primary, "fetch", "-q", "origin")
+    assert clear(primary, bundle, "--promoted", "prototype/eng-65-demo")[0] == 0
+    assert not (primary / bundle).exists() and len(trash_folders(primary)) == 1
+
+
+def test_reference_bundle_is_cleared_once_a_tracked_doc_is_on_origin(primary: Path) -> None:
+    strategy_settings(primary)
+    bundle = "docs/work/eng-135-prototype"
+    write(primary, f"{bundle}/a.md", "Ticket: eng-135\n")
+    write(primary, "findings.md", "promoted\n")
+    git(primary, "add", "findings.md")
+    git(primary, "commit", "-q", "-m", "findings")
+    git(primary, "push", "-q", "origin", "main")
+    # Stale origin/main, as when the promotion merged after the session's fetch: --clear fetches.
+    git(primary, "update-ref", "refs/remotes/origin/main", "HEAD~1")
+    assert clear(primary, bundle, "--promoted", "findings.md")[0] == 0
+    strategy_settings(primary, reference="keep")
+    write(primary, f"{bundle}/a.md", "Ticket: eng-135\n")
+    assert clear(primary, bundle, "--promoted", "findings.md") == (
+        1, f"blocked {bundle}: kept by strategy"
+    )
+
+
+def test_sweep_reports_trash_past_retention_and_only_purge_removes_it(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    strategy_settings(primary, trash_days=7)
+    trash = primary / ".git" / "lumberjack-trash"
+    write(trash, "20200101T000000Z/docs/work/old/a.md", "x")
+    fresh = time.strftime(sweep_worktrees.TRASH_STAMP, time.gmtime())
+    write(trash, f"{fresh}/docs/work/new/a.md", "x")
+    write(trash, "stray/a.md", "not ours")
+    out = cleanup(primary)
+    assert out[0].endswith("docs 0, trash 1")
+    assert any(l.startswith("trash 20200101T000000Z: ") and l.endswith("days old; 1 B") for l in out)
+    assert [t["name"] for t in report(capsys)["trash"]] == ["20200101T000000Z"]  # type: ignore[attr-defined]
+    assert (trash / "20200101T000000Z").exists()  # reporting never deletes
+    done = sweep(primary, "--purge-trash")
+    assert done.stdout.splitlines() == ["purged 20200101T000000Z"]
+    assert sorted(p.name for p in trash.iterdir()) == sorted([fresh, "stray"])
+    assert sweep(primary, "--purge-trash").stdout.strip() == "trash: nothing past retention"

@@ -23,7 +23,7 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
 - `README.md` - the stranger-facing guide; its config table, tier and reason names, summary
   line and setup output lines must match the scripts verbatim.
 - `CHANGELOG.md` - one section per released `VERSION`.
-- `GLOSSARY.md` - the sweep's vocabulary (integrated, landed, probable, unverified, dependent, cleanup).
+- `GLOSSARY.md` - the sweep's vocabulary (integrated, landed, probable, unverified, dependent, fresh, locked, cleanup).
 - `SECURITY.md` - private vulnerability reporting and what counts as a security issue.
 - `tests/` - pytest suite, one module per area: `test_sweep_worktrees.py`, `test_config.py`,
   `test_setup_discover.py`, `test_setup_apply.py`, `test_lifecycle.py`, `test_rule_delivery.py`;

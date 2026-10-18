@@ -80,8 +80,10 @@ or `claude plugin --help` and upgrade to a tested version before continuing.
 In Claude Code, run `/lumberjack:setup` once per repository. In Codex, choose
 `lumberjack:setup` from the skill picker. The agent reads facts about the repository
 (`discover`, read-only), then asks about harnesses, branch shape, worktree roots,
-cleanup and Stop gate behaviour, the git hook and an evidence directory, each with a
-recommended answer. After your yes it writes `.lumberjack.toml`, the post-merge hook,
+cleanup and Stop gate behaviour, the git hook and an evidence directory and doc roots, each with a
+recommended answer. Doc roots are suggested from a `.scratch/` folder and ignored top-level
+folders that hold Markdown (found by file name, without reading any file), each with a reason;
+a re-run keeps your saved `doc_roots`. After your yes it writes `.lumberjack.toml`, the post-merge hook,
 the `CLAUDE.md` (else `AGENTS.md`) block (creating `AGENTS.md` when neither exists),
 optional `.claude/settings.json` pinning and
 `.gitignore` lines for worktree roots inside the repository. It never commits; review
@@ -110,6 +112,9 @@ SessionStart prints the error and cleans nothing.
 | `prototype_prefix` | `"prototype/"` | Prototype capture branch prefix; such branches are never cleaned |
 | `primary_branch` | `"main"` | Branch the primary checkout stays on and work lands in |
 | `evidence_dir` | `""` | Directory inside a worktree whose contents block cleanup; empty protects nothing extra |
+| `doc_roots` | `[]` | Folders inside a worktree for work documents (handoffs, plans, research, run output); an untracked or ignored file under one blocks cleanup with `docs`. `evidence_dir` is one more such folder but keeps its own reason, `evidence` |
+| `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); a root not listed uses `["research", "prototype"]`. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
+| `doc_strategy` | `{}` | What `/lumberjack:cleanup` may do with doc bundles, saved after it asks once (empty: nothing is removed). Keys, all required once set: `scope` (`markdown` or `bundle`), `ephemeral` (`delete`, `trash` or `keep`), `reference` (`promote` or `keep`), `trash_days` (whole days, at least 1) and `tracker` (text: where tickets are checked); optional `roots`, a table of doc root to action (`keep` at minimum) that overrides the class action for bundles under that root, so `roots = {"docs/handoffs" = "keep"}` keeps every handoff. An action that does not fit the bundle's class (`delete` on a reference bundle) keeps it. A table: `[doc_strategy]` then `scope = "bundle"` |
 | `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where worktrees live: `~` is home, `*` a glob, `{name}` the repo name |
 | `cleanup` | `"prune"` | `prune` removes landed worktrees; `report` lists them as `would remove`; `keep` does nothing |
 | `stop_gate` | `true` | `false` turns the Stop hook off |
@@ -119,21 +124,27 @@ owners = ["alice", "codex", "claude"]
 ticket_prefix = "eng-"
 primary_branch = "trunk"
 evidence_dir = ".evidence"
+doc_roots = ["docs/work"]
 ```
 
 ## Cleanup rule
 
 After fetching `origin` (5 second limit; on failure the summary says `origin stale`),
 a worktree is removed only when its tip is verified landed in `origin/<primary_branch>`
-and nothing blocks it. Five reasons block it, and the sweep names the one it hit:
+and nothing blocks it. Eight reasons block it, and the sweep names the one it hit:
 
 - `current checkout`: the sweep is running inside this worktree
+- `locked`: the worktree is locked with `git worktree lock`
 - `dirty`: uncommitted or untracked files (ignored files do not count)
 - `unpushed`: no upstream, or the tip is not contained in it; waived when a merged pull
   request had exactly this tip
 - `evidence`: `evidence_dir` is set and not empty in the worktree
+- `docs`: a `doc_roots` folder holds a file that git does not track, ignored files included
 - `tip diverged`: a pull request from this branch merged into the primary branch with a
   different tip
+- `fresh`: the worktree was added less than 24 hours ago and its branch has not moved since
+  it was created (its reflog has only the creation entry, or no entry at all). A new branch
+  from `origin/<primary_branch>` looks landed and pushed, but its session may have just started
 
 If git itself refuses the removal, git's message is the reason. Removal deletes no commits:
 the branch is kept. Bring the work back with `git worktree add <path> <branch>`.
@@ -167,18 +178,38 @@ when the fetch failed. Only the first 100 branches go to `gh` in one query; the 
 ## Summary line
 
 Plain `--cleanup` prints one summary line, then one line per event (`cleaned`, `landed`,
-`blocked`, `dependent`, `orphan`, `hint`), and exits 0. When the cleanup was skipped
+`blocked`, `dependent`, `orphan`, `doc`, `hint`), and exits 0. When the cleanup was skipped
 (see above) or the config is invalid, the only line says why instead:
 
 ```
-sweep: cleaned 1, landed 2, dependents 1, blocked 1, unverified 3, orphans 0, origin stale
+sweep: cleaned 1, landed 2, dependents 1, blocked 1, unverified 3, orphans 0, docs 1, origin stale
 cleaned alice/eng-12-login ~/worktrees/app (local branch kept)
 blocked alice/eng-13-search ~/worktrees/app2: dirty
+doc ephemeral docs/work/eng-9-handoff: tickets eng-9, eng-11; 3.2 MB
 dependent alice/eng-14-ui of alice/eng-12-login: git rebase --onto main 0123456789ab alice/eng-14-ui
+trash 20260101T120000Z: 41 days old; 3.2 MB
 ```
 
 A `dependent` line is a branch built on top of a landed one; run the printed rebase
-before pushing it. Orphans are leftover directories in a worktree root: those holding
+before pushing it. A `trash` line is a folder in lumberjack's trash older than `trash_days`;
+the summary gains `, trash N` (before `origin stale`) only when there are such folders. The sweep
+never deletes them; only `--purge-trash` does.
+A `doc` line is a bundle: the outermost untracked entry (file or folder) under a `doc_roots`
+folder, below tracked subfolders too, in the primary checkout; tracked files and registered
+worktrees (or folders holding them) are never listed. Its tickets are the
+`ticket_prefix` ids in its folder name plus those on a `Ticket:` or `Tickets:` line in the head
+of its top file (the first Markdown file, else the first file); without a `ticket_prefix` no
+ticket is found. The class is `reference` when the name holds `research` or `prototype`
+(`doc_reference` changes the words per root), else `ephemeral`. A bundle is `live` when a
+worktree's branch or folder name, or an unlanded local branch, carries one of its tickets
+(so a Codex worktree on a detached HEAD counts), or when its path (or its folder name, when that
+carries a ticket) appears in a tracked file or in a commit message of an unlanded branch
+(only commits not yet in `origin/<primary_branch>`,
+the newest 1000), so a bundle that lists a ticket whose branch has landed stays live while
+another listed ticket is open; `linked` when it has tickets and none is live, `unlinked` without
+tickets and not named. `docs N` and the lines cover linked bundles only (`--json` lists
+all three states under `docs`); the size comes from file metadata, never file contents, and
+reads `size unknown` if sizing runs past 10 seconds. Nothing is deleted. Orphans are leftover directories in a worktree root: those holding
 only caches (`node_modules-only`) are deleted, others (`mixed`, `not-git`; an empty directory counts as `not-git`) are listed.
 A root outside the repository without `{name}` is shared with other repositories, so only
 its `<dir>/<name>` subdirectories count (the Codex layout); scope your own roots with `{name}`,
@@ -234,8 +265,8 @@ directory), the note adds `directory left`, as in `(local branch kept; directory
 and the exit is 0; delete the leftover directory by hand. A failure that leaves the
 worktree registered prints `blocked` with git's error.
 
-It refuses with `current checkout`, `dirty` or `evidence` as in the cleanup rule (an
-unpushed tip is no loss, since the branch keeps it), and also with:
+It refuses with `current checkout`, `locked`, `fresh`, `dirty`, `evidence` or `docs` as in
+the cleanup rule (an unpushed tip is no loss, since the branch keeps it), and also with:
 
 - `ignored files`: ignored files other than caches (`node_modules`, `.venv`,
   `__pycache__`, tool caches), which removal would delete
@@ -249,6 +280,40 @@ On a `dirty` or `ignored files` block, the command lists the stray files, groups
 what produced them and asks once per group: delete, ignore (`.git/info/exclude` or
 `.gitignore`) or commit and push. It never asks file by file. The same rule is in the
 `lumberjack` skill for a `blocked ...: dirty` line at session start.
+
+### Work documents
+
+When `doc_roots` holds linked bundles, `/lumberjack:cleanup` asks the maintainer once for a
+`doc_strategy` (scope, an action per class, trash days, tracker) and saves it with
+`setup_lumberjack.py strategy <file.json>`; later runs ask nothing, and until it is saved
+nothing is removed. For each linked bundle the agent checks every listed ticket in the named
+tracker with its own tools and offers the bundle only when all are closed, one question per
+group. `ephemeral` bundles follow the strategy: `trash`, `delete` or `keep` (never offered); a `roots` entry for the
+bundle's doc root replaces that action.
+`reference` bundles are only offered promote or keep: promote writes the findings to a document
+tracked on `origin/<primary_branch>` or pushes a `prototype_prefix` branch, and only then clears the
+bundle, always into the trash. `scope = "markdown"` acts on `.md` files only, `"bundle"` on the whole entry,
+run output included. The script does the removal:
+
+```
+sweep_worktrees.py --clear <bundle path>... [--promoted <doc path or prototype branch>]
+sweep_worktrees.py --purge-trash
+```
+
+`--clear` prints one line per path and exits 0 when all are done, 1 when any is blocked.
+With `--promoted` it fetches `origin` first (5 second limit), so a just-merged promotion counts:
+
+```
+cleared docs/work/eng-9-handoff: trashed 20260101T120000Z
+blocked docs/work/eng-9-handoff: kept by strategy
+```
+
+Reasons: `no strategy saved`, `not a bundle`, `live`, `unlinked` (only a `linked` bundle is
+cleared), `links outside the repository` (the bundle, or with `scope = "markdown"` any entry in it, resolves outside the repository through a symbolic link or Windows junction; a link inside a bundle cleared whole is removed, not followed), `kept by strategy`
+(its class or doc root says keep), `no Markdown in scope` (`scope = "markdown"` and the bundle holds no `.md` file), `promote it first (--promoted)` and `the promoted copy is not on
+origin`. A trashed bundle moves to `<git dir>/lumberjack-trash/<UTC timestamp>/<its path>`, which
+git never sees. `--purge-trash` deletes the timestamp folders older than `trash_days`, printing
+`purged <timestamp>` for each, or `trash: nothing past retention`.
 
 ## Hook placement
 

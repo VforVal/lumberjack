@@ -4,17 +4,20 @@ import argparse
 import glob
 import json
 import os
+import posixpath
 import re
 import shutil
 import stat
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 
 if sys.version_info < (3, 11):  # before tomllib: a plain message instead of a traceback
     sys.exit(f"lumberjack: Python 3.11+ required, found {sys.version.split()[0]}")
 import tomllib
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 Row = dict[str, Any]
@@ -27,6 +30,9 @@ DEFAULTS: Config = {
     "prototype_prefix": "prototype/",
     "primary_branch": "main",
     "evidence_dir": "",
+    "doc_roots": [],
+    "doc_reference": {},
+    "doc_strategy": {},
     "worktree_roots": [
         "~/.codex/worktrees/*",
         ".claude/worktrees",
@@ -41,6 +47,12 @@ RMTREE_HANDLER = "onexc" if sys.version_info >= (3, 12) else "onerror"
 CLEANUP_MODES = ("prune", "report", "keep")
 CACHE_DIRS = {"node_modules", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist"}
 CACHE_DIRS.add(".codex-worktree-name")
+DOC_REFERENCE = ["research", "prototype"]  # bundle name words that make a bundle reference
+DOC_COMMITS = 1000  # newest commits read from unlanded branches when looking for bundle names
+TRASH_STAMP = "%Y%m%dT%H%M%SZ"  # a trash folder is named for the UTC moment its files moved
+STRATEGY = {"scope": ("markdown", "bundle"), "ephemeral": ("delete", "trash", "keep"),
+            "reference": ("promote", "keep")}  # the choices; trash_days and tracker are free
+DOC_SECONDS = 10  # budget for sizing bundles; the SessionStart hook times out at 30
 
 
 def branch_pattern(cfg: Config) -> re.Pattern[str]:
@@ -91,6 +103,39 @@ def load_config(primary: Path) -> Config:
             raise ConfigError(f"lumberjack: {key} must be {type(default).__name__}", source)
     if not cfg["prototype_prefix"]:
         raise ConfigError("lumberjack: prototype_prefix must not be empty", source)
+    # git refuses a path outside the worktree, which would read as `docs` and keep every worktree.
+    if not all(
+        isinstance(root, str) and root and not PureWindowsPath(root).anchor
+        and ".." not in PureWindowsPath(root).parts and posixpath.normpath(root) != "."
+        for root in cfg["doc_roots"]
+    ):
+        raise ConfigError("lumberjack: doc_roots must be relative paths inside the repo", source)
+    if not all(
+        isinstance(words, list) and all(isinstance(w, str) for w in words)
+        for words in cfg["doc_reference"].values()
+    ):
+        raise ConfigError("lumberjack: doc_reference must map each root to a list of words", source)
+    strategy = cfg["doc_strategy"]
+    roots = strategy.get("roots", {})  # optional: an action per doc root, ahead of the class action
+    if strategy and not (
+        strategy.keys() - {"roots"} == {*STRATEGY, "trash_days", "tracker"}
+        and isinstance(roots, dict) and all(
+            isinstance(r, str) and a in ("delete", "trash", "promote", "keep")
+            for r, a in roots.items()
+        )
+        and all(strategy[k] in choices for k, choices in STRATEGY.items())
+        and type(strategy["trash_days"]) is int and strategy["trash_days"] > 0
+        and isinstance(strategy["tracker"], str) and strategy["tracker"]
+    ):
+        raise ConfigError(
+            "lumberjack: doc_strategy must be empty or set scope, ephemeral, reference,"
+            " trash_days and tracker (and optionally roots) to valid values", source,
+        )
+    if roots:
+        strategy["roots"] = {posixpath.normpath(r): a for r, a in roots.items()}
+    # One spelling per root, so "docs/work/" in doc_reference finds the root "./docs/work".
+    cfg["doc_roots"] = [posixpath.normpath(root) for root in cfg["doc_roots"]]
+    cfg["doc_reference"] = {posixpath.normpath(k): v for k, v in cfg["doc_reference"].items()}
     if cfg["cleanup"] not in CLEANUP_MODES:
         raise ConfigError(
             f"lumberjack: cleanup must be one of {', '.join(CLEANUP_MODES)}", source
@@ -98,12 +143,13 @@ def load_config(primary: Path) -> Config:
     return cfg
 
 
-def git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def git(cwd: Path, *args: str, input: str | None = None) -> subprocess.CompletedProcess[str]:
     # A git hook exports GIT_DIR and friends; they would point every call at the merging worktree.
     leaked = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
     env = {key: value for key, value in os.environ.items() if key not in leaked}
     return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", env=env
+        ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=env, input=input,
     )
 
 
@@ -131,6 +177,8 @@ def registered(primary: Path) -> list[Row]:
             rows[-1]["branch"] = value.removeprefix("refs/heads/")
         elif key == "prunable":
             rows[-1]["gone"] = "yes"
+        elif key == "locked":
+            rows[-1]["locked"] = "yes"
     # A worktree whose directory is gone has nothing to sweep; git worktree prune would drop it.
     return [row for row in rows if "gone" not in row]
 
@@ -140,6 +188,7 @@ VERIFIED = {"integrated", "content-integrated", "landed-pr"}
 GH_TIMEOUT = 5
 GH_BATCH = 100
 FETCH_TIMEOUT = 5
+FRESH_HOURS = 24
 Tip = tuple[str, str]  # (commit sha, branch name; empty when detached)
 Verdict = tuple[str, str]  # (tier, reason; the reason is empty unless unverified)
 
@@ -274,6 +323,7 @@ def worktree_rows(trees: list[Row], tiers: dict[Tip, Verdict]) -> list[Row]:
                 "node_modules": "yes" if (path / "node_modules").is_dir() else "no",
                 "branch": tree["branch"],
                 "path": tree["path"],
+                "locked": tree.get("locked", ""),
             }
         )
     return result
@@ -383,6 +433,8 @@ def format_rows(report: Row) -> list[str]:
         for w in report["worktrees"]
     ]
     out += [f"orphan {o['kind']} {o['path']}" for o in report["orphans"]]
+    out += map(doc_line, linked_docs(report))
+    out += map(trash_line, report["trash"])
     out += [f"branch {b['state']}{detail(b)} {b['name']}" for b in report["branches"]]
     out += [f"prototype {p['issue']} {p['name']}" for p in report["prototypes"]]
     p = report["primary"]
@@ -392,6 +444,174 @@ def format_rows(report: Row) -> list[str]:
     )
     out += [f"name violation {name}" for name in report["name_violations"]]
     return out
+
+
+def ticket_ids(cfg: Config, text: str) -> list[str]:
+    """Ticket ids (`ticket_prefix` + digits) in text, in order; none without a prefix."""
+    prefix = cfg["ticket_prefix"]
+    return re.findall(rf"(?<![A-Za-z0-9]){re.escape(prefix)}\d+", text) if prefix else []
+
+
+def untracked_docs(path: Path, roots: list[str]) -> list[str] | None:
+    """Untracked or ignored entries under roots, outermost only; None when git fails."""
+    # --directory prints one line per untracked folder, so huge doc roots stay cheap.
+    found = git(path, "ls-files", "-z", "--others", "--directory", "--no-empty-directory",
+                "--", *roots)
+    return None if found.returncode else [e.rstrip("/") for e in found.stdout.split("\0") if e]
+
+
+def doc_entries(primary: Path, cfg: Config) -> list[tuple[str, str]]:
+    """(doc root, repo-relative path) of each outermost untracked entry under a doc root."""
+    found: dict[str, str] = {}
+    for root in cfg["doc_roots"]:
+        for entry in untracked_docs(primary, [root]) or []:
+            if entry == root:  # the whole root is untracked: its children are the bundles
+                try:
+                    found |= {f"{root}/{e.name}": root for e in os.scandir(primary / root)}
+                except OSError:
+                    pass
+            else:  # the outermost untracked file or folder, below tracked folders too
+                found[entry] = root
+    return [(root, path) for path, root in sorted(found.items())]
+
+
+def top_file_tickets(cfg: Config, path: Path) -> list[str]:
+    """Ids on a `Ticket:` or `Tickets:` line in the head of the bundle's top file."""
+    try:
+        if path.is_dir():  # shortcut: top file = first Markdown file, else first file, by name
+            files = [e for e in os.scandir(path) if e.is_file()]
+            if not files:
+                return []
+            path = Path(min(files, key=lambda e: (not e.name.endswith(".md"), e.name.lower())).path)
+        with path.open(encoding="utf-8", errors="replace") as file:
+            head = file.read(4096)  # the one place file contents are read
+    except OSError:
+        return []
+    return [
+        t for line in head.splitlines() if re.match(r"[\W_]*tickets?\W*:", line, re.I)
+        for t in ticket_ids(cfg, line)
+    ]
+
+
+def tree_size(path: Path, deadline: float) -> int | None:
+    """Bytes under path from stat alone (no file is opened); None once the deadline passes."""
+    if not path.is_dir():
+        try:
+            return path.lstat().st_size
+        except OSError:
+            return None
+    total, stack = 0, [path]
+    while stack:
+        if time.monotonic() > deadline:  # shortcut: checked per folder, not per file
+            return None
+        try:
+            with os.scandir(stack.pop()) as entries:
+                for entry in entries:
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                    else:
+                        total += entry.stat(follow_symlinks=False).st_size
+        except OSError:
+            continue
+    return total
+
+
+def human_size(size: int | None) -> str:
+    if size is None:
+        return "size unknown"
+    value = float(size)
+    for unit in ("B", "KB", "MB"):
+        if value < 1024:
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} GB"
+
+
+def mentioned(primary: Path, primary_branch: str, names: list[str], shas: list[str]) -> set[str]:
+    """Names in a tracked file, or in a commit message of shas not on origin/<primary_branch>."""
+    if not names:
+        return set()
+    # One grep for every name (patterns on stdin); matched lines only, so the cost is the repo's size.
+    grep = git(primary, "grep", "-I", "-h", "-F", "-f", "-", input="\n".join(names) + "\n")
+    text = grep.stdout if grep.returncode == 0 else ""
+    if shas:  # shortcut: the newest DOC_COMMITS commits, not all of them; raise it if bundles go unseen
+        log = git(primary, "log", "--format=%B", f"-n{DOC_COMMITS}", *shas, "--not",
+                  f"origin/{primary_branch}")
+        text += log.stdout if log.returncode == 0 else ""
+    return {name for name in names if name in text}
+
+
+def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verdict]) -> list[Row]:
+    """Untracked doc-root bundles: class, tickets and live/linked/unlinked; size for linked."""
+    # Any worktree counts, by branch or folder name, so a detached Codex worktree does too.
+    # A branch without one counts until it lands: landed local branches are never deleted.
+    unlanded = {tip for tip, (tier, _) in tiers.items() if tier not in VERIFIED}
+    names = [n for t in trees[1:] for n in (t["branch"], Path(t["path"]).name) if n]
+    names += [n for _, n in unlanded if n]
+    carried = {t for name in names for t in ticket_ids(cfg, name)}
+    deadline = time.monotonic() + DOC_SECONDS
+    worktrees = [Path(tree["path"]).resolve() for tree in trees[1:]]
+    bundles = [
+        (root, rel) for root, rel in doc_entries(primary, cfg)
+        # a worktree, or a folder holding worktrees, is not a document bundle
+        if not any(w.is_relative_to((primary / rel).resolve()) for w in worktrees)
+    ]
+    # A bundle's path is specific; its bare name only when it carries a ticket ("archive" is not).
+    names = {posixpath.basename(rel) for _, rel in bundles}
+    named = mentioned(primary, cfg["primary_branch"],
+                      sorted({rel for _, rel in bundles} | {n for n in names if ticket_ids(cfg, n)}),
+                      sorted({sha for sha, _ in unlanded}))
+    rows = []
+    for root, rel in bundles:
+        name, path = posixpath.basename(rel), primary / rel
+        tickets = list(dict.fromkeys(ticket_ids(cfg, name) + top_file_tickets(cfg, path)))
+        words = cfg["doc_reference"].get(root, DOC_REFERENCE)
+        live = rel in named or name in named or carried & set(tickets)
+        state = "live" if live else "linked" if tickets else "unlinked"
+        rows.append({
+            "path": rel,
+            "root": root,
+            "class": "reference" if any(w.lower() in name.lower() for w in words) else "ephemeral",
+            "state": state,
+            "tickets": tickets,
+            "size": tree_size(path, deadline) if state == "linked" else None,
+        })
+    return rows
+
+
+def doc_line(doc: Row) -> str:
+    return (f"doc {doc['class']} {doc['path']}: tickets {', '.join(doc['tickets'])};"
+            f" {human_size(doc['size'])}")
+
+
+def linked_docs(report: Row) -> list[Row]:
+    return [d for d in report["docs"] if d["state"] == "linked"]
+
+
+def trash_dir(primary: Path) -> Path:
+    # Inside .git: never tracked, never untracked, never in a worktree removal check.
+    return Path(git(primary, "rev-parse", "--absolute-git-dir").stdout.strip()) / "lumberjack-trash"
+
+
+def trash_rows(primary: Path, cfg: Config) -> list[Row]:
+    """Trash folders older than the saved retention, oldest first."""
+    days, folder = cfg["doc_strategy"].get("trash_days"), trash_dir(primary)
+    if not days or not folder.is_dir():
+        return []
+    now, rows = datetime.now(timezone.utc), []
+    deadline = time.monotonic() + DOC_SECONDS
+    for name in sorted(os.listdir(folder)):
+        try:
+            age = (now - datetime.strptime(name, TRASH_STAMP).replace(tzinfo=timezone.utc)).days
+        except ValueError:  # not ours
+            continue
+        if age >= days:
+            rows.append({"name": name, "days": age, "size": tree_size(folder / name, deadline)})
+    return rows
+
+
+def trash_line(row: Row) -> str:
+    return f"trash {row['name']}: {row['days']} days old; {human_size(row['size'])}"
 
 
 def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
@@ -405,6 +625,9 @@ def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
     return {
         "worktrees": worktree_rows(trees, tiers),
         "orphans": orphan_rows(primary, cfg, trees),
+        "docs": doc_rows(primary, cfg, trees, tiers),
+        "doc_strategy": cfg["doc_strategy"],
+        "trash": trash_rows(primary, cfg),
         "branches": branch_rows(loose, tiers),
         "prototypes": prototype_rows(primary, cfg),
         "primary": primary_row(primary, cfg),
@@ -440,6 +663,24 @@ def unpushed(path: Path) -> bool:
     return git(path, "merge-base", "--is-ancestor", "HEAD", "@{u}").returncode != 0
 
 
+def fresh(path: Path, branch: str, head: str) -> bool:
+    """Added under FRESH_HOURS ago, and its branch has not moved since it was created."""
+    admin = git(path, "rev-parse", "--absolute-git-dir").stdout.strip()
+    try:  # git writes commondir once, when the worktree is added
+        age = time.time() - Path(admin, "commondir").stat().st_mtime
+    except OSError:
+        return False
+    if not branch or age > FRESH_HOURS * 3600:
+        return False
+    log = lines(git(path, "reflog", "show", "--format=%H %gs", f"refs/heads/{branch}"))
+    if not log:  # some tools (the Claude desktop app) create branches without a reflog entry
+        return True  # and any later commit or reset would have written one
+    if len(log) > 1:  # moved since it was created, even when reset back to that commit
+        return False
+    sha, _, subject = log[0].partition(" ")
+    return sha == head and subject.startswith("branch: Created from")
+
+
 def short_path(primary: Path, path: str | Path) -> str:
     """Path relative to the primary's parent directory, else with home as ~."""
     full = Path(path).resolve()
@@ -454,13 +695,23 @@ def block_reason(cfg: Config, w: Row, here: Path | None, pushed: bool = True) ->
     evidence = cfg["evidence_dir"] and Path(w["path"]) / cfg["evidence_dir"]
     if here is not None and same_dir(w["path"], here):
         return "current checkout"  # never pull the directory from under the running session
+    if w.get("locked"):
+        return "locked"
     if w["dirty"]:  # -1 (status failed) counts as dirty
         return "dirty"
+    # A new branch from origin/main looks integrated and pushed; its session may have just begun.
+    if fresh(Path(w["path"]), w["branch"], w["head"]):
+        return "fresh"
     # landed-pr: the forge saw this exact tip, and delete-on-merge drops the upstream.
     if pushed and w["tier"] != "landed-pr" and unpushed(Path(w["path"])):
         return "unpushed"
     if evidence and evidence.is_dir() and any(evidence.iterdir()):
         return "evidence"
+    # Tracked files come back with any worktree; only untracked or ignored ones would be lost.
+    if cfg["doc_roots"]:
+        found = untracked_docs(Path(w["path"]), cfg["doc_roots"])
+        if found is None or found:  # a failed listing keeps the worktree
+            return "docs"
     return ""
 
 
@@ -513,6 +764,81 @@ def remove_named(start: Path, target: str) -> tuple[bool, str]:
         return False, f"blocked {tag(primary, w)}: {reason}"
     outcome, line = remove_worktree(primary, w)
     return outcome == "cleaned", line
+
+
+def clear_bundles(start: Path, targets: list[str], promoted: str = "") -> list[tuple[bool, str]]:
+    """Trash or delete linked bundles as the saved strategy says; (done, output line) each."""
+    primary = find_primary(start)
+    cfg = load_config(primary)
+    if promoted:
+        fetch(primary)  # the promotion may have merged after this session's fetch
+    docs = {d["path"]: d for d in build_report(primary, cfg)["docs"]}
+    stamp = datetime.now(timezone.utc).strftime(TRASH_STAMP)  # one trash folder per call
+    return [clear_bundle(primary, cfg, docs, target, promoted, stamp) for target in targets]
+
+
+def clear_bundle(
+    primary: Path, cfg: Config, docs: dict[str, Row], target: str, promoted: str, stamp: str
+) -> tuple[bool, str]:
+    strategy, rel = cfg["doc_strategy"], posixpath.normpath(target.replace("\\", "/"))
+    doc = docs.get(rel)
+    # An override that does not fit the bundle's class (delete on a reference bundle) keeps it.
+    action = strategy.get("roots", {}).get(doc["root"], strategy.get(doc["class"])) if doc else None
+    if doc and action not in STRATEGY[doc["class"]]:
+        action = "keep"
+    saved = False
+    if action == "promote" and promoted.startswith(cfg["prototype_prefix"]):  # a pushed prototype
+        copy = git(primary, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{promoted}")
+        saved = copy.returncode == 0
+    elif action == "promote" and promoted:  # ... or a document tracked on the primary branch
+        base = f"origin/{cfg['primary_branch']}"
+        saved = git(primary, "cat-file", "-t", f"{base}:{promoted}").stdout.strip() == "blob"
+    reason = (
+        "no strategy saved" if not strategy
+        else "not a bundle" if doc is None
+        else doc["state"] if doc["state"] != "linked"  # live or unlinked
+        else "kept by strategy" if action == "keep"
+        else "promote it first (--promoted)" if action == "promote" and not promoted
+        else "the promoted copy is not on origin" if action == "promote" and not saved
+        else ""
+    )
+    if reason:
+        return False, f"blocked {rel}: {reason}"
+    path = primary / rel
+    # rglob("*") yields a nested link itself on every platform (Windows also walks into junctions).
+    inner = list(path.rglob("*")) if strategy["scope"] == "markdown" and path.is_dir() else []
+    # shortcut: markdown scope matches the .md suffix only; widen it if other text formats matter.
+    units = [path] if strategy["scope"] == "bundle" else [
+        f for f in (inner if path.is_dir() else [path]) if f.suffix.lower() == ".md"
+    ]
+    # A link (symlink or Windows junction) can lead a bundle or an entry in it out of the
+    # repository; rmtree and move only unlink a link nested in a bundle, so the target survives.
+    if any(not u.resolve().is_relative_to(primary.resolve()) for u in [path, *inner]):
+        return False, f"blocked {rel}: links outside the repository"
+    if not units:
+        return False, f"blocked {rel}: no Markdown in scope"
+    for unit in units:
+        if action in ("trash", "promote"):  # a promoted reference bundle is trashed, never deleted
+            dest = trash_dir(primary) / stamp / unit.relative_to(primary)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(unit, dest)
+        elif unit.is_dir() and not unit.is_symlink():
+            shutil.rmtree(unit, **{RMTREE_HANDLER: make_writable})
+        else:
+            if not unit.is_symlink():  # chmod would follow the link
+                os.chmod(unit, stat.S_IWRITE)
+            unit.unlink()
+    return True, f"cleared {rel}: " + ("deleted" if action == "delete" else f"trashed {stamp}")
+
+
+def purge_trash(start: Path) -> list[str]:
+    """Delete the trash folders past retention; one line each."""
+    primary = find_primary(start)
+    cfg = load_config(primary)
+    expired = trash_rows(primary, cfg)
+    for row in expired:
+        shutil.rmtree(trash_dir(primary) / row["name"], **{RMTREE_HANDLER: make_writable})
+    return [f"purged {row['name']}" for row in expired] or ["trash: nothing past retention"]
 
 
 def stray_ignored(path: Path) -> bool:
@@ -583,10 +909,15 @@ def run_cleanup(
     cleaned, orphan_lines = clean_orphans(primary, report["orphans"], mode)
     counts["cleaned"] += cleaned
     out += orphan_lines
+    docs = linked_docs(report)
+    out += map(doc_line, docs)
+    out += map(trash_line, report["trash"])
     summary = (
         f"sweep: cleaned {counts['cleaned']}, landed {counts['landed']},"
         f" dependents {counts['dependents']}, blocked {counts['blocked']},"
-        f" unverified {counts['unverified']}, orphans {len(report['orphans'])}"
+        f" unverified {counts['unverified']}, orphans {len(report['orphans'])},"
+        f" docs {len(docs)}"
+        + (f", trash {len(report['trash'])}" if report["trash"] else "")
         + (", origin stale" if stale else "")
     )
     return [summary, *out]
@@ -778,7 +1109,28 @@ def main(argv: list[str] | None = None) -> int:
         "--remove", metavar="PATH",
         help="remove only this worktree, any tier, keeping its branch; exit 1 when blocked",
     )
+    parser.add_argument(
+        "--clear", metavar="PATH", nargs="+",
+        help="trash or delete these linked doc bundles as doc_strategy says; exit 1 when one is"
+        " blocked",
+    )
+    parser.add_argument(
+        "--promoted", metavar="REF", default="",
+        help="with --clear: a doc tracked on origin's primary branch, or a pushed prototype"
+        " branch, holding a reference bundle's findings",
+    )
+    parser.add_argument("--purge-trash", action="store_true", help="delete trash past retention")
     args = parser.parse_args(argv)
+    if args.clear is not None or args.purge_trash:
+        try:
+            if args.purge_trash:
+                print("\n".join(purge_trash(Path.cwd())))
+                return 0
+            results = clear_bundles(Path.cwd(), args.clear, args.promoted)
+        except ConfigError as error:
+            raise SystemExit(error) from error
+        print("\n".join(line for _, line in results))
+        return 0 if all(cleared for cleared, _ in results) else 1
     if args.remove is not None:
         try:
             removed, line = remove_named(Path.cwd(), args.remove)
