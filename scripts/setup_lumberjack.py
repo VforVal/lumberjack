@@ -551,7 +551,9 @@ def apply(answers: Facts, repo: Path) -> None:
 def save_strategy(strategy: Any, repo: Path) -> None:
     """Write a doc strategy into the config, keeping every other saved value."""
     try:
-        write_file(repo, ".lumberjack.toml", config_text({**load_config(repo), "doc_strategy": strategy}))
+        source, table = config_table(repo)
+        table.pop("doc_strategy", None)  # replaced whole, so an old-style one never blocks its own fix
+        write_file(repo, ".lumberjack.toml", config_text({**parse_config(table, source), "doc_strategy": strategy}))
     except ConfigError as error:
         raise abort(str(error)) from error
 

@@ -60,12 +60,18 @@ PURGE_SECONDS = 3  # the end of DOC_SECONDS kept for purging, so trashing never 
 NO_MARKDOWN = "no Markdown in scope"
 TOO_LARGE = "too large to walk in time"
 DOC_STATE = "lumberjack-docs.json"  # next to the trash: first-seen dates and skipped bundles
+DOC_LOCK = "lumberjack-docs.lock"  # next to the trash: held while one run trashes and purges
+LOCK_SECONDS = 60  # an older lock was left by a run the hook timeout (30 s) killed
+
+
+def reparse(st: os.stat_result) -> bool:
+    """A Windows reparse point: a symlink or a junction (is_junction is 3.12+); never on POSIX."""
+    return bool(getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
 
 
 def is_folder(entry: os.DirEntry[str]) -> bool:
-    """A real directory: not a symlink, and not a Windows junction (is_junction is 3.12+)."""
-    reparse = getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
-    return entry.is_dir(follow_symlinks=False) and not reparse
+    """A real directory: not a symlink, and not a Windows junction."""
+    return entry.is_dir(follow_symlinks=False) and not reparse(entry.stat(follow_symlinks=False))
 
 
 def branch_pattern(cfg: Config) -> re.Pattern[str]:
@@ -621,7 +627,10 @@ def linked_docs(report: Row) -> list[Row]:
 @functools.cache  # the git folder never moves during a run; one git call, not one per file
 def trash_dir(primary: Path) -> Path:
     # Inside .git: never tracked, never untracked, never in a worktree removal check.
-    return Path(git(primary, "rev-parse", "--absolute-git-dir").stdout.strip()) / "lumberjack-trash"
+    found = git(primary, "rev-parse", "--absolute-git-dir")
+    if found.returncode:  # an empty path would put the trash under the current directory
+        raise OSError(f"cannot find the git folder: {found.stderr.strip()}")
+    return Path(found.stdout.strip()) / "lumberjack-trash"
 
 
 def doc_state(primary: Path) -> tuple[dict[str, date], set[str]]:
@@ -645,10 +654,27 @@ def save_doc_state(primary: Path, since: dict[str, date], skipped: set[str]) -> 
         pass
 
 
+def doc_lock(primary: Path) -> Path | None:
+    """Claim the doc work for this run; None while another run holds it."""
+    lock = trash_dir(primary).with_name(DOC_LOCK)
+    try:
+        # shortcut: two runs that both find the same stale lock can both take it; that needs a
+        # killed run plus two session starts in the same moment.
+        if time.time() - lock.stat().st_mtime > LOCK_SECONDS:
+            lock.unlink()
+    except OSError:
+        pass
+    try:
+        os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except OSError:  # held by another run, or a git folder this run cannot write
+        return None
+    return lock
+
+
 def trash_rows(primary: Path, cfg: Config) -> list[Row]:
     """Trash folders older than the saved retention, oldest first."""
-    days, folder = cfg["doc_strategy"].get("trash_days"), trash_dir(primary)
-    if not days or not folder.is_dir():
+    days = cfg["doc_strategy"].get("trash_days")
+    if not days or not (folder := trash_dir(primary)).is_dir():
         return []
     now, rows = datetime.now(timezone.utc), []
     for name in sorted(os.listdir(folder)):
@@ -857,13 +883,18 @@ def clear_bundle(
     # a bundle cleared whole, and a link nested in it, as a link, so the target survives.
     if not path.resolve().is_relative_to(root):
         return "blocked", f"blocked {rel}: links outside the repository"
-    inner = []
-    # rglob("*") yields a nested link itself on every platform (Windows also walks into junctions),
-    # and Markdown scope moves the files it finds: any that resolves elsewhere is not the bundle's.
-    for entry in path.rglob("*") if strategy["scope"] == "markdown" and path.is_dir() else ():
+    # Resolved through its doc root only: a doc root may be a link, a Markdown-scope bundle may not.
+    inner, bundle, markdown = [], path.parent.resolve() / path.name, strategy["scope"] == "markdown"
+    if markdown and path.is_dir() and path.resolve() != bundle:
+        return "blocked", f"blocked {rel}: links outside the bundle"
+    # rglob("*") yields a nested link itself on every platform, before anything under it (Windows
+    # also walks into junctions), and Markdown scope moves the files it finds: a link that resolves
+    # elsewhere is not the bundle's. Only links are resolved; a realpath per file costs the budget.
+    for entry in path.rglob("*") if markdown and path.is_dir() else ():
         if time.monotonic() > deadline:
             return "timeout", ""  # nothing has moved: the next session start scans it again
-        if not entry.resolve().is_relative_to(root / rel):
+        st = entry.lstat()
+        if (stat.S_ISLNK(st.st_mode) or reparse(st)) and not entry.resolve().is_relative_to(bundle):
             return "blocked", f"blocked {rel}: links outside the bundle"
         inner.append(entry)
     # shortcut: markdown scope matches the .md suffix only; widen it if other text formats matter.
@@ -988,9 +1019,9 @@ def trash_docs(primary: Path, cfg: Config, report: Row, deadline: float) -> tupl
         due = []
     docs = {d["path"]: d for d in report["docs"]}
     stamp = datetime.now(timezone.utc).strftime(TRASH_STAMP)
-    trashed = 0
-    for n, doc in enumerate(due):
-        if time.monotonic() > deadline:
+    trashed, opened = 0, time.monotonic()
+    for doc in due:
+        if (started := time.monotonic()) > deadline:
             break
         try:
             status, line = clear_bundle(primary, cfg, docs, doc["path"], "", stamp, deadline)
@@ -998,8 +1029,10 @@ def trash_docs(primary: Path, cfg: Config, report: Row, deadline: float) -> tupl
             # RuntimeError: a symlink loop in resolve(); an OSError message would carry an absolute path
             reason = getattr(error, "strerror", None) or "cannot read the bundle"
             status, line = "blocked", f"blocked {doc['path']}: {reason}"
-        if status == "timeout" and n == 0:  # its walk outlasted all of trashing's time: it would every run
-            skip.add(doc["path"])  # so it is left to the cleanup command, said once
+        # It had more than half of trashing's time and still ran out: it would every run,
+        # so it is left to the cleanup command, said once. One that started late just waits.
+        if status == "timeout" and deadline - started > (deadline - opened) / 2:
+            skip.add(doc["path"])
             line = f"blocked {doc['path']}: {TOO_LARGE}"
         if status in ("cleared", "partial"):  # a trashed bundle loses its date: restored, it starts over
             trashed += 1
@@ -1049,12 +1082,18 @@ def run_cleanup(
     counts["cleaned"] += cleaned
     out += orphan_lines
     out += map(doc_line, (d for d in linked_docs(report) if d["action"] != "trash"))
-    deadline = time.monotonic() + DOC_SECONDS  # started here, so slow git, gh or removals never eat it
-    trashed, doc_lines = trash_docs(primary, cfg, report, deadline - PURGE_SECONDS)
-    if mode == "report":
-        doc_lines += [f"trash {t['name']}: would purge" for t in report["trash"]]
-    elif mode == "prune":
-        doc_lines += purge_expired(primary, report["trash"], deadline)
+    # Two session starts at once would move the same files: the one without the lock leaves docs alone.
+    lock = doc_lock(primary)
+    try:
+        deadline = time.monotonic() + DOC_SECONDS  # started here, so slow git, gh or removals never eat it
+        trashed, doc_lines = trash_docs(primary, cfg, report, deadline - PURGE_SECONDS) if lock else (0, [])
+        if mode == "report":
+            doc_lines += [f"trash {t['name']}: would purge" for t in report["trash"]]
+        elif mode == "prune" and lock:
+            doc_lines += purge_expired(primary, report["trash"], deadline)
+    finally:
+        if lock:
+            lock.unlink(missing_ok=True)
     counts["blocked"] += sum(line.startswith("blocked") for line in doc_lines)
     out += doc_lines
     summary = (
@@ -1276,7 +1315,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("\n".join(purge_trash(Path.cwd())))
                 return 0
             results = clear_bundles(Path.cwd(), args.clear, args.promoted)
-        except ConfigError as error:
+        except (ConfigError, OSError) as error:
             raise SystemExit(error) from error
         print("\n".join(line for _, line in results))
         return 0 if all(status in ("cleared", "partial") for status, _ in results) else 1

@@ -1544,6 +1544,94 @@ def test_a_future_first_seen_date_is_rewritten_to_today(primary: Path) -> None:
     assert recorded(primary) == {BUNDLE: datetime.now(timezone.utc).date().isoformat()}
 
 
+def test_a_huge_bundle_behind_a_blocked_one_is_still_left_to_the_cleanup_command(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary, scope="markdown")
+    link_dir(primary / "docs/work/eng-140-handoff/out", outside_dir(primary))  # blocked every run
+    big = "docs/work/eng-150-handoff"
+    for n in range(40):
+        write(primary, f"{big}/n{n}.md", "x\n")
+    write(primary, "docs/work/eng-153-handoff/a.md", "x\n")
+    with monkeypatch.context() as short:
+        short.setattr(sweep_worktrees, "DOC_SECONDS", 20)
+        short.setattr(sweep_worktrees, "PURGE_SECONDS", 0)
+        tick_clock(short)
+        out = sweep_worktrees.cleanup_session(primary)
+    assert "blocked docs/work/eng-140-handoff: links outside the bundle" in out
+    assert f"blocked {big}: too large to walk in time" in out
+    assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")  # the next bundle gets the time
+    assert not (primary / "docs/work/eng-153-handoff").exists()
+
+
+def test_markdown_trash_works_under_a_doc_root_that_is_a_link(primary: Path) -> None:
+    strategy_settings(primary, scope="markdown")
+    write(primary, "notes/work/eng-150-handoff/a.md", "x\n")
+    write(primary, "notes/work/eng-150-handoff/run/out.log", "log")
+    link_dir(primary / "docs/work", primary / "notes/work")
+    out = cleanup(primary)
+    assert out[0].endswith("docs 1"), out
+    assert not (primary / "notes/work/eng-150-handoff/a.md").exists()
+    assert (primary / "notes/work/eng-150-handoff/run/out.log").exists()
+
+
+def test_a_session_start_leaves_doc_work_to_a_sweep_holding_the_lock(primary: Path) -> None:
+    rule_bundles(primary)
+    lock = primary / ".git" / "lumberjack-docs.lock"
+    lock.write_text("")  # another session start is trashing right now
+    assert cleanup(primary)[0].endswith("docs 0")
+    assert (primary / "docs/work/eng-150-handoff/a.md").exists() and lock.exists()
+    old = time.time() - 3600
+    os.utime(lock, (old, old))  # left by a run the hook timeout killed
+    assert cleanup(primary)[0].endswith("docs 1")
+    assert not lock.exists()
+
+
+def test_a_failed_git_folder_lookup_never_moves_docs_elsewhere(
+    primary: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    real = sweep_worktrees.git
+
+    def broken(cwd: Path, *args: str, **k: object) -> subprocess.CompletedProcess[str]:
+        if "--absolute-git-dir" in args:
+            return subprocess.CompletedProcess(args, 128, "", "fatal: not a git repository")
+        return real(cwd, *args, **k)  # type: ignore[arg-type]
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setattr(sweep_worktrees, "git", broken)
+    out = sweep_worktrees.cleanup_session(primary)
+    assert out[0].startswith("sweep: unavailable"), out
+    assert (primary / "docs/work/eng-150-handoff/a.md").exists() and not any(elsewhere.iterdir())
+
+
+def test_the_markdown_walk_resolves_only_links(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary, scope="markdown")
+    bundle = primary / "docs/work/eng-150-handoff"
+    for n in range(10):
+        write(bundle, f"n{n}.md", "x\n")
+    resolved: list[Path] = []
+    real = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda self, *a, **k: resolved.append(self) or real(self, *a, **k))
+    assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")
+    assert [p for p in resolved if bundle in p.parents] == []  # a realpath per file costs the budget
+
+
+def test_is_folder_never_stats_a_file() -> None:
+    class File:
+        def is_dir(self, follow_symlinks: bool = True) -> bool:
+            return False
+
+        def stat(self, follow_symlinks: bool = True) -> os.stat_result:
+            raise AssertionError("an lstat per file")
+
+    assert not sweep_worktrees.is_folder(File())  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(
     "error", [OSError(13, "Permission denied", "/abs/secret/path"), RuntimeError("Symlink loop")]
 )

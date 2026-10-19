@@ -39,7 +39,8 @@
   `setup_lumberjack.py strategy <file.json>`; a re-run of setup keeps it. Until it is saved nothing
   is removed. The command checks no tracker (a linked bundle is done by git alone), asks once per
   group, and offers `reference` bundles only promote or keep. A saved `doc_strategy` without
-  `grace_days` is a config error: save it again with `strategy` or the cleanup interview.
+  `grace_days`, or with the old keys, is a config error: save it again with `strategy` (which
+  replaces it whole) or the cleanup interview.
 - Session start and the post-merge sweep trash every `linked` `ephemeral` bundle by rule, like a
   landed worktree, once a `doc_strategy` is saved and the bundle has stayed linked for `grace_days`
   (counted from the first session start that saw it linked, kept in
@@ -49,8 +50,10 @@
   this run (a bundle inside its grace period stays, prints its `doc` line and is not counted).
   A bundle that cannot be moved prints `blocked <path>: <reason>` and counts in `blocked N`;
   a Markdown-scope bundle with no `.md` file left is skipped silently and, recorded in the same
-  file, not walked again while it stays linked; one whose walk alone outlasts trashing's time prints
-  `blocked <path>: too large to walk in time` once and is left to the cleanup command. Markdown
+  file, not walked again while it stays linked; one whose walk runs out of time although it started
+  with more than half of trashing's time left prints `blocked <path>: too large to walk in time`
+  once and is left to the cleanup command. One run at a time trashes and purges: a run that finds
+  `<git dir>/lumberjack-docs.lock` (younger than 60 seconds) leaves docs alone. Markdown
   scope removes the folders its move empties. Reference, `unlinked`, live
   and keep-root bundles stay. `cleanup = "report"` prints `doc <class> <path>: would trash`, moves
   nothing and still records first-seen dates; `"keep"` moves nothing, records nothing and prints

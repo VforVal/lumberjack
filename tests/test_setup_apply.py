@@ -1,6 +1,7 @@
 """setup_lumberjack apply, through main() against temporary repositories."""
 
 import json
+import re
 import os
 import subprocess
 import sys
@@ -90,6 +91,21 @@ def test_strategy_command_saves_only_the_strategy_and_a_rerun_keeps_it(
     with pytest.raises(SystemExit) as error:
         setup_lumberjack.main(["strategy", str(repo / "strategy.json"), "--repo", str(repo)])
     assert error.value.code == 2 and load_config(repo)["doc_strategy"] == strategy
+
+
+def test_strategy_command_replaces_an_old_style_strategy(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    apply(repo, capsys, doc_strategy={})
+    config = repo / ".lumberjack.toml"
+    old = 'doc_strategy = {scope = "bundle", ephemeral = "trash", reference = "promote", trash_days = 7, tracker = "gh"}'
+    config.write_text(re.sub(r"(?m)^doc_strategy = .*$", lambda _: old, config.read_text("utf-8")), "utf-8")
+    strategy = ANSWERS["doc_strategy"]
+    write(repo, "strategy.json", json.dumps(strategy))
+    assert setup_lumberjack.main(["strategy", str(repo / "strategy.json"), "--repo", str(repo)]) == 0
+    saved = load_config(repo)
+    assert saved["doc_strategy"] == strategy
+    assert saved == {k: v for k, v in ANSWERS.items() if k in saved}
 
 
 def test_unknown_key_exits_2_and_writes_nothing(
