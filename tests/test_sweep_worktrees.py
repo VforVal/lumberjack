@@ -5,6 +5,7 @@ import json
 import math
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -1723,6 +1724,16 @@ def test_is_folder_never_stats_a_file() -> None:
             raise AssertionError("an lstat per file")
 
     assert not sweep_worktrees.is_folder(File())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("tag", "link"),
+    [(0xA000000C, True), (0xA0000003, True), (0x9000001A, False), (0, False)],
+    ids=["symlink", "junction", "onedrive-cloud", "none"],
+)
+def test_only_reparse_points_that_redirect_count_as_links(tag: int, link: bool) -> None:
+    st = types.SimpleNamespace(st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT if tag else 0, st_reparse_tag=tag)
+    assert sweep_worktrees.reparse(st) is link  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

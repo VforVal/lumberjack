@@ -67,8 +67,14 @@ BUSY = "a sweep is trashing"
 
 
 def reparse(st: os.stat_result) -> bool:
-    """A Windows reparse point: a symlink or a junction (is_junction is 3.12+); never on POSIX."""
-    return bool(getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    """A Windows reparse point that redirects: a symlink or a junction (is_junction is 3.12+); never on POSIX.
+
+    The name-surrogate bit, as Python's own link test uses: OneDrive's cloud folders are reparse
+    points without it, real folders to walk into."""
+    return bool(
+        getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+        and getattr(st, "st_reparse_tag", 0) & 0x20000000
+    )
 
 
 def is_folder(entry: os.DirEntry[str]) -> bool:
