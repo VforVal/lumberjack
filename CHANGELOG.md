@@ -51,7 +51,7 @@
   a Markdown-scope bundle with no `.md` file left is skipped silently. Reference, `unlinked`, live
   and keep-root bundles stay. `cleanup = "report"` prints `doc <class> <path>: would trash`, moves
   nothing and still records first-seen dates; `"keep"` moves nothing, records nothing and prints
-  nothing. Sizing, the Markdown walk and trashing share
+  nothing. Sizing, the Markdown walk, trashing and purging share
   one 10 second doc budget per run; what it does not reach waits for the next session start.
 - `sweep_worktrees.py --clear <path> [--promoted <ref>]` trashes one linked bundle as the
   strategy says, never deleting it outright (refusing `no strategy saved`, `not a bundle`,
