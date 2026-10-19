@@ -1,6 +1,6 @@
 {
   "name": "lumberjack",
   "version": "1.1.1",
-  "description": "Removes agent worktrees whose work has landed, and blocks turns that end on a misnamed branch or an off-branch primary checkout",
+  "description": "Cleans up after coding agents: removes worktrees and trashes work docs once their work has landed, and blocks turns that end on a misnamed branch or an off-branch primary checkout",
   "icon": "./assets/icon.png"
 }

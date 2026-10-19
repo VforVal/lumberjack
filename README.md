@@ -6,10 +6,13 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FVforVal%2Flumberjack%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version)](CHANGELOG.md)
 
-**Ten worktrees, and seven of them merged last week.** lumberjack removes worktrees once
-their work has verifiably landed on the primary branch, and keeps the branch. A Stop hook
-blocks an agent from ending its turn while the branch name or the primary checkout is wrong.
-It ships as a plugin for Claude Code and Codex.
+**Ten worktrees, seven merged last week, and a folder of handoffs nobody reads.**
+lumberjack cleans up after coding agents with one rule: once work has landed on the primary
+branch, what was left for it goes. Each session start removes landed worktrees (the branch
+stays) and moves their tickets' handoffs, plans and run output to a trash inside `.git/`,
+which it purges after a retention you choose. Research and prototypes are kept. A Stop hook
+keeps agents from ending a turn on a misnamed branch or an off-branch primary checkout. It
+ships as a plugin for Claude Code and Codex.
 
 ![Before: git worktree list shows ten worktrees, seven of them already merged. After the next session start: the sweep reports cleaned 7 and git worktree list shows three.](assets/before-after.png)
 
