@@ -25,10 +25,7 @@ ANSWERS = {
     "evidence_dir": "evidence",
     "doc_roots": ["docs/work"],
     "doc_reference": {"docs/work": ["spec", "research"]},
-    "doc_strategy": {
-        "scope": "bundle", "ephemeral": "trash", "reference": "promote",
-        "trash_days": 14, "tracker": "github", "roots": {"docs/handoffs": "keep"},
-    },
+    "doc_strategy": {"scope": "bundle", "trash_days": 14, "roots": {"docs/handoffs": "keep"}},
     "worktree_roots": [".wt", "~/worktrees/{name}"],
     "cleanup": "report",
     "stop_gate": False,
@@ -89,7 +86,7 @@ def test_strategy_command_saves_only_the_strategy_and_a_rerun_keeps_it(
     assert saved == {k: v for k, v in ANSWERS.items() if k in saved}  # nothing else moved
     apply(repo, capsys, doc_strategy=saved["doc_strategy"])  # setup copies the saved value
     assert load_config(repo)["doc_strategy"] == strategy
-    write(repo, "strategy.json", json.dumps({**strategy, "ephemeral": "burn"}))
+    write(repo, "strategy.json", json.dumps({**strategy, "tracker": "github"}))
     with pytest.raises(SystemExit) as error:
         setup_lumberjack.main(["strategy", str(repo / "strategy.json"), "--repo", str(repo)])
     assert error.value.code == 2 and load_config(repo)["doc_strategy"] == strategy

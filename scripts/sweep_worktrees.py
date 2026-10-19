@@ -50,8 +50,8 @@ CACHE_DIRS.add(".codex-worktree-name")
 DOC_REFERENCE = ["research", "prototype"]  # bundle name words that make a bundle reference
 DOC_COMMITS = 1000  # newest commits read from unlanded branches when looking for bundle names
 TRASH_STAMP = "%Y%m%dT%H%M%SZ"  # a trash folder is named for the UTC moment its files moved
-STRATEGY = {"scope": ("markdown", "bundle"), "ephemeral": ("delete", "trash", "keep"),
-            "reference": ("promote", "keep")}  # the choices; trash_days and tracker are free
+SCOPES = ("markdown", "bundle")  # doc_strategy scope: only .md files, or whole bundles
+BUNDLE_ACTION = {"ephemeral": "trash", "reference": "promote"}  # by class, outside a keep-root
 DOC_SECONDS = 10  # budget for sizing bundles; the SessionStart hook times out at 30
 
 
@@ -121,20 +121,22 @@ def parse_config(table: Config, source: str = "") -> Config:
     ):
         raise ConfigError("lumberjack: doc_reference must map each root to a list of words", source)
     strategy = cfg["doc_strategy"]
-    roots = strategy.get("roots", {})  # optional: an action per doc root, ahead of the class action
-    if strategy and not (
-        strategy.keys() - {"roots"} == {*STRATEGY, "trash_days", "tracker"}
-        and isinstance(roots, dict) and all(
-            isinstance(r, str) and a in {*STRATEGY["ephemeral"], *STRATEGY["reference"]}
-            for r, a in roots.items()
+    roots = strategy.get("roots", {})  # optional: doc roots whose bundles are always kept
+    if strategy.keys() & {"ephemeral", "reference", "tracker"}:
+        raise ConfigError(
+            "lumberjack: doc_strategy no longer takes ephemeral, reference or tracker;"
+            " keep scope, trash_days and roots", source,
         )
-        and all(strategy[k] in choices for k, choices in STRATEGY.items())
+    if strategy and not (
+        strategy.keys() - {"roots"} == {"scope", "trash_days"}
+        and strategy["scope"] in SCOPES
         and type(strategy["trash_days"]) is int and strategy["trash_days"] > 0
-        and isinstance(strategy["tracker"], str) and strategy["tracker"]
+        and isinstance(roots, dict)
+        and all(isinstance(r, str) and a == "keep" for r, a in roots.items())
     ):
         raise ConfigError(
-            "lumberjack: doc_strategy must be empty or set scope, ephemeral, reference,"
-            " trash_days and tracker (and optionally roots) to valid values", source,
+            "lumberjack: doc_strategy must be empty or set scope (markdown or bundle) and"
+            " trash_days (at least 1), optionally roots (each root = \"keep\")", source,
         )
     if roots:
         strategy["roots"] = {posixpath.normpath(r): a for r, a in roots.items()}
@@ -550,9 +552,7 @@ def bundle_action(strategy: Config, root: str, kind: str) -> str:
     """The saved strategy's action for a bundle of this root and class; empty with no strategy."""
     if not strategy:
         return ""
-    # The root's entry wins over the class action; one that does not fit the class keeps it.
-    action = strategy.get("roots", {}).get(root, strategy[kind])
-    return action if action in STRATEGY[kind] else "keep"
+    return "keep" if root in strategy.get("roots", {}) else BUNDLE_ACTION[kind]
 
 
 def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verdict]) -> list[Row]:
@@ -782,7 +782,7 @@ def remove_named(start: Path, target: str) -> tuple[bool, str]:
 
 
 def clear_bundles(start: Path, targets: list[str], promoted: str = "") -> list[tuple[bool, str]]:
-    """Trash or delete linked bundles as the saved strategy says; (done, output line) each."""
+    """Trash linked bundles as the saved strategy says; (done, output line) each."""
     primary = find_primary(start)
     cfg = load_config(primary)
     if promoted:
@@ -824,23 +824,16 @@ def clear_bundle(
         f for f in (inner if path.is_dir() else [path]) if f.suffix.lower() == ".md"
     ]
     # A link (symlink or Windows junction) can lead a bundle or an entry in it out of the
-    # repository; rmtree and move only unlink a link nested in a bundle, so the target survives.
+    # repository; move takes a link nested in a bundle as a link, so the target survives.
     if any(not u.resolve().is_relative_to(primary.resolve()) for u in [path, *inner]):
         return False, f"blocked {rel}: links outside the repository"
     if not units:
         return False, f"blocked {rel}: no Markdown in scope"
-    for unit in units:
-        if action in ("trash", "promote"):  # a promoted reference bundle is trashed, never deleted
-            dest = trash_dir(primary) / stamp / unit.relative_to(primary)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(unit, dest)
-        elif unit.is_dir() and not unit.is_symlink():
-            shutil.rmtree(unit, **{RMTREE_HANDLER: make_writable})
-        else:
-            if not unit.is_symlink():  # chmod would follow the link
-                os.chmod(unit, stat.S_IWRITE)
-            unit.unlink()
-    return True, f"cleared {rel}: " + ("deleted" if action == "delete" else f"trashed {stamp}")
+    for unit in units:  # only the purge deletes; a cleared bundle always goes to the trash
+        dest = trash_dir(primary) / stamp / unit.relative_to(primary)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(unit, dest)
+    return True, f"cleared {rel}: trashed {stamp}"
 
 
 def purge_trash(start: Path) -> list[str]:
@@ -1129,8 +1122,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--clear", metavar="PATH", nargs="+",
-        help="trash or delete these linked doc bundles as doc_strategy says; exit 1 when one is"
-        " blocked",
+        help="trash these linked doc bundles as doc_strategy says; exit 1 when one is blocked",
     )
     parser.add_argument(
         "--promoted", metavar="REF", default="",

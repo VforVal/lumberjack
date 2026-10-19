@@ -563,7 +563,7 @@ def main(argv: list[str] | None = None) -> int:
     put = sub.add_parser("apply", help="write config, hook, settings and instructions")
     put.add_argument("answers", type=Path, help="JSON file of setup answers")
     keep = sub.add_parser("strategy", help="save the doc strategy in the config")
-    keep.add_argument("strategy", type=Path, help="JSON file: scope, ephemeral, reference, trash_days, tracker")
+    keep.add_argument("strategy", type=Path, help="JSON file: scope, trash_days, roots")
     for command in (find, put, keep):
         command.add_argument(
             "--repo", type=Path, help="repository path (default: the current repository)"

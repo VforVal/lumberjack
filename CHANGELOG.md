@@ -36,26 +36,25 @@
   `lumberjack` skill gives agents the same rule for a `blocked ...: dirty` line.
 
 - `doc_strategy`: a new setting `/lumberjack:cleanup` asks for once when `doc_roots` holds linked
-  bundles (scope, action per class, trash days, tracker) and saves with the new
+  bundles (`scope`, `trash_days` and optional keep-`roots`) and saves with the new
   `setup_lumberjack.py strategy <file.json>`; a re-run of setup keeps it. Until it is saved nothing
-  is removed. The command checks the tracker with the agent's own tools, offers a bundle only when
-  every listed ticket is closed and the bundle is not live, asks once per group, and offers
-  `reference` bundles only promote or keep.
-- `sweep_worktrees.py --clear <path> [--promoted <ref>]` trashes or deletes one linked bundle as the
-  strategy says (refusing `no strategy saved`, `not a bundle`, `live`, `unlinked`, `kept by strategy`
-  and an unpromoted reference bundle). Trash lives in `<git dir>/lumberjack-trash/<UTC timestamp>/`.
+  is removed. The command checks no tracker (a linked bundle is done by git alone), asks once per
+  group, and offers `reference` bundles only promote or keep.
+- `sweep_worktrees.py --clear <path> [--promoted <ref>]` trashes one linked bundle as the
+  strategy says, never deleting it outright (refusing `no strategy saved`, `not a bundle`,
+  `live`, `unlinked`, `kept by strategy` and an unpromoted reference bundle). Trash lives in `<git dir>/lumberjack-trash/<UTC timestamp>/`.
   The sweep prints a `trash <timestamp>: N days old; <size>` line (and `, trash N` in the summary)
   for folders past `trash_days`; only `--purge-trash` deletes them.
-- `doc_strategy.roots` (optional): an action per doc root that overrides the class action, so
+- `doc_strategy.roots` (optional): doc roots mapped to `keep`, so
   `roots = {"docs/handoffs" = "keep"}` keeps one root's bundles while others are trashed. `--clear` also
   refuses a bundle whose path or files lead outside the repository through a symlink or junction
   (`links outside the repository`) and a markdown-scope bundle with no `.md` file
   (`no Markdown in scope`) instead of reporting success.
 - `--clear` takes several paths (one line each, one trash folder, exit 1 when any is blocked) and,
   with `--promoted`, fetches `origin` first so a promotion merged during the session counts.
-- `--json` gives each doc its resolved `action` (empty until a strategy is saved), which `--clear`
-  and `/lumberjack:cleanup` follow; a root's action that does not fit the class (`delete` on a
-  reference bundle) keeps the bundle.
+- `--json` gives each doc its resolved `action` (`trash` for ephemeral, `promote` for reference,
+  `keep` under a keep-root; empty until a strategy is saved), which `--clear` and
+  `/lumberjack:cleanup` follow.
 
 ## 1.1.1
 

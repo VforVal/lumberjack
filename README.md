@@ -114,7 +114,7 @@ SessionStart prints the error and cleans nothing.
 | `evidence_dir` | `""` | Directory inside a worktree whose contents block cleanup; empty protects nothing extra |
 | `doc_roots` | `[]` | Folders inside a worktree for work documents (handoffs, plans, research, run output); an untracked or ignored file under one blocks cleanup with `docs`. `evidence_dir` is one more such folder but keeps its own reason, `evidence` |
 | `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); a root not listed uses `["research", "prototype"]`. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
-| `doc_strategy` | `{}` | What `/lumberjack:cleanup` may do with doc bundles, saved after it asks once (empty: nothing is removed). Keys, all required once set: `scope` (`markdown` or `bundle`), `ephemeral` (`delete`, `trash` or `keep`), `reference` (`promote` or `keep`), `trash_days` (whole days, at least 1) and `tracker` (text: where tickets are checked); optional `roots`, a table of doc root to action (`keep` at minimum) that overrides the class action for bundles under that root, so `roots = {"docs/handoffs" = "keep"}` keeps every handoff. An action that does not fit the bundle's class (`delete` on a reference bundle) keeps it. A table: `[doc_strategy]` then `scope = "bundle"` |
+| `doc_strategy` | `{}` | How `/lumberjack:cleanup` trashes doc bundles, saved after it asks once (empty: nothing is removed). Keys, both required once set: `scope` (`markdown` or `bundle`) and `trash_days` (whole days, at least 1); optional `roots`, a table of doc root to `keep` whose bundles are always kept, so `roots = {"docs/handoffs" = "keep"}` keeps every handoff. The old keys `ephemeral`, `reference` and `tracker` are a config error. A table: `[doc_strategy]` then `scope = "bundle"` |
 | `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where worktrees live: `~` is home, `*` a glob, `{name}` the repo name |
 | `cleanup` | `"prune"` | `prune` removes landed worktrees; `report` lists them as `would remove`; `keep` does nothing |
 | `stop_gate` | `true` | `false` turns the Stop hook off |
@@ -284,14 +284,13 @@ what produced them and asks once per group: delete, ignore (`.git/info/exclude` 
 ### Work documents
 
 When `doc_roots` holds linked bundles, `/lumberjack:cleanup` asks the maintainer once for a
-`doc_strategy` (scope, an action per class, trash days, tracker) and saves it with
+`doc_strategy` (scope, trash days, keep-roots) and saves it with
 `setup_lumberjack.py strategy <file.json>`; later runs ask nothing, and until it is saved
-nothing is removed. For each linked bundle the agent checks every listed ticket in the named
-tracker with its own tools and offers the bundle only when all are closed, one question per
-group. `ephemeral` bundles follow the strategy: `trash`, `delete` or `keep` (never offered); a `roots` entry for the
-bundle's doc root replaces that action, and one that does not fit the class (`delete` on a
-reference bundle) keeps it. `--json` gives each doc this resolved `action`, empty until a
-strategy is saved.
+nothing is removed. A linked bundle's work is done by git alone: no tracker is checked. The
+command offers linked bundles one question per group. `ephemeral` bundles are trashed; a bundle
+under a `roots` keep-root is kept (never offered). Nothing deletes a bundle outright: `--clear`
+only moves it to the trash. `--json` gives each doc its resolved `action` (`trash`, `promote` or
+`keep`), empty until a strategy is saved.
 `reference` bundles are only offered promote or keep: promote writes the findings to a document
 tracked on `origin/<primary_branch>` or pushes a `prototype_prefix` branch, and only then clears the
 bundle, always into the trash. `scope = "markdown"` acts on `.md` files only, `"bundle"` on the whole entry,
@@ -311,8 +310,8 @@ blocked docs/work/eng-9-handoff: kept by strategy
 ```
 
 Reasons: `no strategy saved`, `not a bundle`, `live`, `unlinked` (only a `linked` bundle is
-cleared), `links outside the repository` (the bundle, or with `scope = "markdown"` any entry in it, resolves outside the repository through a symbolic link or Windows junction; a link inside a bundle cleared whole is removed, not followed), `kept by strategy`
-(its class or doc root says keep), `no Markdown in scope` (`scope = "markdown"` and the bundle holds no `.md` file), `promote it first (--promoted)` and `the promoted copy is not on
+cleared), `links outside the repository` (the bundle, or with `scope = "markdown"` any entry in it, resolves outside the repository through a symbolic link or Windows junction; a link inside a bundle cleared whole moves to the trash as a link, not followed), `kept by strategy`
+(its doc root is a keep-root), `no Markdown in scope` (`scope = "markdown"` and the bundle holds no `.md` file), `promote it first (--promoted)` and `the promoted copy is not on
 origin`. A trashed bundle moves to `<git dir>/lumberjack-trash/<UTC timestamp>/<its path>`, which
 git never sees. `--purge-trash` deletes the timestamp folders older than `trash_days`, printing
 `purged <timestamp>` for each, or `trash: nothing past retention`.

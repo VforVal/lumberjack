@@ -1014,8 +1014,7 @@ def test_remove_reports_a_failed_removal_as_blocked(
     )
 
 
-STRATEGY = {"scope": "bundle", "ephemeral": "trash", "reference": "promote",
-            "trash_days": 30, "tracker": "github"}
+STRATEGY = {"scope": "bundle", "trash_days": 30}
 
 
 def strategy_settings(primary: Path, **override: object) -> None:
@@ -1055,33 +1054,31 @@ def test_clear_trashes_a_linked_bundle_with_a_timestamp(primary: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("override", "name", "reason"),
+    ("name", "reason"),
     [
-        ({"ephemeral": "keep"}, "eng-132-handoff", "kept by strategy"),
-        ({}, "eng-3-handoff", "live"),  # the open eng-3 worktree carries it
-        ({}, "scratch", "unlinked"),
+        ("eng-3-handoff", "live"),  # the open eng-3 worktree carries it
+        ("scratch", "unlinked"),
     ],
 )
-def test_clear_refuses_kept_live_and_unlinked_bundles(
-    primary: Path, override: dict[str, object], name: str, reason: str
-) -> None:
-    strategy_settings(primary, **override)
+def test_clear_refuses_live_and_unlinked_bundles(primary: Path, name: str, reason: str) -> None:
+    strategy_settings(primary)
     write(primary, f"docs/work/{name}/a.md", "x")
     assert clear(primary, f"docs/work/{name}") == (1, f"blocked docs/work/{name}: {reason}")
     assert (primary / f"docs/work/{name}/a.md").exists() and not trash_folders(primary)
     assert clear(primary, "docs/work/missing")[1] == "blocked docs/work/missing: not a bundle"
 
 
-def test_clear_delete_with_markdown_scope_leaves_other_files(primary: Path) -> None:
-    strategy_settings(primary, ephemeral="delete", scope="markdown")
+def test_clear_with_markdown_scope_trashes_only_markdown(primary: Path) -> None:
+    strategy_settings(primary, scope="markdown")
     write(primary, "docs/work/eng-133-draft/a.md", "Ticket: eng-133\n")
     write(primary, "docs/work/eng-133-draft/deep/b.MD", "x")
     write(primary, "docs/work/eng-133-draft/out.log", "keep")
-    assert clear(primary, "docs/work/eng-133-draft") == (
-        0, "cleared docs/work/eng-133-draft: deleted"
-    )
+    code, line = clear(primary, "docs/work/eng-133-draft")
+    (folder,) = trash_folders(primary)
+    assert (code, line) == (0, f"cleared docs/work/eng-133-draft: trashed {folder.name}")
     left = [p.name for p in (primary / "docs/work/eng-133-draft").rglob("*") if p.is_file()]
-    assert left == ["out.log"] and not trash_folders(primary)
+    assert left == ["out.log"]
+    assert sorted(p.name for p in folder.rglob("*") if p.is_file()) == ["a.md", "b.MD"]
 
 
 def link_dir(link: Path, target: Path) -> None:
@@ -1105,7 +1102,7 @@ def outside_dir(primary: Path) -> Path:
 def test_clear_refuses_a_bundle_that_is_a_link_out_of_the_repository(
     primary: Path, scope: str
 ) -> None:
-    strategy_settings(primary, ephemeral="delete", scope=scope)
+    strategy_settings(primary, scope=scope)
     outside = outside_dir(primary)
     link_dir(primary / "docs/work/eng-136-notes", outside)
     assert clear(primary, "docs/work/eng-136-notes") == (
@@ -1115,11 +1112,8 @@ def test_clear_refuses_a_bundle_that_is_a_link_out_of_the_repository(
     assert os.access(outside / "keep.md", os.W_OK)
 
 
-@pytest.mark.parametrize("action", ["delete", "trash"])
-def test_clear_refuses_a_link_nested_in_a_markdown_scope_bundle(
-    primary: Path, action: str
-) -> None:
-    strategy_settings(primary, ephemeral=action, scope="markdown")
+def test_clear_refuses_a_link_nested_in_a_markdown_scope_bundle(primary: Path) -> None:
+    strategy_settings(primary, scope="markdown")
     outside = outside_dir(primary)
     write(primary, "docs/work/eng-136-notes/own.md", "Ticket: eng-136\n")
     link_dir(primary / "docs/work/eng-136-notes/linked", outside)
@@ -1130,11 +1124,8 @@ def test_clear_refuses_a_link_nested_in_a_markdown_scope_bundle(
     assert (primary / "docs/work/eng-136-notes/own.md").exists() and not trash_folders(primary)
 
 
-@pytest.mark.parametrize("action", ["delete", "trash"])
-def test_clearing_a_whole_bundle_drops_a_nested_link_but_not_its_target(
-    primary: Path, action: str
-) -> None:
-    strategy_settings(primary, ephemeral=action, scope="bundle")
+def test_clearing_a_whole_bundle_drops_a_nested_link_but_not_its_target(primary: Path) -> None:
+    strategy_settings(primary, scope="bundle")
     outside = outside_dir(primary)
     write(primary, "docs/work/eng-136-notes/own.md", "Ticket: eng-136\n")
     link_dir(primary / "docs/work/eng-136-notes/linked", outside)
@@ -1155,12 +1146,11 @@ def test_clear_with_markdown_scope_blocks_when_nothing_is_in_scope(primary: Path
     assert not trash_folders(primary)
 
 
-def test_root_override_keeps_a_bundle_the_class_action_would_trash(primary: Path) -> None:
+def test_keep_root_keeps_a_bundle_the_rule_would_trash(primary: Path) -> None:
     settings(
         primary,
         'doc_roots = ["docs/work", "docs/handoffs"]\n'
-        'doc_strategy = {scope = "bundle", ephemeral = "trash", reference = "promote",'
-        ' trash_days = 30, tracker = "github", roots = {"./docs/handoffs/" = "keep"}}\n',
+        'doc_strategy = {scope = "bundle", trash_days = 30, roots = {"./docs/handoffs/" = "keep"}}\n',
     )
     write(primary, "docs/handoffs/eng-139-a/a.md", "Ticket: eng-139\n")
     write(primary, "docs/work/eng-139-b/a.md", "Ticket: eng-139\n")
@@ -1183,16 +1173,15 @@ def test_each_doc_row_names_the_action_its_strategy_gives_it(
     settings(
         primary,
         'doc_roots = ["docs/work", "docs/handoffs", "docs/lab"]\n'
-        'doc_strategy = {scope = "bundle", ephemeral = "trash", reference = "promote",'
-        ' trash_days = 30, tracker = "github",'
-        ' roots = {"docs/handoffs" = "keep", "docs/lab" = "delete"}}\n',
+        'doc_strategy = {scope = "bundle", trash_days = 30,'
+        ' roots = {"docs/handoffs" = "keep", "docs/lab" = "keep"}}\n',
     )
     actions = {p: d["action"] for p, d in docs_by_path(primary, capsys).items()}
     assert actions == {
         "docs/work/eng-142-handoff": "trash",
         "docs/work/eng-143-research": "promote",
-        "docs/handoffs/eng-144-a": "keep",  # the root's entry wins over the class action
-        "docs/lab/eng-145-research": "keep",  # delete does not fit a reference bundle
+        "docs/handoffs/eng-144-a": "keep",  # a keep-root wins over the class action
+        "docs/lab/eng-145-research": "keep",
     }
 
 
@@ -1235,7 +1224,8 @@ def test_reference_bundle_is_cleared_once_a_tracked_doc_is_on_origin(primary: Pa
     # Stale origin/main, as when the promotion merged after the session's fetch: --clear fetches.
     git(primary, "update-ref", "refs/remotes/origin/main", "HEAD~1")
     assert clear(primary, bundle, "--promoted", "findings.md")[0] == 0
-    strategy_settings(primary, reference="keep")
+    settings(primary, 'doc_roots = ["docs/work"]\n'
+             'doc_strategy = {scope = "bundle", trash_days = 30, roots = {"docs/work" = "keep"}}\n')
     write(primary, f"{bundle}/a.md", "Ticket: eng-135\n")
     assert clear(primary, bundle, "--promoted", "findings.md") == (
         1, f"blocked {bundle}: kept by strategy"
