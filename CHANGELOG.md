@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
+
+Upgrade: the hooks now need Python 3.11+ on PATH as `python3` or `python`; `uv` is no longer
+used. Install Python 3.11+ if `uv` was your only source of it, then re-run `/lumberjack:setup`
+to refresh the post-merge hook and pick `doc_roots`.
+
+Doc cleanup is now by rule, not by prompt: once a `doc_strategy` is saved (`/lumberjack:cleanup`
+asks for it once; with none saved nothing moves), every session start and post-merge sweep moves
+each `linked` `ephemeral` bundle that has stayed linked for `grace_days` into
+`.git/lumberjack-trash/<UTC timestamp>/`, under its repository path. Reference, live and keep-root
+(`doc_strategy.roots`) bundles stay. Set `cleanup = "report"` to see `would trash` lines instead,
+or `"keep"` to move nothing, worktrees included; move a bundle back out of the trash to restore it before `trash_days`
+purges it.
 
 - The sweep, `--cleanup` and `--remove` no longer remove a worktree a session may have
   just started in: one added less than 24 hours ago whose branch has not moved since it
@@ -33,7 +45,6 @@
   `ignored files` block the command groups the stray files by what produced them and asks
   once per group whether to delete, ignore or commit them, then retries `--remove`. The
   `lumberjack` skill gives agents the same rule for a `blocked ...: dirty` line.
-
 - `doc_strategy`: a new setting `/lumberjack:cleanup` asks for once when `doc_roots` holds linked
   bundles (`scope`, `trash_days`, `grace_days` and optional keep-`roots`) and saves with the new
   `setup_lumberjack.py strategy <file.json>`; a re-run of setup keeps it. Until it is saved nothing
