@@ -143,7 +143,8 @@ def parse_config(table: Config, source: str = "") -> Config:
     ):
         raise ConfigError(
             "lumberjack: doc_strategy must be empty or set scope (markdown or bundle) and"
-            " trash_days (at least 1) and grace_days (0 or more), optionally roots (each root = \"keep\")", source,
+            " trash_days (at least 1) and grace_days (0 or more), optionally roots"
+            " (each root = \"keep\")", source,
         )
     if roots:
         strategy["roots"] = {posixpath.normpath(r): a for r, a in roots.items()}
@@ -624,9 +625,11 @@ def grace_wait(primary: Path, strategy: Config, marked: list[Row]) -> list[Row]:
 
     The state file holds {bundle path: first UTC date seen linked}. Anything unreadable counts as
     empty, so a damaged file only restarts the count; a bundle no longer marked loses its date."""
-    state, today = trash_dir(primary).with_name("lumberjack-docs.json"), datetime.now(timezone.utc).date()
+    state = trash_dir(primary).with_name("lumberjack-docs.json")
+    today = datetime.now(timezone.utc).date()
     try:
-        seen = {k: min(date.fromisoformat(v), today) for k, v in json.loads(state.read_text("utf-8")).items()}
+        saved = json.loads(state.read_text("utf-8"))
+        seen = {k: min(date.fromisoformat(v), today) for k, v in saved.items()}
     except (OSError, ValueError, AttributeError, TypeError, RecursionError):
         seen = {}
     kept = {d["path"]: seen.get(d["path"], today) for d in marked}
@@ -928,7 +931,7 @@ def trash_docs(primary: Path, cfg: Config, report: Row, deadline: float) -> tupl
     if cfg["cleanup"] == "keep":
         return 0, []
     waiting = grace_wait(primary, cfg["doc_strategy"], marked)
-    out = list(map(doc_line, waiting))  # inside grace_days: the normal doc line, not trashed or counted
+    out = list(map(doc_line, waiting))  # inside grace_days: its doc line, not trashed or counted
     due = [d for d in marked if d not in waiting]
     if cfg["cleanup"] == "report":
         return 0, out + [f"doc {d['class']} {d['path']}: would trash" for d in due]

@@ -1420,6 +1420,32 @@ def test_a_damaged_state_file_never_trashes_early_and_is_rewritten(
     assert recorded(primary) == {BUNDLE: datetime.now(timezone.utc).date().isoformat()}
 
 
+def test_a_deeply_nested_state_file_counts_as_empty(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    (primary / ".git" / STATE).write_text("[" * 200000)  # json raises RecursionError
+    assert cleanup(primary)[0].endswith("docs 0") and (primary / BUNDLE / "a.md").exists()
+    assert recorded(primary) == {BUNDLE: datetime.now(timezone.utc).date().isoformat()}
+
+
+def test_keep_mode_never_creates_the_state_file(primary: Path) -> None:
+    grace_bundle(primary, 3, "keep")
+    cleanup(primary)
+    assert not (primary / ".git" / STATE).exists()
+
+
+def test_reference_and_keep_root_bundles_get_no_date(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    write(primary, "docs/work/eng-162-research/a.md", "x\n")  # reference
+    write(primary, "docs/handoffs/eng-163-a/a.md", "x\n")  # under a keep-root
+    (primary / ".lumberjack.toml").write_text(
+        (primary / ".lumberjack.toml").read_text().replace(
+            '"docs/work"]', '"docs/work", "docs/handoffs"]'
+        ).replace("grace_days = 3}", 'grace_days = 3, roots = {"docs/handoffs" = "keep"}}')
+    )
+    cleanup(primary)
+    assert list(recorded(primary)) == [BUNDLE]
+
+
 def test_an_unwritable_state_file_never_trashes_early_or_fails_the_session_start(primary: Path) -> None:
     grace_bundle(primary, 3)
     (primary / ".git" / STATE).mkdir()  # reads and writes both fail
