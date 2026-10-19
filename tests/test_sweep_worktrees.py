@@ -1280,15 +1280,20 @@ def test_report_keep_and_no_strategy_purge_no_trash(primary: Path, mode: str) ->
     assert (f"trash {OLD}: would purge" in out) is (mode == "report")
 
 
+def tick_clock(m: pytest.MonkeyPatch) -> None:
+    """The sweep's clock advances one second per check, so a budget ends after that many checks."""
+    ticks = iter(range(10**6))
+    m.setattr(sweep_worktrees, "time", types.SimpleNamespace(monotonic=lambda: next(ticks), time=time.time))
+
+
 def test_purge_stops_at_the_budget_and_a_later_session_start_finishes_it(
     primary: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     strategy_settings(primary, trash_days=7)
     folder = old_trash(primary, files=40).joinpath(OLD)
-    ticks = iter(range(10**6))  # the clock advances one per check, so the budget ends mid-folder
-    with monkeypatch.context() as short:
+    with monkeypatch.context() as short:  # the budget ends mid-folder
         short.setattr(sweep_worktrees, "DOC_SECONDS", 25)
-        short.setattr(sweep_worktrees, "time", types.SimpleNamespace(monotonic=lambda: next(ticks), time=time.time))
+        tick_clock(short)
         out = sweep_worktrees.cleanup_session(primary)
     left = sum(1 for _ in folder.rglob("*.md"))
     assert 0 < left < 40 and not any(line.startswith("purged") for line in out)
@@ -1413,9 +1418,9 @@ def test_markdown_walk_stops_at_the_deadline_and_moves_nothing(primary: Path) ->
     cfg = sweep_worktrees.load_config(primary)
     docs = {d["path"]: d for d in sweep_worktrees.build_report(primary, cfg)["docs"]}
     bundle = "docs/work/eng-150-handoff"
-    assert sweep_worktrees.clear_bundle(primary, cfg, docs, bundle, "", "stamp", deadline=0) == (False, "")
+    assert sweep_worktrees.clear_bundle(primary, cfg, docs, bundle, "", "stamp", deadline=0) == ("timeout", "")
     assert (primary / bundle / "a.md").exists() and not trash_folders(primary)
-    assert sweep_worktrees.clear_bundle(primary, cfg, docs, bundle, "", "stamp")[0]
+    assert sweep_worktrees.clear_bundle(primary, cfg, docs, bundle, "", "stamp")[0] == "partial"
     assert not (primary / bundle / "a.md").exists() and (primary / bundle / "run/out.log").exists()
 
 
@@ -1427,58 +1432,51 @@ def test_session_start_skips_a_bundle_with_no_markdown_left_silently(
     first = cleanup(primary)
     assert first[0].endswith("docs 1") and any(l.startswith("cleared docs/work/eng-150-handoff: ") for l in first)
     assert recorded(primary, "skipped") == ["docs/work/eng-150-handoff"]
-    walked: list[str] = []
-    real = sweep_worktrees.clear_bundle
-    with monkeypatch.context() as spy:
-        spy.setattr(sweep_worktrees, "clear_bundle", lambda *a, **k: walked.append(a[3]) or real(*a, **k))
-        sweep_worktrees.cleanup_session(primary)
-    assert walked == []  # remembered as bare: not walked at every session start
     again = cleanup(primary)
     assert again[0].endswith("blocked 2, unverified 3, orphans 0, docs 0")  # the two worktrees only
     assert not any("no Markdown in scope" in line for line in again)
     assert clear(primary, "docs/work/eng-150-handoff") == (
         1, "blocked docs/work/eng-150-handoff: no Markdown in scope"
     )
+    write(primary, "docs/work/eng-150-handoff/late.md", "x\n")
+    sweep_worktrees.cleanup_session(primary)
+    assert (primary / "docs/work/eng-150-handoff/late.md").exists()  # skipped: not walked again
+    assert clear(primary, "docs/work/eng-150-handoff")[0] == 0  # --clear takes it
 
 
 def test_a_bundle_too_large_to_walk_in_time_is_left_to_the_cleanup_command(
     primary: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     rule_bundles(primary, scope="markdown")
+    big = "docs/work/eng-150-handoff"
+    for n in range(40):
+        write(primary, f"{big}/n{n}.md", "x\n")
     write(primary, "docs/work/eng-153-handoff/a.md", "x\n")
-    big, walked = "docs/work/eng-150-handoff", []
-    real = sweep_worktrees.clear_bundle
-
-    def runs_out(*a: object, **k: object) -> tuple[bool, str]:  # its walk always outlasts the budget
-        walked.append(a[3])
-        return (False, "") if a[3] == big else real(*a, **k)  # type: ignore[arg-type]
-
-    with monkeypatch.context() as spy:
-        spy.setattr(sweep_worktrees, "clear_bundle", runs_out)
+    with monkeypatch.context() as short:  # its walk outlasts all of trashing's time
+        short.setattr(sweep_worktrees, "DOC_SECONDS", 10)
+        short.setattr(sweep_worktrees, "PURGE_SECONDS", 0)
+        tick_clock(short)
         out = sweep_worktrees.cleanup_session(primary)
-        assert f"blocked {big}: too large to walk in time" in out and out[0].endswith("docs 1")
-        assert recorded(primary, "skipped") == [big]
-        walked.clear()
-        sweep_worktrees.cleanup_session(primary)
-        assert walked == []  # the next bundles get the budget instead
+    assert f"blocked {big}: too large to walk in time" in out and out[0].endswith("docs 0")
+    assert recorded(primary, "skipped") == [big]
+    assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")  # the next bundle gets the time
+    assert (primary / big / "a.md").exists() and not (primary / "docs/work/eng-153-handoff").exists()
     assert clear(primary, big)[0] == 0  # --clear has no deadline
 
 
 def test_trashing_never_takes_the_time_purging_needs(
     primary: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    rule_bundles(primary)
+    rule_bundles(primary, scope="markdown")
+    for n in range(40):  # a walk that runs until trashing's deadline
+        write(primary, f"docs/work/eng-150-handoff/n{n}.md", "x\n")
     trash = old_trash(primary)
-    monkeypatch.setattr(sweep_worktrees, "DOC_SECONDS", 2)
-    monkeypatch.setattr(sweep_worktrees, "PURGE_SECONDS", 1)
-
-    def slow(*a: object, **k: object) -> tuple[bool, str]:  # trashing runs until its deadline
-        time.sleep(max(0.0, a[6] - time.monotonic()))  # type: ignore[operator]
-        return False, ""
-
-    monkeypatch.setattr(sweep_worktrees, "clear_bundle", slow)
-    assert "purged " + OLD in sweep_worktrees.cleanup_session(primary)
-    assert not (trash / OLD).exists()
+    monkeypatch.setattr(sweep_worktrees, "DOC_SECONDS", 20)
+    monkeypatch.setattr(sweep_worktrees, "PURGE_SECONDS", 10)
+    tick_clock(monkeypatch)
+    out = sweep_worktrees.cleanup_session(primary)
+    assert "blocked docs/work/eng-150-handoff: too large to walk in time" in out
+    assert "purged " + OLD in out and not (trash / OLD).exists()
 
 
 def test_slow_branch_checks_never_eat_the_doc_budget(
@@ -1497,17 +1495,26 @@ def test_slow_branch_checks_never_eat_the_doc_budget(
     assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")
 
 
-def test_trashing_a_bundle_looks_up_the_trash_folder_once(
+def test_a_session_start_looks_up_the_git_folder_once(
     primary: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     rule_bundles(primary, scope="markdown")
     for n in range(10):
         write(primary, f"docs/work/eng-150-handoff/n{n}.md", "x\n")
-    calls: list[Path] = []
-    real = sweep_worktrees.trash_dir
-    monkeypatch.setattr(sweep_worktrees, "trash_dir", lambda p: calls.append(p) or real(p))
-    assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")
-    assert len(calls) < 5  # not one git call per moved file
+    trash = old_trash(primary)
+    write(trash, "20190101T000000Z/a.md", "x")  # a second expired folder
+    calls: list[tuple[str, ...]] = []
+    real = sweep_worktrees.git
+
+    def counting(cwd: Path, *args: str, **k: object) -> subprocess.CompletedProcess[str]:
+        if cwd == primary:
+            calls.append(args)
+        return real(cwd, *args, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sweep_worktrees, "git", counting)
+    out = sweep_worktrees.cleanup_session(primary)
+    assert out[0].endswith("docs 1") and "purged " + OLD in out and "purged 20190101T000000Z" in out
+    assert sum("--absolute-git-dir" in a for a in calls) == 1  # not one git call per file or folder
 
 
 def test_markdown_trash_removes_the_folders_it_empties(primary: Path) -> None:

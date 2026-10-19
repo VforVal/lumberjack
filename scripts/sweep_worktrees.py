@@ -1,6 +1,7 @@
 """Inventory worktrees, orphan directories, branches and the primary checkout."""
 
 import argparse
+import functools
 import glob
 import json
 import math
@@ -58,6 +59,7 @@ DOC_SECONDS = 7  # trashing and purging, timed after the report; with fetch and 
 PURGE_SECONDS = 3  # the end of DOC_SECONDS kept for purging, so trashing never starves it
 NO_MARKDOWN = "no Markdown in scope"
 TOO_LARGE = "too large to walk in time"
+DOC_STATE = "lumberjack-docs.json"  # next to the trash: first-seen dates and skipped bundles
 
 
 def is_folder(entry: os.DirEntry[str]) -> bool:
@@ -616,23 +618,31 @@ def linked_docs(report: Row) -> list[Row]:
     return [d for d in report["docs"] if d["state"] == "linked"]
 
 
+@functools.cache  # the git folder never moves during a run; one git call, not one per file
 def trash_dir(primary: Path) -> Path:
     # Inside .git: never tracked, never untracked, never in a worktree removal check.
     return Path(git(primary, "rev-parse", "--absolute-git-dir").stdout.strip()) / "lumberjack-trash"
 
 
-def doc_state(primary: Path) -> tuple[Path, dict[str, date], set[str]]:
-    """The state file, the first UTC date a session start saw each bundle linked, and the skipped bundles.
+def doc_state(primary: Path) -> tuple[dict[str, date], set[str]]:
+    """The first UTC date a session start saw each bundle linked, and the skipped bundles.
 
     A skipped bundle has nothing left in scope, or is too large to walk in time, so session start
     leaves it (to the cleanup command). Anything unreadable counts as empty, so a damaged file only
     restarts the count."""
-    state = trash_dir(primary).with_name("lumberjack-docs.json")
     try:
-        saved = json.loads(state.read_text("utf-8"))
-        return state, {k: date.fromisoformat(v) for k, v in saved["since"].items()}, set(saved["skipped"])
+        saved = json.loads(trash_dir(primary).with_name(DOC_STATE).read_text("utf-8"))
+        return {k: date.fromisoformat(v) for k, v in saved["since"].items()}, set(saved["skipped"])
     except (OSError, ValueError, AttributeError, TypeError, KeyError, RecursionError):
-        return state, {}, set()
+        return {}, set()
+
+
+def save_doc_state(primary: Path, since: dict[str, date], skipped: set[str]) -> None:
+    saved = {"since": {k: v.isoformat() for k, v in since.items()}, "skipped": sorted(skipped)}
+    try:
+        trash_dir(primary).with_name(DOC_STATE).write_text(json.dumps(saved), "utf-8")
+    except OSError:  # without a date the bundle waits; grace_days = 0 needs none
+        pass
 
 
 def trash_rows(primary: Path, cfg: Config) -> list[Row]:
@@ -802,8 +812,8 @@ def remove_named(start: Path, target: str) -> tuple[bool, str]:
     return outcome == "cleaned", line
 
 
-def clear_bundles(start: Path, targets: list[str], promoted: str = "") -> list[tuple[bool, str]]:
-    """Trash linked bundles as the saved strategy says; (done, output line) each."""
+def clear_bundles(start: Path, targets: list[str], promoted: str = "") -> list[tuple[str, str]]:
+    """Trash linked bundles as the saved strategy says; (status, output line) each, as clear_bundle."""
     primary = find_primary(start)
     cfg = load_config(primary)
     if promoted:
@@ -815,9 +825,12 @@ def clear_bundles(start: Path, targets: list[str], promoted: str = "") -> list[t
 
 def clear_bundle(
     primary: Path, cfg: Config, docs: dict[str, Row], target: str, promoted: str, stamp: str,
-    deadline: float | None = None,
-) -> tuple[bool, str]:
-    """Trash one bundle; (done, output line). Past a deadline the scan stops with nothing moved: (False, "")."""
+    deadline: float = math.inf,
+) -> tuple[str, str]:
+    """Trash one bundle; (status, output line).
+
+    Status: `cleared` (gone), `partial` (its Markdown moved, other files stay), `blocked`,
+    `skip` (no Markdown in scope) or `timeout` (past the deadline, nothing moved, line empty)."""
     strategy, rel = cfg["doc_strategy"], posixpath.normpath(target.replace("\\", "/"))
     doc = docs.get(rel)
     action = doc["action"] if doc else ""
@@ -838,27 +851,27 @@ def clear_bundle(
         else ""
     )
     if reason:
-        return False, f"blocked {rel}: {reason}"
+        return "blocked", f"blocked {rel}: {reason}"
     path, root = primary / rel, primary.resolve()
     # A link (symlink or Windows junction) can lead a bundle out of the repository; move takes
     # a bundle cleared whole, and a link nested in it, as a link, so the target survives.
     if not path.resolve().is_relative_to(root):
-        return False, f"blocked {rel}: links outside the repository"
+        return "blocked", f"blocked {rel}: links outside the repository"
     inner = []
     # rglob("*") yields a nested link itself on every platform (Windows also walks into junctions),
     # and Markdown scope moves the files it finds: any that resolves elsewhere is not the bundle's.
     for entry in path.rglob("*") if strategy["scope"] == "markdown" and path.is_dir() else ():
-        if deadline is not None and time.monotonic() > deadline:
-            return False, ""  # nothing has moved: the next session start scans it again
+        if time.monotonic() > deadline:
+            return "timeout", ""  # nothing has moved: the next session start scans it again
         if not entry.resolve().is_relative_to(root / rel):
-            return False, f"blocked {rel}: links outside the bundle"
+            return "blocked", f"blocked {rel}: links outside the bundle"
         inner.append(entry)
     # shortcut: markdown scope matches the .md suffix only; widen it if other text formats matter.
     units = [path] if strategy["scope"] == "bundle" else [
         f for f in (inner if path.is_dir() else [path]) if f.suffix.lower() == ".md"
     ]
     if not units:
-        return False, f"blocked {rel}: {NO_MARKDOWN}"
+        return "skip", f"blocked {rel}: {NO_MARKDOWN}"
     folder = trash_dir(primary) / stamp
     for unit in units:  # only the purge deletes; a cleared bundle always goes to the trash
         dest = folder / unit.relative_to(primary)
@@ -870,7 +883,7 @@ def clear_bundle(
             os.rmdir(left)
         except OSError:
             pass
-    return True, f"cleared {rel}: trashed {stamp}"
+    return "partial" if path.exists() else "cleared", f"cleared {rel}: trashed {stamp}"
 
 
 def remove(func: Callable[[str], object], path: str) -> None:
@@ -961,7 +974,7 @@ def trash_docs(primary: Path, cfg: Config, report: Row, deadline: float) -> tupl
     marked = [d for d in linked_docs(report) if d["action"] == "trash"]
     if cfg["cleanup"] == "keep":
         return 0, []
-    state, seen, skipped = doc_state(primary)
+    seen, skipped = doc_state(primary)
     today = datetime.now(timezone.utc).date()
     # One no longer marked is dropped; a future date (a clock that ran ahead) becomes today.
     since = {d["path"]: min(seen.get(d["path"], today), today) for d in marked}
@@ -980,34 +993,30 @@ def trash_docs(primary: Path, cfg: Config, report: Row, deadline: float) -> tupl
         if time.monotonic() > deadline:
             break
         try:
-            moved, line = clear_bundle(primary, cfg, docs, doc["path"], "", stamp, deadline)
+            status, line = clear_bundle(primary, cfg, docs, doc["path"], "", stamp, deadline)
         except (OSError, RuntimeError) as error:  # the session start never raises
             # RuntimeError: a symlink loop in resolve(); an OSError message would carry an absolute path
             reason = getattr(error, "strerror", None) or "cannot read the bundle"
-            moved, line = False, f"blocked {doc['path']}: {reason}"
-        if moved:  # a trashed bundle loses its date, so one restored from the trash starts over
+            status, line = "blocked", f"blocked {doc['path']}: {reason}"
+        if status == "timeout" and n == 0:  # its walk outlasted all of trashing's time: it would every run
+            skip.add(doc["path"])  # so it is left to the cleanup command, said once
+            line = f"blocked {doc['path']}: {TOO_LARGE}"
+        if status in ("cleared", "partial"):  # a trashed bundle loses its date: restored, it starts over
             trashed += 1
             del since[doc["path"]]
-        if not line and n == 0:  # its walk outlasted all of trashing's time: it would every run
-            line = f"blocked {doc['path']}: {TOO_LARGE}"
         # shortcut: a skipped bundle stays skipped while linked, so a new .md in it needs --clear;
         # recheck skipped bundles by mtime if new files in them turn out to matter.
-        if line.endswith((NO_MARKDOWN, TOO_LARGE)) or (moved and (primary / doc["path"]).exists()):
-            skip.add(doc["path"])  # not worth walking again; only the too-large one says so, once
-        if line and not line.endswith(NO_MARKDOWN):
+        if status in ("partial", "skip"):
+            skip.add(doc["path"])  # nothing left in scope: not worth walking again
+        if line and status != "skip":
             out.append(line)
     if (since, skip) != (seen, skipped):
-        try:
-            state.write_text(json.dumps({
-                "since": {k: v.isoformat() for k, v in since.items()}, "skipped": sorted(skip),
-            }), "utf-8")
-        except OSError:  # without a date the bundle waits; grace_days = 0 needs none
-            pass
+        save_doc_state(primary, since, skip)
     return trashed, out
 
 
 def run_cleanup(
-    primary: Path, cfg: Config, report: Row, stale: bool, here: Path | None, deadline: float
+    primary: Path, cfg: Config, report: Row, stale: bool, here: Path | None
 ) -> list[str]:
     """Remove verified-landed, clean, pushed worktrees (the branch stays); one line per event."""
     mode, trunk = cfg["cleanup"], cfg["primary_branch"]
@@ -1040,6 +1049,7 @@ def run_cleanup(
     counts["cleaned"] += cleaned
     out += orphan_lines
     out += map(doc_line, (d for d in linked_docs(report) if d["action"] != "trash"))
+    deadline = time.monotonic() + DOC_SECONDS  # started here, so slow git, gh or removals never eat it
     trashed, doc_lines = trash_docs(primary, cfg, report, deadline - PURGE_SECONDS)
     if mode == "report":
         doc_lines += [f"trash {t['name']}: would purge" for t in report["trash"]]
@@ -1153,8 +1163,7 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
         return [f"sweep: origin/{trunk} is missing; skipped", *notes]
     try:
         report = build_report(primary, cfg, stale)
-        deadline = time.monotonic() + DOC_SECONDS  # after the report, so slow git or gh never eats it
-        return [*run_cleanup(primary, cfg, report, stale, here, deadline), *notes]
+        return [*run_cleanup(primary, cfg, report, stale, here), *notes]
     except OSError as error:
         return [f"sweep: unavailable ({error})", *notes]
 
@@ -1270,7 +1279,7 @@ def main(argv: list[str] | None = None) -> int:
         except ConfigError as error:
             raise SystemExit(error) from error
         print("\n".join(line for _, line in results))
-        return 0 if all(cleared for cleared, _ in results) else 1
+        return 0 if all(status in ("cleared", "partial") for status, _ in results) else 1
     if args.remove is not None:
         try:
             removed, line = remove_named(Path.cwd(), args.remove)
