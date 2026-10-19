@@ -18,6 +18,8 @@ from typing import Any
 from sweep_worktrees import (
     CACHE_DIRS,
     DEFAULTS,
+    HOOK_BEGIN,
+    HOOK_END,
     HOOK_MARKERS,
     ConfigError,
     config_table,
@@ -158,7 +160,7 @@ def hook_facts(repo: Path, hooks_path: str | None) -> Facts | None:
         return None
     text = path.read_text(encoding="utf-8", errors="replace")
     first = text.splitlines()[0] if text else ""
-    has_marker = BEGIN in text
+    has_marker = HOOK_BEGIN in text
     if has_marker:
         first = re.match(r"(?:[ \t]*(?:#(?!\!)[^\n]*)?\n)*(.*)", text).group(1)
     return {
@@ -292,7 +294,6 @@ def config_text(answers: Facts) -> str:
 
 
 MD_MARKERS = ("<!-- >>> lumberjack -->", "<!-- <<< lumberjack -->")
-BEGIN, END = HOOK_MARKERS
 LEGACY_RUN = 'uv run --quiet --script "$(git config --get lumberjack.script)" --cleanup'
 # First of python3, python that reports 3.11+; empty when none does. No quotes: pre-commit
 # wraps it in sh -c '...'.
@@ -306,13 +307,13 @@ SAFE_RUN = (
     'test -f "$(git config --get lumberjack.script)" && '
     f'{PYTHON} && test -n "$python" && {RUN} || true'
 )
-BLOCK = f"""{BEGIN}
+BLOCK = f"""{HOOK_BEGIN}
 script="$(git config --get lumberjack.script)"
 {PYTHON}
 if [ -f "$script" ] && [ -n "$python" ]; then
   "$python" "$script" --cleanup || true
 fi
-{END}
+{HOOK_END}
 """
 INSTRUCTIONS = f"""{MD_MARKERS[0]}
 ## Lumberjack
@@ -418,12 +419,12 @@ def husky_hook(repo: Path) -> None:
 def lefthook_hook(repo: Path) -> None:
     # Always the local file: lefthook merges it into lefthook.yml, and the plain hook
     # cannot coexist (lefthook install refuses core.hooksPath and renames .git/hooks/post-merge).
-    job = f"""{BEGIN}
+    job = f"""{HOOK_BEGIN}
 post-merge:
   jobs:
     - name: lumberjack
       run: {SAFE_RUN}
-{END}
+{HOOK_END}
 """
     write_merged(repo, "lefthook-local.yml", job)
     print("note: run lefthook install to activate the hook")
@@ -437,7 +438,7 @@ def pre_commit_hook(repo: Path) -> None:
     item = re.search(r"^( *)- +repo:", text, re.M)
     i = item.group(1) if item else "  "
     entry = f"sh -c '{SAFE_RUN}'"
-    block = f"""{i}{BEGIN}
+    block = f"""{i}{HOOK_BEGIN}
 {i}- repo: local
 {i}  hooks:
 {i}    - id: lumberjack
@@ -447,7 +448,7 @@ def pre_commit_hook(repo: Path) -> None:
 {i}      stages: [post-merge]
 {i}      always_run: true
 {i}      pass_filenames: false
-{i}{END}
+{i}{HOOK_END}
 """
     text += "" if text.endswith("\n") else "\n"
     write_file(repo, path.name, merge_block(text, block, after=r"^repos:[ \t]*\n"))

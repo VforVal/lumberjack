@@ -968,7 +968,7 @@ def test_the_sweep_and_remove_both_keep_the_primary_and_prototypes(primary: Path
     ):
         row = {"path": str(path), "branch": branch, "head": "", "dirty": 0, "tier": "integrated"}
         for explicit in (False, True):
-            assert sweep_worktrees.block_reason(primary, cfg, row, None, explicit) == reason
+            assert sweep_worktrees.block_reason(primary, cfg, row, None, explicit=explicit) == reason
 
 
 def test_remove_takes_a_detached_worktree_whose_commit_is_on_a_branch(primary: Path) -> None:

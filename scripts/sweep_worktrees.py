@@ -546,6 +546,15 @@ def mentioned(primary: Path, primary_branch: str, names: list[str], shas: list[s
     return {name for name in names if name in text}
 
 
+def bundle_action(strategy: Config, root: str, kind: str) -> str:
+    """The saved strategy's action for a bundle of this root and class; empty with no strategy."""
+    if not strategy:
+        return ""
+    # The root's entry wins over the class action; one that does not fit the class keeps it.
+    action = strategy.get("roots", {}).get(root, strategy[kind])
+    return action if action in STRATEGY[kind] else "keep"
+
+
 def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verdict]) -> list[Row]:
     """Untracked doc-root bundles: class, tickets and live/linked/unlinked; size for linked."""
     # Any worktree counts, by branch or folder name, so a detached Codex worktree does too.
@@ -574,13 +583,11 @@ def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verd
         live = rel in named or name in named or carried & set(tickets)
         state = "live" if live else "linked" if tickets else "unlinked"
         kind = "reference" if any(w.lower() in name.lower() for w in words) else "ephemeral"
-        # The root's entry wins over the class action; one that does not fit the class keeps it.
-        action = strategy.get("roots", {}).get(root, strategy.get(kind, ""))
         rows.append({
             "path": rel,
             "root": root,
             "class": kind,
-            "action": action if not strategy or action in STRATEGY[kind] else "keep",
+            "action": bundle_action(strategy, root, kind),
             "state": state,
             "tickets": tickets,
             "size": tree_size(path, deadline) if state == "linked" else None,
@@ -700,7 +707,7 @@ def short_path(primary: Path, path: str | Path) -> str:
 
 
 def block_reason(
-    primary: Path, cfg: Config, w: Row, here: Path | None, explicit: bool = False
+    primary: Path, cfg: Config, w: Row, here: Path | None, *, explicit: bool = False
 ) -> str:
     """Why a worktree stays, or an empty string; explicit is a named --remove of any tier."""
     evidence = cfg["evidence_dir"] and Path(w["path"]) / cfg["evidence_dir"]
@@ -928,7 +935,8 @@ def run_cleanup(
     return [summary, *out]
 
 
-HOOK_MARKERS = ("# >>> lumberjack", "# <<< lumberjack")  # around setup's block in a hook file
+HOOK_BEGIN, HOOK_END = "# >>> lumberjack", "# <<< lumberjack"  # around setup's hook block
+HOOK_MARKERS = (HOOK_BEGIN, HOOK_END)
 
 
 def package_has(primary: Path, key: str) -> bool:
@@ -991,7 +999,7 @@ def self_heal(primary: Path) -> list[str]:
     hooks_path = git(primary, "config", "core.hooksPath").stdout.strip()
     hook = primary / ".githooks" / "post-merge"
     # Only our own hook (marked by setup) may claim core.hooksPath.
-    if hook.is_file() and HOOK_MARKERS[0] in hook.read_text(encoding="utf-8", errors="replace") and not hooks_path:
+    if hook.is_file() and HOOK_BEGIN in hook.read_text(encoding="utf-8", errors="replace") and not hooks_path:
         git(primary, "config", "core.hooksPath", ".githooks")
     return []
 
