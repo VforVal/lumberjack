@@ -103,6 +103,15 @@ def test_unknown_key_exits_2_and_writes_nothing(
     assert not (repo / ".lumberjack.toml").exists()
 
 
+def test_an_answer_toml_cannot_hold_exits_2_and_writes_nothing(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # json.dumps escapes an emoji as a surrogate pair, which TOML rejects.
+    code, _, err = apply(repo, capsys, ticket_prefix="eng-\U0001F600")
+    assert code == 2 and "bad TOML" in err
+    assert not (repo / ".lumberjack.toml").exists()
+
+
 def test_bad_cleanup_exits_2_and_writes_nothing(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

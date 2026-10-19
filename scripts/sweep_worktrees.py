@@ -968,12 +968,14 @@ def hook_manager(primary: Path) -> str:
 
 
 def manager_wired(primary: Path) -> bool:
-    for rel in (rel for _, files in HOOK_MANAGERS.values() for rel in files):
-        try:
-            if "lumberjack.script" in (primary / rel).read_text(encoding="utf-8", errors="replace"):
+    for _, files in HOOK_MANAGERS.values():
+        for rel in files:
+            try:
+                text = (primary / rel).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if "lumberjack.script" in text:
                 return True
-        except OSError:
-            continue
     return False
 
 

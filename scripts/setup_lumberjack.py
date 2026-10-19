@@ -288,6 +288,8 @@ def config_text(answers: Facts) -> str:
     text = f"# written by lumberjack setup {number}\n\n" + "\n".join(keys)
     try:  # validate through the parser sweep uses
         parse_config(tomllib.loads(text), ".lumberjack.toml")
+    except tomllib.TOMLDecodeError as error:
+        raise abort(f"lumberjack: bad TOML in .lumberjack.toml: {error}") from error
     except ConfigError as error:
         raise abort(str(error)) from error
     return text

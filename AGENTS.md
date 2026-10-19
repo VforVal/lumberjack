@@ -9,8 +9,8 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
 - `scripts/setup_lumberjack.py` - setup helper: `discover` prints repo facts as JSON (read-only),
   `apply ANSWERS.json` writes `.lumberjack.toml`, the post-merge hook (marker-bounded block),
   Claude settings, the CLAUDE.md/AGENTS.md block and `.gitignore` entries; never commits.
-  Imports `sweep_worktrees` for config parsing, remote URL parsing, `HOOK_MARKERS` and
-  `hook_manager` (detection from the `HOOK_MANAGERS` table).
+  Imports `sweep_worktrees` for config loading and `parse_config`, remote URL parsing, the hook
+  markers (`HOOK_BEGIN`, `HOOK_END`, `HOOK_MARKERS`) and `hook_manager` (`HOOK_MANAGERS` table).
 - `skills/lumberjack/SKILL.md` - the rules the script enforces.
 - `skills/cleanup/SKILL.md` - `/lumberjack:cleanup` (user-invoked only): runs `--cleanup`, then
   removes `unverified` and `landed-probable` worktrees one confirmed `--remove <path>` at a time.
