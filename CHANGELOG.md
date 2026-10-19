@@ -6,6 +6,14 @@ Upgrade: the hooks now need Python 3.11+ on PATH as `python3` or `python`; `uv` 
 used. Install Python 3.11+ if `uv` was your only source of it, then re-run `/lumberjack:setup`
 to refresh the post-merge hook and pick `doc_roots`.
 
+Doc cleanup is now by rule, not by prompt: once a `doc_strategy` is saved (`/lumberjack:cleanup`
+asks for it once; with none saved nothing moves), every session start and post-merge sweep moves
+each `linked` `ephemeral` bundle that has stayed linked for `grace_days` into
+`.git/lumberjack-trash/<UTC timestamp>/`, under its repository path. Reference, live and keep-root
+(`doc_strategy.roots`) bundles stay. Set `cleanup = "report"` to see `would trash` lines instead,
+or `"keep"` to move nothing, worktrees included; move a bundle back out of the trash to restore it before `trash_days`
+purges it.
+
 - The sweep, `--cleanup` and `--remove` no longer remove a worktree a session may have
   just started in: one added less than 24 hours ago whose branch has not moved since it
   was created is blocked as `fresh`, and one locked with `git worktree lock` is blocked as
