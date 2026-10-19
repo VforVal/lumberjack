@@ -1259,7 +1259,7 @@ def test_session_start_purges_trash_past_retention(primary: Path) -> None:
 
 @pytest.mark.parametrize("mode", ["report", "keep", "none"])
 def test_report_keep_and_no_strategy_purge_no_trash(primary: Path, mode: str) -> None:
-    saved = 'doc_strategy = {scope = "bundle", trash_days = 7}\n'
+    saved = 'doc_strategy = {scope = "bundle", trash_days = 7, grace_days = 0}\n'
     settings(primary, f'cleanup = "{"report" if mode == "none" else mode}"\n' + ("" if mode == "none" else saved))
     trash = old_trash(primary)
     out = cleanup(primary)
