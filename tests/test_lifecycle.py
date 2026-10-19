@@ -159,7 +159,7 @@ def test_session_start_hook_trashes_a_linked_bundle(
     primary, _ = configured_repo
     config = primary / ".lumberjack.toml"
     config.write_text(config.read_text().replace("doc_roots = []", 'doc_roots = ["docs/work"]'))
-    write(primary, "strategy.json", '{"scope": "bundle", "trash_days": 30}')
+    write(primary, "strategy.json", '{"scope": "bundle", "trash_days": 30, "grace_days": 0}')
     assert setup_lumberjack.main(["strategy", str(primary / "strategy.json"), "--repo", str(primary)]) == 0
     capsys.readouterr()
     write(primary, "docs/work/eng-9-handoff/notes.md", "done\n")

@@ -35,24 +35,35 @@
   `lumberjack` skill gives agents the same rule for a `blocked ...: dirty` line.
 
 - `doc_strategy`: a new setting `/lumberjack:cleanup` asks for once when `doc_roots` holds linked
-  bundles (`scope`, `trash_days` and optional keep-`roots`) and saves with the new
+  bundles (`scope`, `trash_days`, `grace_days` and optional keep-`roots`) and saves with the new
   `setup_lumberjack.py strategy <file.json>`; a re-run of setup keeps it. Until it is saved nothing
   is removed. The command checks no tracker (a linked bundle is done by git alone), asks once per
-  group, and offers `reference` bundles only promote or keep.
+  group, and offers `reference` bundles only promote or keep. A saved `doc_strategy` without
+  `grace_days` is a config error: save it again with `strategy` or the cleanup interview.
 - Session start and the post-merge sweep trash every `linked` `ephemeral` bundle by rule, like a
-  landed worktree, once a `doc_strategy` is saved: no prompt, never raising, each as
+  landed worktree, once a `doc_strategy` is saved and the bundle has stayed linked for `grace_days`
+  (counted from the first session start that saw it linked, kept in
+  `<git dir>/lumberjack-docs.json`; a bundle that turns live again starts over, a damaged file
+  never trashes early): no prompt, never raising, each as
   `cleared <path>: trashed <timestamp>`, and `docs N` in the summary line counts the bundles trashed
-  this run. A bundle that cannot be moved prints `blocked <path>: <reason>` and counts in `blocked N`;
+  this run (a bundle inside its grace period stays, prints its `doc` line and is not counted).
+  A bundle that cannot be moved prints `blocked <path>: <reason>` and counts in `blocked N`;
   a Markdown-scope bundle with no `.md` file left is skipped silently. Reference, `unlinked`, live
-  and keep-root bundles stay. `cleanup = "report"` prints `doc <class> <path>: would trash` and moves
-  nothing; `"keep"` moves nothing and prints nothing. Sizing, the Markdown walk and trashing share
+  and keep-root bundles stay. `cleanup = "report"` prints `doc <class> <path>: would trash`, moves
+  nothing and still records first-seen dates; `"keep"` moves nothing, records nothing and prints
+  nothing. Sizing, the Markdown walk, trashing and purging share
   one 10 second doc budget per run; what it does not reach waits for the next session start.
 - `sweep_worktrees.py --clear <path> [--promoted <ref>]` trashes one linked bundle as the
   strategy says, never deleting it outright (refusing `no strategy saved`, `not a bundle`,
   `live`, `unlinked`, `kept by strategy` and an unpromoted reference bundle). Trash lives in
   `<git dir>/lumberjack-trash/<UTC timestamp>/`.
-  The sweep prints a `trash <timestamp>: N days old; <size>` line (and `, trash N` in the summary)
-  for folders past `trash_days`; only `--purge-trash` deletes them.
+  With a strategy saved, session start and the post-merge sweep delete the folders past `trash_days`,
+  oldest first, printing `purged <timestamp>` for each; the deleting shares the run's 10 second doc
+  budget and goes bottom up, so a folder too large for it is left partly deleted (keeping its name
+  and age) and a later session start finishes it. `cleanup = "report"` prints
+  `trash <timestamp>: would purge` and deletes nothing; `"keep"` neither purges nor prints. A folder
+  that cannot be deleted prints `blocked trash <timestamp>: <reason>` and counts in `blocked N`.
+  `--purge-trash` deletes everything past retention in one run, without a budget.
 - `doc_strategy.roots` (optional): doc roots mapped to `keep`, so
   `roots = {"docs/handoffs" = "keep"}` keeps one root's bundles while others are trashed. `--clear` also
   refuses a bundle whose path or files lead outside the repository through a symlink or junction

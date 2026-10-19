@@ -30,17 +30,20 @@ folder name (via `ticket_prefix`) and a `Ticket:`/`Tickets:` line in its top fil
 `ephemeral` or `reference` (research and prototypes), and `live` (a worktree or an unlanded
 local branch carries one of its tickets, or a tracked file or an unlanded branch's commit
 message names its path or ticketed folder name), `linked` (tickets, none live) or `unlinked`.
-With a strategy saved, session start trashes each linked ephemeral bundle (`docs N` counts them);
+With a strategy saved, session start trashes each linked ephemeral bundle once it has stayed linked
+for `grace_days` (`docs N` counts them);
 reference, unlinked, live and keep-root bundles stay.
 
 **strategy**: the saved `doc_strategy`: scope (Markdown only or whole bundles), the trash
-retention in days (`trash_days`) and, optionally, keep-roots (`roots`): doc roots whose bundles
+retention in days (`trash_days`), the days a bundle must stay linked before it is trashed
+(`grace_days`, counted from the first session start that saw it linked) and, optionally, keep-roots (`roots`): doc roots whose bundles
 are always kept. Ephemeral bundles are trashed at session start and reference bundles promoted first.
 `/lumberjack:cleanup` asks for it once; with none saved nothing is removed.
 
 **trash**: `lumberjack-trash/` inside the git directory, where `--clear` and session start move bundle files into a
 UTC-timestamped folder; clearing never deletes outright. A folder older than `trash_days` is
-reported by the sweep and deleted only by `--purge-trash` in cleanup.
+purged at session start, within the time budget (a large one is left partly deleted and finished
+by a later run), or at once by `--purge-trash` in cleanup.
 
 **promote**: save a reference bundle's findings as a document tracked on the primary branch or on
 a pushed prototype branch. Only then is the bundle cleared (into the trash).

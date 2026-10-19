@@ -114,9 +114,9 @@ SessionStart prints the error and cleans nothing.
 | `evidence_dir` | `""` | Directory inside a worktree whose contents block cleanup; empty protects nothing extra |
 | `doc_roots` | `[]` | Folders inside a worktree for work documents (handoffs, plans, research, run output); an untracked or ignored file under one blocks cleanup with `docs`. `evidence_dir` is one more such folder but keeps its own reason, `evidence` |
 | `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); a root not listed uses `["research", "prototype"]`. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
-| `doc_strategy` | `{}` | How `/lumberjack:cleanup` trashes doc bundles, saved after it asks once (empty: nothing is removed). Keys, both required once set: `scope` (`markdown` or `bundle`) and `trash_days` (whole days, at least 1); optional `roots`, a table of doc root to `keep` whose bundles are always kept, so `roots = {"docs/handoffs" = "keep"}` keeps every handoff. The old keys `ephemeral`, `reference` and `tracker` are a config error. A table: `[doc_strategy]` then `scope = "bundle"` |
+| `doc_strategy` | `{}` | How `/lumberjack:cleanup` trashes doc bundles, saved after it asks once (empty: nothing is removed). Keys, all required once set: `scope` (`markdown` or `bundle`), `trash_days` (whole days, at least 1) and `grace_days` (whole days, 0 or more: how long a bundle stays `linked` before session start trashes it; 0 trashes it at the first session start that sees it linked); optional `roots`, a table of doc root to `keep` whose bundles are always kept, so `roots = {"docs/handoffs" = "keep"}` keeps every handoff. The old keys `ephemeral`, `reference` and `tracker` are a config error. A table: `[doc_strategy]` then `scope = "bundle"`, `trash_days = 30` and `grace_days = 7` |
 | `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where worktrees live: `~` is home, `*` a glob, `{name}` the repo name |
-| `cleanup` | `"prune"` | `prune` removes landed worktrees and trashes linked ephemeral bundles; `report` lists them as `would remove` and `would trash`; `keep` does nothing |
+| `cleanup` | `"prune"` | `prune` removes landed worktrees, trashes linked ephemeral bundles and purges trash past `trash_days`; `report` lists them as `would remove`, `would trash` and `would purge`; `keep` does nothing |
 | `stop_gate` | `true` | `false` turns the Stop hook off |
 
 ```toml
@@ -178,7 +178,7 @@ when the fetch failed. Only the first 100 branches go to `gh` in one query; the 
 ## Summary line
 
 Plain `--cleanup` prints one summary line, then one line per event (`cleaned`, `landed`,
-`blocked`, `dependent`, `orphan`, `cleared`, `doc`, `hint`), and exits 0. When the cleanup was skipped
+`blocked`, `dependent`, `orphan`, `cleared`, `purged`, `doc`, `hint`), and exits 0. When the cleanup was skipped
 (see above) or the config is invalid, the only line says why instead:
 
 ```
@@ -186,15 +186,14 @@ sweep: cleaned 1, landed 2, dependents 1, blocked 1, unverified 3, orphans 0, do
 cleaned alice/eng-12-login ~/worktrees/app (local branch kept)
 blocked alice/eng-13-search ~/worktrees/app2: dirty
 cleared docs/work/eng-9-handoff: trashed 20260101T120000Z
+purged 20251201T120000Z
 doc reference docs/work/eng-11-research: tickets eng-11; 3.2 MB
 dependent alice/eng-14-ui of alice/eng-12-login: git rebase --onto main 0123456789ab alice/eng-14-ui
-trash 20260101T120000Z: 41 days old; 3.2 MB
 ```
 
 A `dependent` line is a branch built on top of a landed one; run the printed rebase
-before pushing it. A `trash` line is a folder in lumberjack's trash older than `trash_days`;
-the summary gains `, trash N` (before `origin stale`) only when there are such folders. The sweep
-never deletes them; only `--purge-trash` does.
+before pushing it. A `purged` line is a folder in lumberjack's trash older than `trash_days`,
+deleted at session start (see Work documents).
 A `doc` line is a bundle: the outermost untracked entry (file or folder) under a `doc_roots`
 folder, below tracked subfolders too, in the primary checkout; tracked files and registered
 worktrees (or folders holding them) are never listed. Its tickets are the
@@ -286,19 +285,24 @@ what produced them and asks once per group: delete, ignore (`.git/info/exclude` 
 ### Work documents
 
 When `doc_roots` holds linked bundles, `/lumberjack:cleanup` asks the maintainer once for a
-`doc_strategy` (scope, trash days, keep-roots) and saves it with
+`doc_strategy` (scope, trash days, grace days, keep-roots) and saves it with
 `setup_lumberjack.py strategy <file.json>`; later runs ask nothing, and until it is saved
 nothing is removed. A linked bundle's work is done by git alone: no tracker is checked.
 With a strategy saved, every session start (and the post-merge sweep) trashes each `linked`
-`ephemeral` bundle by rule, without asking, as it removes a landed worktree: each prints
+`ephemeral` bundle by rule, without asking, as it removes a landed worktree, once it has stayed
+`linked` for `grace_days` (a follow-up branch can still carry its ticket): each prints
 `cleared <path>: trashed <timestamp>` and `docs N` counts them. A bundle the sweep cannot move
 prints `blocked <path>: <reason>` and counts in `blocked N`; a Markdown-scope bundle with no
 `.md` file left is skipped silently. `cleanup = "report"` prints `doc <class> <path>: would trash`
-and moves nothing, and `"keep"` moves nothing and prints nothing. `reference`, `unlinked`, `live`
-and keep-root bundles stay. Sizing bundles and trash folders, walking a Markdown-scope bundle and
-trashing share one 10 second budget per run; a bundle not reached (or whose walk ran out) stays
-untouched for the next session start. The command offers what is left, one question per group. Nothing deletes
-a bundle outright: `--clear` only moves it to the trash. `--json` gives each doc its resolved `action` (`trash`, `promote` or
+and moves nothing (it still records first-seen dates, so `would trash` matches what `prune` will do),
+and `"keep"` moves nothing, records nothing and prints nothing. `reference`, `unlinked`, `live`
+and keep-root bundles stay. Sizing bundles, walking a Markdown-scope bundle, trashing and purging share one 10 second budget per run; a bundle not reached (or whose walk ran out) stays
+untouched for the next session start. The first date a session start saw a bundle `linked` is kept in
+`<git dir>/lumberjack-docs.json`; a bundle that turns `live` again (or vanishes) loses its date, so the
+count restarts, and a missing or damaged file only restarts it. A bundle inside `grace_days` stays,
+prints its normal `doc` line and is not counted in `docs N`; `--clear` ignores the grace period. The
+command offers what is left, one question per group. Nothing deletes
+a bundle outright: `--clear` only moves it to the trash; the purge below deletes trash past `trash_days`. `--json` gives each doc its resolved `action` (`trash`, `promote` or
 `keep`), empty until a strategy is saved.
 `reference` bundles are only offered promote or keep: promote writes the findings to a document
 tracked on `origin/<primary_branch>` or pushes a `prototype_prefix` branch, and only then clears the
@@ -322,8 +326,14 @@ Reasons: `no strategy saved`, `not a bundle`, `live`, `unlinked` (only a `linked
 cleared), `links outside the repository` (the bundle, or with `scope = "markdown"` any entry in it, resolves outside the repository through a symbolic link or Windows junction; a link inside a bundle cleared whole moves to the trash as a link, not followed), `kept by strategy`
 (its doc root is a keep-root), `no Markdown in scope` (`scope = "markdown"` and the bundle holds no `.md` file), `promote it first (--promoted)` and `the promoted copy is not on
 origin`. A trashed bundle moves to `<git dir>/lumberjack-trash/<UTC timestamp>/<its path>`, which
-git never sees. `--purge-trash` deletes the timestamp folders older than `trash_days`, printing
-`purged <timestamp>` for each, or `trash: nothing past retention`.
+git never sees. With a strategy saved, every session start (and the post-merge sweep) also deletes
+the timestamp folders older than `trash_days`, oldest first, printing `purged <timestamp>` for
+each; `cleanup = "report"` prints `trash <timestamp>: would purge` and deletes nothing, `"keep"`
+neither purges nor prints. The purge deletes from the bottom up within the run's budget: a folder
+too large for it is left partly deleted, keeps its name (and so its age), and a later session
+start finishes it. A folder it cannot delete prints `blocked trash <timestamp>: <reason>` and
+counts in `blocked N`. `--purge-trash` deletes everything past retention in one run, with no
+budget, printing the same `purged <timestamp>` lines, or `trash: nothing past retention`.
 
 ## Hook placement
 
