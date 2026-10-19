@@ -1575,16 +1575,109 @@ def test_markdown_trash_works_under_a_doc_root_that_is_a_link(primary: Path) -> 
     assert (primary / "notes/work/eng-150-handoff/run/out.log").exists()
 
 
-def test_a_session_start_leaves_doc_work_to_a_sweep_holding_the_lock(primary: Path) -> None:
+HOLD = """import pathlib, sys, time
+sys.path.insert(0, sys.argv[1])
+import sweep_worktrees
+with sweep_worktrees.doc_work(pathlib.Path(sys.argv[2])) as state:
+    print(state is not None, flush=True)
+    time.sleep(120)
+"""
+
+
+def test_a_session_start_leaves_doc_work_to_a_sweep_holding_the_lock_until_it_dies(primary: Path) -> None:
     rule_bundles(primary)
-    lock = primary / ".git" / "lumberjack-docs.lock"
-    lock.write_text("")  # another session start is trashing right now
-    assert cleanup(primary)[0].endswith("docs 0")
-    assert (primary / "docs/work/eng-150-handoff/a.md").exists() and lock.exists()
-    old = time.time() - 3600
-    os.utime(lock, (old, old))  # left by a run the hook timeout killed
-    assert cleanup(primary)[0].endswith("docs 1")
-    assert not lock.exists()
+    scripts = str(Path(sweep_worktrees.__file__).parent)
+    holder = subprocess.Popen([sys.executable, "-c", HOLD, scripts, str(primary)], stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout and holder.stdout.readline().strip() == "True"  # another session start is trashing
+        assert cleanup(primary)[0].endswith("docs 0")
+        assert (primary / "docs/work/eng-150-handoff/a.md").exists()
+    finally:
+        holder.kill()  # the hook timeout kills it mid-run
+        holder.wait()
+    assert cleanup(primary)[0].endswith("docs 1")  # the OS released its lock: no stale lock to wait out
+
+
+def test_report_mode_still_lists_trash_it_would_purge_while_the_lock_is_held(primary: Path) -> None:
+    rule_bundles(primary, mode="report")
+    old_trash(primary)
+    with sweep_worktrees.doc_work(primary) as held:
+        assert held is not None
+        assert f"trash {OLD}: would purge" in cleanup(primary)
+
+
+def test_a_doc_lock_the_run_cannot_open_never_hides_the_worktree_cleanup(primary: Path) -> None:
+    rule_bundles(primary)
+    (primary / ".git" / "lumberjack-docs.lock").mkdir()  # stands in for an unwritable git folder
+    out = cleanup(primary)
+    assert out[0].startswith("sweep: cleaned") and out[0].endswith("docs 0"), out
+    assert any(line.startswith("docs: unavailable (") for line in out), out
+
+
+def test_the_cleanup_commands_report_a_lock_they_cannot_open_at_once(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    (primary / ".git" / "lumberjack-docs.lock").mkdir()
+
+    def never(seconds: float) -> None:
+        raise AssertionError("waited for a lock nobody holds")
+
+    monkeypatch.setattr(sweep_worktrees.time, "sleep", never)
+    with pytest.raises(OSError):
+        sweep_worktrees.clear_bundles(primary, ["docs/work/eng-150-handoff"])
+    with pytest.raises(OSError):
+        sweep_worktrees.purge_trash(primary)
+
+
+def test_the_cleanup_commands_wait_for_a_sweep_holding_the_lock_then_refuse(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    trash = old_trash(primary)
+    monkeypatch.setattr(sweep_worktrees, "DOC_WAIT", 0.3)
+    monkeypatch.chdir(primary)
+    bundle = "docs/work/eng-150-handoff"
+    with sweep_worktrees.doc_work(primary) as held:  # a session start is trashing, and outlasts the wait
+        assert held is not None
+        assert sweep_worktrees.clear_bundles(primary, [bundle]) == [
+            ("blocked", f"blocked {bundle}: a sweep is trashing")
+        ]
+        assert sweep_worktrees.purge_trash(primary) == ["blocked trash: a sweep is trashing"]
+        assert sweep_worktrees.main(["--purge-trash"]) == 1
+        assert (primary / bundle / "a.md").exists() and (trash / OLD).exists()
+    assert sweep_worktrees.clear_bundles(primary, [bundle])[0][0] == "cleared"
+    assert sweep_worktrees.main(["--purge-trash"]) == 0
+    assert not (trash / OLD).exists()
+
+
+def test_clear_fetches_the_promotion_before_taking_the_doc_lock(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    fetched = []
+
+    def fetch(where: Path) -> bool:
+        with sweep_worktrees.doc_work(where) as state:  # a session start now still gets the docs
+            fetched.append(state is not None)
+        return False
+
+    monkeypatch.setattr(sweep_worktrees, "fetch", fetch)
+    sweep_worktrees.clear_bundles(primary, ["docs/work/eng-151-research"], "docs/findings.md")
+    assert fetched == [True]
+
+
+def test_markdown_clear_never_follows_a_link_inside_the_bundle(primary: Path) -> None:
+    rule_bundles(primary, scope="markdown")
+    bundle = primary / "docs/work/eng-150-handoff"
+    write(bundle, "sub/b.md", "x\n")
+    link_dir(bundle / "alias", bundle / "sub")  # the same files under a second name
+    code, line = clear(primary, "docs/work/eng-150-handoff")
+    assert code == 0 and line.startswith("cleared docs/work/eng-150-handoff: trashed"), line
+    [folder] = trash_folders(primary)
+    moved = sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*.md"))
+    assert moved == ["docs/work/eng-150-handoff/a.md", "docs/work/eng-150-handoff/sub/b.md"]
+    assert os.path.lexists(bundle / "alias")  # a link is a leaf: it stays, not walked
 
 
 def test_a_failed_git_folder_lookup_never_moves_docs_elsewhere(

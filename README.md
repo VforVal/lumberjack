@@ -209,7 +209,7 @@ the newest 1000), so a bundle that lists a ticket whose branch has landed stays 
 another listed ticket is open; `linked` when it has tickets and none is live, `unlinked` without
 tickets and not named. `doc` lines list the linked bundles the sweep leaves (`--json` lists
 all three states under `docs`); the size comes from file metadata, never file contents, and
-reads `size unknown` if sizing runs past 3 seconds. `docs N` counts the bundles trashed this
+reads `size unknown` if sizing runs past 3 seconds or a folder in it cannot be read. `docs N` counts the bundles trashed this
 run (see Work documents). Orphans are leftover directories in a worktree root: those holding
 only caches (`node_modules-only`) are deleted, others (`mixed`, `not-git`; an empty directory counts as `not-git`) are listed.
 A root outside the repository without `{name}` is shared with other repositories, so only
@@ -297,8 +297,13 @@ prints `blocked <path>: <reason>` and counts in `blocked N`; a Markdown-scope bu
 runs out of time although it started with more than half of trashing's time left prints
 `blocked <path>: too large to walk in time` once and is then left to the cleanup command
 (`--clear` has no time limit); one that started later just waits for the next session start.
-One run at a time trashes and purges: a run that finds `<git dir>/lumberjack-docs.lock` (younger
-than 60 seconds) leaves docs alone. Markdown scope also removes the folders
+One run at a time trashes and purges, through an operating-system lock on
+`<git dir>/lumberjack-docs.lock`, which a killed run releases at once: a session start that finds
+it held leaves docs alone (`cleanup = "report"` still prints its `would purge` lines), and `--clear`
+and `--purge-trash` wait up to 10 seconds for it, then refuse with
+`blocked <path>: a sweep is trashing` (`blocked trash: a sweep is trashing`). When the lock file
+cannot be opened (an unwritable git folder), a session start prints `docs: unavailable (<error>)`
+and leaves docs alone, and the cleanup commands exit with the error. Markdown scope also removes the folders
 its move empties, so a bundle of Markdown only goes away whole. `cleanup = "report"` prints `doc <class> <path>: would trash`
 and moves nothing (it still records first-seen dates, so `would trash` matches what `prune` will do),
 and `"keep"` moves nothing, records nothing and prints nothing. `reference`, `unlinked`, `live`
@@ -339,7 +344,8 @@ neither purges nor prints. The purge deletes from the bottom up within the run's
 too large for it is left partly deleted, keeps its name (and so its age), and a later session
 start finishes it. A folder it cannot delete prints `blocked trash <timestamp>: <reason>` and
 counts in `blocked N`. `--purge-trash` deletes everything past retention in one run, with no
-budget, printing the same `purged <timestamp>` lines, or `trash: nothing past retention`.
+budget, printing the same `purged <timestamp>` lines, or `trash: nothing past retention`, and
+exits 1 when any line is `blocked`.
 
 ## Hook placement
 

@@ -52,8 +52,12 @@
   a Markdown-scope bundle with no `.md` file left is skipped silently and, recorded in the same
   file, not walked again while it stays linked; one whose walk runs out of time although it started
   with more than half of trashing's time left prints `blocked <path>: too large to walk in time`
-  once and is left to the cleanup command. One run at a time trashes and purges: a run that finds
-  `<git dir>/lumberjack-docs.lock` (younger than 60 seconds) leaves docs alone. Markdown
+  once and is left to the cleanup command. One run at a time trashes and purges, through
+  an operating-system lock on `<git dir>/lumberjack-docs.lock`, released at once when a run is
+  killed: a session start that finds it held leaves docs alone; `--clear` and `--purge-trash` wait
+  up to 10 seconds, then refuse with `blocked <path>: a sweep is trashing`
+  (`blocked trash: a sweep is trashing`). A lock file that cannot be opened prints
+  `docs: unavailable (<error>)` at session start. Markdown
   scope removes the folders its move empties. Reference, `unlinked`, live
   and keep-root bundles stay. `cleanup = "report"` prints `doc <class> <path>: would trash`, moves
   nothing and still records first-seen dates; `"keep"` moves nothing, records nothing and prints
@@ -70,7 +74,8 @@
   and age) and a later session start finishes it. `cleanup = "report"` prints
   `trash <timestamp>: would purge` and deletes nothing; `"keep"` neither purges nor prints. A folder
   that cannot be deleted prints `blocked trash <timestamp>: <reason>` and counts in `blocked N`.
-  `--purge-trash` deletes everything past retention in one run, without a budget.
+  `--purge-trash` deletes everything past retention in one run, without a budget, and exits 1
+  when any folder is blocked.
 - `doc_strategy.roots` (optional): doc roots mapped to `keep`, so
   `roots = {"docs/handoffs" = "keep"}` keeps one root's bundles while others are trashed. `--clear` also
   refuses a bundle whose path or files lead outside the repository through a symlink or junction
