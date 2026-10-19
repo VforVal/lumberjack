@@ -152,6 +152,28 @@ def test_setup_cleanup_modes_protect_and_restore_worktrees(
         assert ("would remove" in output) is (mode == "report")
 
 
+def test_session_start_hook_trashes_a_linked_bundle(
+    configured_repo: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    primary, _ = configured_repo
+    config = primary / ".lumberjack.toml"
+    config.write_text(config.read_text().replace("doc_roots = []", 'doc_roots = ["docs/work"]'))
+    write(primary, "strategy.json", '{"scope": "bundle", "trash_days": 30}')
+    assert setup_lumberjack.main(["strategy", str(primary / "strategy.json"), "--repo", str(primary)]) == 0
+    capsys.readouterr()
+    write(primary, "docs/work/eng-9-handoff/notes.md", "done\n")
+    monkeypatch.chdir(primary)
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"hook_event_name":"SessionStart","source":"startup"}'))
+    assert sweep_worktrees.main(["--hook"]) == 0
+    context = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    (folder,) = (primary / ".git" / "lumberjack-trash").iterdir()
+    assert f"cleared docs/work/eng-9-handoff: trashed {folder.name}" in context
+    assert ", docs 1" in context
+    assert not (primary / "docs/work/eng-9-handoff").exists()
+    assert (folder / "docs/work/eng-9-handoff/notes.md").read_text() == "done\n"
+
+
 @pytest.mark.parametrize("json_output", [False, True])
 def test_setup_stop_gate_rejects_once_and_respects_disabled_setting(
     configured_repo: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,

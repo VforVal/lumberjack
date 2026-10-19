@@ -107,6 +107,8 @@ step 5. A saved strategy is never asked for again; follow it.
 Take the `linked` docs whose `action` is not `keep`; the sweep sets `action` from the
 strategy, so never work it out yourself. Ask once per group (same `action` and doc root),
 never bundle by bundle, listing the paths, tickets and sizes. Only an explicit yes counts.
+With `cleanup = "prune"` the session start already trashed the `trash` ones (step 1 relayed the
+`cleared` lines); any left were over the time budget or blocked, so offer them as below.
 
 - **trash**: the bundle moves to the trash, kept `trash_days` days. On a yes, run
   `python "SWEEP" --clear "PATH" "PATH" ...` once with the group's paths.

@@ -13,9 +13,8 @@
   doc root, in a folder named for the ticket or branch slug.
 - The sweep lists the bundles (outermost untracked entries) of the primary checkout's
   `doc_roots` with their tickets, class (`ephemeral` or `reference`, set per root by the new
-  `doc_reference` setting) and live, linked or unlinked state. The summary line gains
-  `docs N` and each linked bundle prints `doc <class> <path>: tickets <ids>; <size>`.
-  Nothing is deleted.
+  `doc_reference` setting) and live, linked or unlinked state, and prints
+  `doc <class> <path>: tickets <ids>; <size>` for each linked bundle it leaves.
 - A bundle is also live while its folder name appears in a tracked file or in a commit
   message of an unlanded branch, and the `lumberjack` skill tells agents to add the current
   ticket to a bundle's `Tickets:` line when they read or extend it. A bundle listing two
@@ -40,6 +39,12 @@
   `setup_lumberjack.py strategy <file.json>`; a re-run of setup keeps it. Until it is saved nothing
   is removed. The command checks no tracker (a linked bundle is done by git alone), asks once per
   group, and offers `reference` bundles only promote or keep.
+- Session start trashes every `linked` `ephemeral` bundle by rule, like a landed worktree, once a
+  `doc_strategy` is saved: no prompt, never raising, each as `cleared <path>: trashed <timestamp>`,
+  and `docs N` in the summary line counts the bundles trashed this run. Reference, `unlinked`, live
+  and keep-root bundles stay. `cleanup = "report"` prints `doc <class> <path>: would trash` and moves
+  nothing; `"keep"` moves and prints nothing. Markdown scope shares the 10 second doc budget and
+  leaves the rest for the next session start.
 - `sweep_worktrees.py --clear <path> [--promoted <ref>]` trashes one linked bundle as the
   strategy says, never deleting it outright (refusing `no strategy saved`, `not a bundle`,
   `live`, `unlinked`, `kept by strategy` and an unpromoted reference bundle). Trash lives in `<git dir>/lumberjack-trash/<UTC timestamp>/`.

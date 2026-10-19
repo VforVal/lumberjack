@@ -881,6 +881,31 @@ def clean_orphans(primary: Path, orphans: list[Row], mode: str) -> tuple[int, li
     return cleaned, out
 
 
+def trash_docs(primary: Path, cfg: Config, report: Row) -> tuple[int, list[str]]:
+    """Trash the linked bundles the strategy marks for trash; (count, lines).
+
+    Stops at the time budget; the rest wait for the next session start."""
+    marked = [d for d in linked_docs(report) if d["action"] == "trash"]
+    if cfg["cleanup"] == "report":
+        return 0, [f"doc {d['class']} {d['path']}: would trash" for d in marked]
+    if cfg["cleanup"] == "keep":
+        return 0, []
+    docs = {d["path"]: d for d in report["docs"]}
+    stamp = datetime.now(timezone.utc).strftime(TRASH_STAMP)
+    deadline = time.monotonic() + DOC_SECONDS
+    done, out = 0, []
+    for doc in marked:
+        if time.monotonic() > deadline:
+            break
+        try:
+            moved, line = clear_bundle(primary, cfg, docs, doc["path"], "", stamp)
+        except OSError as error:  # the session start never raises
+            moved, line = False, f"blocked {doc['path']}: {error}"
+        done += moved
+        out.append(line)
+    return done, out
+
+
 def run_cleanup(
     primary: Path, cfg: Config, report: Row, stale: bool, here: Path | None = None
 ) -> list[str]:
@@ -914,14 +939,15 @@ def run_cleanup(
     cleaned, orphan_lines = clean_orphans(primary, report["orphans"], mode)
     counts["cleaned"] += cleaned
     out += orphan_lines
-    docs = linked_docs(report)
-    out += map(doc_line, docs)
+    out += map(doc_line, (d for d in linked_docs(report) if d["action"] != "trash"))
+    trashed, doc_lines = trash_docs(primary, cfg, report)
+    out += doc_lines
     out += map(trash_line, report["trash"])
     summary = (
         f"sweep: cleaned {counts['cleaned']}, landed {counts['landed']},"
         f" dependents {counts['dependents']}, blocked {counts['blocked']},"
         f" unverified {counts['unverified']}, orphans {len(report['orphans'])},"
-        f" docs {len(docs)}"
+        f" docs {trashed}"
         + (f", trash {len(report['trash'])}" if report["trash"] else "")
         + (", origin stale" if stale else "")
     )

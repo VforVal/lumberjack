@@ -590,7 +590,7 @@ def test_doc_bundles_are_untracked_entries_with_tickets_class_and_state(
         "docs/work/agents/eng-97-plan": ("ephemeral", "linked", ["eng-97"]),
     }
     out = cleanup(primary)
-    assert out[0].endswith("orphans 0, docs 4")
+    assert out[0].endswith("orphans 0, docs 0")  # no strategy: the lines only report
     assert "doc ephemeral docs/work/eng-90-handoff: tickets eng-90, eng-91, eng-92; 1.0 KB" in out
     assert "doc reference docs/work/research-notes: tickets eng-95; 24 B" in out
     assert "doc ephemeral docs/work/eng-96-note.md: tickets eng-96; 2.0 KB" in out
@@ -1250,3 +1250,51 @@ def test_sweep_reports_trash_past_retention_and_only_purge_removes_it(
     assert done.stdout.splitlines() == ["purged 20200101T000000Z"]
     assert sorted(p.name for p in trash.iterdir()) == sorted([fresh, "stray"])
     assert sweep(primary, "--purge-trash").stdout.strip() == "trash: nothing past retention"
+
+
+def rule_bundles(primary: Path, mode: str = "prune", strategy: bool = True) -> None:
+    saved = 'doc_strategy = {scope = "bundle", trash_days = 30, roots = {"docs/handoffs" = "keep"}}\n'
+    settings(
+        primary,
+        f'cleanup = "{mode}"\ndoc_roots = ["docs/work", "docs/handoffs"]\n' + (saved if strategy else ""),
+    )
+    write(primary, "docs/work/eng-150-handoff/a.md", "x\n")  # linked, ephemeral
+    write(primary, "docs/work/eng-151-research/a.md", "x\n")  # linked, reference
+    write(primary, "docs/work/scratch/a.md", "no ticket\n")  # unlinked
+    write(primary, "docs/work/eng-3-handoff/a.md", "x\n")  # live: the eng-3 worktree is open
+    write(primary, "docs/handoffs/eng-152-a/a.md", "x\n")  # under a keep-root
+
+
+def test_session_start_trashes_only_linked_ephemeral_bundles(primary: Path) -> None:
+    rule_bundles(primary)
+    out = cleanup(primary)
+    (folder,) = trash_folders(primary)
+    assert f"cleared docs/work/eng-150-handoff: trashed {folder.name}" in out
+    assert out[0].endswith("docs 1")
+    assert not (primary / "docs/work/eng-150-handoff").exists()
+    for stays in ("docs/work/eng-151-research", "docs/work/scratch", "docs/work/eng-3-handoff",
+                  "docs/handoffs/eng-152-a"):
+        assert (primary / stays / "a.md").exists()
+    assert not any("would trash" in line for line in out)
+
+
+@pytest.mark.parametrize("mode", ["report", "keep", "none"])
+def test_report_keep_and_no_strategy_move_no_bundle(primary: Path, mode: str) -> None:
+    rule_bundles(primary, "report" if mode == "none" else mode, strategy=mode != "none")
+    out = cleanup(primary)
+    assert (primary / "docs/work/eng-150-handoff/a.md").exists() and not trash_folders(primary)
+    assert out[0].endswith("docs 0")
+    assert not any(line.startswith("cleared") for line in out)
+    assert any("would trash" in line for line in out) is (mode == "report")
+
+
+def test_bundles_past_the_time_budget_wait_for_the_next_session_start(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    with monkeypatch.context() as short:
+        short.setattr(sweep_worktrees, "DOC_SECONDS", -1)
+        assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 0")
+    assert (primary / "docs/work/eng-150-handoff/a.md").exists()
+    assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")
+    assert not (primary / "docs/work/eng-150-handoff").exists()

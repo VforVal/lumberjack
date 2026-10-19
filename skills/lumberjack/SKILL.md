@@ -50,8 +50,8 @@ or its pull request carries the squashed commits.
 
 ## Keys that change the behavior
 
-- `cleanup = "prune"` (default) removes eligible worktrees. `"report"` prints
-  `landed <branch> <path>: would remove` and keeps them. `"keep"` keeps them silently.
+- `cleanup = "prune"` (default) removes eligible worktrees and, with a saved `doc_strategy`, trashes linked ephemeral bundles. `"report"` prints
+  `landed <branch> <path>: would remove` and `doc <class> <path>: would trash` and keeps them. `"keep"` keeps them silently.
 - `stop_gate = false` turns the Stop hook off; it then exits 0 without output.
 - A config error is printed at session start; cleanup does nothing and the Stop gate blocks.
 
@@ -59,11 +59,11 @@ or its pull request carries the squashed commits.
 
 `sweep: cleaned N, landed N, dependents N, blocked N, unverified N, orphans N, docs N`, with
 `, origin stale` appended when the fetch failed, then one line per event: `cleaned`,
-`landed`, `blocked`, `dependent`, `orphan`, `doc` or `hint`. When nothing was swept the only
+`landed`, `blocked`, `dependent`, `orphan`, `cleared`, `doc` or `hint`. When nothing was swept the only
 line says why: a config error, or `sweep: ...; skipped`. The exit code is always 0.
 Paths are relative to the primary's parent directory, or start with `~`.
-`doc <ephemeral|reference> <path>: tickets <ids>; <size>` is a `doc_roots` bundle with tickets that no
-worktree, unlanded branch, tracked file or unlanded commit message keeps live; nothing is deleted.
+`doc <ephemeral|reference> <path>: tickets <ids>; <size>` is a linked `doc_roots` bundle (tickets, none kept live) the sweep leaves.
+`cleared <path>: trashed <stamp>` is a linked ephemeral bundle moved to the trash; `docs N` counts them.
 `unverified` counts unproven branches; only the maintainer's `/lumberjack:cleanup` removes them.
 
 ## Stop gate

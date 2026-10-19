@@ -116,7 +116,7 @@ SessionStart prints the error and cleans nothing.
 | `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); a root not listed uses `["research", "prototype"]`. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
 | `doc_strategy` | `{}` | How `/lumberjack:cleanup` trashes doc bundles, saved after it asks once (empty: nothing is removed). Keys, both required once set: `scope` (`markdown` or `bundle`) and `trash_days` (whole days, at least 1); optional `roots`, a table of doc root to `keep` whose bundles are always kept, so `roots = {"docs/handoffs" = "keep"}` keeps every handoff. The old keys `ephemeral`, `reference` and `tracker` are a config error. A table: `[doc_strategy]` then `scope = "bundle"` |
 | `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where worktrees live: `~` is home, `*` a glob, `{name}` the repo name |
-| `cleanup` | `"prune"` | `prune` removes landed worktrees; `report` lists them as `would remove`; `keep` does nothing |
+| `cleanup` | `"prune"` | `prune` removes landed worktrees and trashes linked ephemeral bundles; `report` lists them as `would remove` and `would trash`; `keep` does nothing |
 | `stop_gate` | `true` | `false` turns the Stop hook off |
 
 ```toml
@@ -178,14 +178,15 @@ when the fetch failed. Only the first 100 branches go to `gh` in one query; the 
 ## Summary line
 
 Plain `--cleanup` prints one summary line, then one line per event (`cleaned`, `landed`,
-`blocked`, `dependent`, `orphan`, `doc`, `hint`), and exits 0. When the cleanup was skipped
+`blocked`, `dependent`, `orphan`, `cleared`, `doc`, `hint`), and exits 0. When the cleanup was skipped
 (see above) or the config is invalid, the only line says why instead:
 
 ```
 sweep: cleaned 1, landed 2, dependents 1, blocked 1, unverified 3, orphans 0, docs 1, origin stale
 cleaned alice/eng-12-login ~/worktrees/app (local branch kept)
 blocked alice/eng-13-search ~/worktrees/app2: dirty
-doc ephemeral docs/work/eng-9-handoff: tickets eng-9, eng-11; 3.2 MB
+cleared docs/work/eng-9-handoff: trashed 20260101T120000Z
+doc reference docs/work/eng-11-research: tickets eng-11; 3.2 MB
 dependent alice/eng-14-ui of alice/eng-12-login: git rebase --onto main 0123456789ab alice/eng-14-ui
 trash 20260101T120000Z: 41 days old; 3.2 MB
 ```
@@ -207,9 +208,10 @@ carries a ticket) appears in a tracked file or in a commit message of an unlande
 (only commits not yet in `origin/<primary_branch>`,
 the newest 1000), so a bundle that lists a ticket whose branch has landed stays live while
 another listed ticket is open; `linked` when it has tickets and none is live, `unlinked` without
-tickets and not named. `docs N` and the lines cover linked bundles only (`--json` lists
+tickets and not named. `doc` lines list the linked bundles the sweep leaves (`--json` lists
 all three states under `docs`); the size comes from file metadata, never file contents, and
-reads `size unknown` if sizing runs past 10 seconds. Nothing is deleted. Orphans are leftover directories in a worktree root: those holding
+reads `size unknown` if sizing runs past 10 seconds. `docs N` counts the bundles trashed this
+run (see Work documents). Orphans are leftover directories in a worktree root: those holding
 only caches (`node_modules-only`) are deleted, others (`mixed`, `not-git`; an empty directory counts as `not-git`) are listed.
 A root outside the repository without `{name}` is shared with other repositories, so only
 its `<dir>/<name>` subdirectories count (the Codex layout); scope your own roots with `{name}`,
@@ -286,10 +288,14 @@ what produced them and asks once per group: delete, ignore (`.git/info/exclude` 
 When `doc_roots` holds linked bundles, `/lumberjack:cleanup` asks the maintainer once for a
 `doc_strategy` (scope, trash days, keep-roots) and saves it with
 `setup_lumberjack.py strategy <file.json>`; later runs ask nothing, and until it is saved
-nothing is removed. A linked bundle's work is done by git alone: no tracker is checked. The
-command offers linked bundles one question per group. `ephemeral` bundles are trashed; a bundle
-under a `roots` keep-root is kept (never offered). Nothing deletes a bundle outright: `--clear`
-only moves it to the trash. `--json` gives each doc its resolved `action` (`trash`, `promote` or
+nothing is removed. A linked bundle's work is done by git alone: no tracker is checked.
+With a strategy saved, every session start trashes each `linked` `ephemeral` bundle by rule,
+without asking, as it removes a landed worktree: each prints `cleared <path>: trashed <timestamp>`
+and `docs N` counts them. `cleanup = "report"` prints `doc <class> <path>: would trash` and moves
+nothing, and `"keep"` moves and prints nothing. `reference`, `unlinked`, `live` and keep-root
+bundles stay. Markdown scope walks each bundle, so it stops at a 10 second budget and the rest wait for
+the next session start. The command offers what is left, one question per group. Nothing deletes
+a bundle outright: `--clear` only moves it to the trash. `--json` gives each doc its resolved `action` (`trash`, `promote` or
 `keep`), empty until a strategy is saved.
 `reference` bundles are only offered promote or keep: promote writes the findings to a document
 tracked on `origin/<primary_branch>` or pushes a `prototype_prefix` branch, and only then clears the
