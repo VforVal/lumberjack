@@ -13,7 +13,7 @@ from helpers import git, write
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import setup_lumberjack  # noqa: E402
-from sweep_worktrees import load_config  # noqa: E402
+from sweep_worktrees import HOOK_MANAGERS, load_config, manager_wired  # noqa: E402
 
 BEGIN, END = "# >>> lumberjack", "# <<< lumberjack"
 ANSWERS = {
@@ -100,6 +100,15 @@ def test_unknown_key_exits_2_and_writes_nothing(
 ) -> None:
     code, _, err = apply(repo, capsys, bogus=1)
     assert code == 2 and "bogus" in err
+    assert not (repo / ".lumberjack.toml").exists()
+
+
+def test_an_answer_toml_cannot_hold_exits_2_and_writes_nothing(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # json.dumps escapes an emoji as a surrogate pair, which TOML rejects.
+    code, _, err = apply(repo, capsys, ticket_prefix="eng-\U0001F600")
+    assert code == 2 and "bad TOML" in err
     assert not (repo / ".lumberjack.toml").exists()
 
 
@@ -253,6 +262,17 @@ def test_python_hook_with_lumberjack_comment_is_still_wrapped(
         capture_output=True, text=True, check=True,
     )
     assert (done.stdout + done.stderr).strip() == "python hook ran"
+
+
+@pytest.mark.parametrize("hook", sorted(HOOK_MANAGERS))
+def test_each_manager_hook_lands_where_the_sweep_looks(
+    repo: Path, capsys: pytest.CaptureFixture[str], hook: str
+) -> None:
+    assert set(setup_lumberjack.HOOK_WRITERS) == {"plain", *HOOK_MANAGERS}
+    write(repo, "package.json", "{}\n")  # simple-git-hooks needs one
+    assert not manager_wired(repo)
+    assert apply(repo, capsys, hook=hook)[0] == 0
+    assert manager_wired(repo)
 
 
 def test_husky_hook(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:

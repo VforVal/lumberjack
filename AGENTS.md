@@ -9,7 +9,8 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
 - `scripts/setup_lumberjack.py` - setup helper: `discover` prints repo facts as JSON (read-only),
   `apply ANSWERS.json` writes `.lumberjack.toml`, the post-merge hook (marker-bounded block),
   Claude settings, the CLAUDE.md/AGENTS.md block and `.gitignore` entries; never commits.
-  Imports `sweep_worktrees` for config loading, remote URL parsing and `hook_manager`.
+  Imports `sweep_worktrees` for config loading and `parse_config`, remote URL parsing, the hook
+  markers (`HOOK_BEGIN`, `HOOK_END`, `HOOK_MARKERS`) and `hook_manager` (`HOOK_MANAGERS` table).
 - `skills/lumberjack/SKILL.md` - the rules the script enforces.
 - `skills/cleanup/SKILL.md` - `/lumberjack:cleanup` (user-invoked only): runs `--cleanup`, then
   removes `unverified` and `landed-probable` worktrees one confirmed `--remove <path>` at a time.
@@ -29,8 +30,9 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
   `test_setup_discover.py`, `test_setup_apply.py`, `test_lifecycle.py`, `test_rule_delivery.py`;
   `conftest.py` isolates HOME, git identity and `shutil.which`, `helpers.py` holds `git` and
   `write`. Main seams: each script's `main()` against temp git repos, a `gh` shim on PATH, and
-  a real merge through the Python hook. A few tests call `classify`, `short_path` and
-  `load_config` directly and patch `orphan_candidates`, `GH_TIMEOUT` and `gh_facts`.
+  a real merge through the Python hook. A few tests call `classify`, `short_path`,
+  `load_config`, `parse_config`, `block_reason` and `manager_wired` directly and patch
+  `orphan_candidates`, `GH_TIMEOUT` and `gh_facts`.
 
 ## Tests
 

@@ -10,7 +10,7 @@ import sys
 
 if sys.version_info < (3, 11):  # before tomllib: a plain message instead of a traceback
     sys.exit(f"lumberjack: Python 3.11+ required, found {sys.version.split()[0]}")
-import tempfile
+import tomllib
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -18,6 +18,9 @@ from typing import Any
 from sweep_worktrees import (
     CACHE_DIRS,
     DEFAULTS,
+    HOOK_BEGIN,
+    HOOK_END,
+    HOOK_MARKERS,
     ConfigError,
     config_table,
     find_primary,
@@ -27,6 +30,7 @@ from sweep_worktrees import (
     lines,
     load_config,
     origin_parts,
+    parse_config,
     registered,
 )
 
@@ -156,7 +160,7 @@ def hook_facts(repo: Path, hooks_path: str | None) -> Facts | None:
         return None
     text = path.read_text(encoding="utf-8", errors="replace")
     first = text.splitlines()[0] if text else ""
-    has_marker = "# >>> lumberjack" in text
+    has_marker = HOOK_BEGIN in text
     if has_marker:
         first = re.match(r"(?:[ \t]*(?:#(?!\!)[^\n]*)?\n)*(.*)", text).group(1)
     return {
@@ -282,18 +286,16 @@ def config_text(answers: Facts) -> str:
     number = version.read_text(encoding="utf-8").strip() if version else "unknown"
     keys = (f"# {CONFIG_DOC[k]}\n{k} = {toml_value(answers[k])}\n" for k in DEFAULTS)
     text = f"# written by lumberjack setup {number}\n\n" + "\n".join(keys)
-    with tempfile.TemporaryDirectory() as tmp:  # validate through the loader sweep uses
-        Path(tmp, ".lumberjack.toml").write_text(text, encoding="utf-8", newline="\n")
-        try:
-            load_config(Path(tmp))
-        except ConfigError as error:
-            raise abort(str(error)) from error
+    try:  # validate through the parser sweep uses
+        parse_config(tomllib.loads(text), ".lumberjack.toml")
+    except tomllib.TOMLDecodeError as error:
+        raise abort(f"lumberjack: bad TOML in .lumberjack.toml: {error}") from error
+    except ConfigError as error:
+        raise abort(str(error)) from error
     return text
 
 
-SH_MARKERS = ("# >>> lumberjack", "# <<< lumberjack")
 MD_MARKERS = ("<!-- >>> lumberjack -->", "<!-- <<< lumberjack -->")
-BEGIN, END = SH_MARKERS
 LEGACY_RUN = 'uv run --quiet --script "$(git config --get lumberjack.script)" --cleanup'
 # First of python3, python that reports 3.11+; empty when none does. No quotes: pre-commit
 # wraps it in sh -c '...'.
@@ -307,13 +309,13 @@ SAFE_RUN = (
     'test -f "$(git config --get lumberjack.script)" && '
     f'{PYTHON} && test -n "$python" && {RUN} || true'
 )
-BLOCK = f"""{BEGIN}
+BLOCK = f"""{HOOK_BEGIN}
 script="$(git config --get lumberjack.script)"
 {PYTHON}
 if [ -f "$script" ] && [ -n "$python" ]; then
   "$python" "$script" --cleanup || true
 fi
-{END}
+{HOOK_END}
 """
 INSTRUCTIONS = f"""{MD_MARKERS[0]}
 ## Lumberjack
@@ -343,7 +345,7 @@ def marked(markers: tuple[str, str]) -> re.Pattern[str]:
 
 
 def merge_block(
-    text: str, block: str, markers: tuple[str, str] = SH_MARKERS, after: str | None = None
+    text: str, block: str, markers: tuple[str, str] = HOOK_MARKERS, after: str | None = None
 ) -> str:
     """Replace the marked block, else insert it after the `after` line, else append it."""
     span = marked(markers)
@@ -376,7 +378,7 @@ def write_merged(
     rel: str,
     block: str,
     start: str = "",
-    markers: tuple[str, str] = SH_MARKERS,
+    markers: tuple[str, str] = HOOK_MARKERS,
     after: str | None = None,
 ) -> None:
     path = repo / rel
@@ -419,12 +421,12 @@ def husky_hook(repo: Path) -> None:
 def lefthook_hook(repo: Path) -> None:
     # Always the local file: lefthook merges it into lefthook.yml, and the plain hook
     # cannot coexist (lefthook install refuses core.hooksPath and renames .git/hooks/post-merge).
-    job = f"""{BEGIN}
+    job = f"""{HOOK_BEGIN}
 post-merge:
   jobs:
     - name: lumberjack
       run: {SAFE_RUN}
-{END}
+{HOOK_END}
 """
     write_merged(repo, "lefthook-local.yml", job)
     print("note: run lefthook install to activate the hook")
@@ -438,7 +440,7 @@ def pre_commit_hook(repo: Path) -> None:
     item = re.search(r"^( *)- +repo:", text, re.M)
     i = item.group(1) if item else "  "
     entry = f"sh -c '{SAFE_RUN}'"
-    block = f"""{i}{BEGIN}
+    block = f"""{i}{HOOK_BEGIN}
 {i}- repo: local
 {i}  hooks:
 {i}    - id: lumberjack
@@ -448,7 +450,7 @@ def pre_commit_hook(repo: Path) -> None:
 {i}      stages: [post-merge]
 {i}      always_run: true
 {i}      pass_filenames: false
-{i}{END}
+{i}{HOOK_END}
 """
     text += "" if text.endswith("\n") else "\n"
     write_file(repo, path.name, merge_block(text, block, after=r"^repos:[ \t]*\n"))

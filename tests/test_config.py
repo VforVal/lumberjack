@@ -154,6 +154,14 @@ def test_dropped_parity_keys_are_unknown(tmp_path: Path, key: str) -> None:
         sweep_worktrees.load_config(tmp_path)
 
 
+def test_a_table_validates_without_a_file() -> None:
+    parse = sweep_worktrees.parse_config
+    assert parse({"cleanup": "report"})["cleanup"] == "report"
+    with pytest.raises(sweep_worktrees.ConfigError, match="cleanup must be") as error:
+        parse({"cleanup": "bogus"}, "draft.toml")
+    assert error.value.source == "draft.toml"
+
+
 def test_pre_rename_table_is_not_read(tmp_path: Path) -> None:
     write(tmp_path, "pyproject.toml", f"[tool.{'worktree-' + 'hygiene'}]\nbogus = 1\n")
     assert sweep_worktrees.load_config(tmp_path) == sweep_worktrees.DEFAULTS

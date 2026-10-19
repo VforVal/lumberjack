@@ -289,7 +289,9 @@ When `doc_roots` holds linked bundles, `/lumberjack:cleanup` asks the maintainer
 nothing is removed. For each linked bundle the agent checks every listed ticket in the named
 tracker with its own tools and offers the bundle only when all are closed, one question per
 group. `ephemeral` bundles follow the strategy: `trash`, `delete` or `keep` (never offered); a `roots` entry for the
-bundle's doc root replaces that action.
+bundle's doc root replaces that action, and one that does not fit the class (`delete` on a
+reference bundle) keeps it. `--json` gives each doc this resolved `action`, empty until a
+strategy is saved.
 `reference` bundles are only offered promote or keep: promote writes the findings to a document
 tracked on `origin/<primary_branch>` or pushes a `prototype_prefix` branch, and only then clears the
 bundle, always into the trash. `scope = "markdown"` acts on `.md` files only, `"bundle"` on the whole entry,
