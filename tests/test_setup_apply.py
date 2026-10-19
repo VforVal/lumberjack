@@ -1,6 +1,7 @@
 """setup_lumberjack apply, through main() against temporary repositories."""
 
 import json
+import re
 import os
 import subprocess
 import sys
@@ -25,10 +26,7 @@ ANSWERS = {
     "evidence_dir": "evidence",
     "doc_roots": ["docs/work"],
     "doc_reference": {"docs/work": ["spec", "research"]},
-    "doc_strategy": {
-        "scope": "bundle", "ephemeral": "trash", "reference": "promote",
-        "trash_days": 14, "tracker": "github", "roots": {"docs/handoffs": "keep"},
-    },
+    "doc_strategy": {"scope": "bundle", "trash_days": 14, "grace_days": 3, "roots": {"docs/handoffs": "keep"}},
     "worktree_roots": [".wt", "~/worktrees/{name}"],
     "cleanup": "report",
     "stop_gate": False,
@@ -89,10 +87,25 @@ def test_strategy_command_saves_only_the_strategy_and_a_rerun_keeps_it(
     assert saved == {k: v for k, v in ANSWERS.items() if k in saved}  # nothing else moved
     apply(repo, capsys, doc_strategy=saved["doc_strategy"])  # setup copies the saved value
     assert load_config(repo)["doc_strategy"] == strategy
-    write(repo, "strategy.json", json.dumps({**strategy, "ephemeral": "burn"}))
+    write(repo, "strategy.json", json.dumps({**strategy, "tracker": "github"}))
     with pytest.raises(SystemExit) as error:
         setup_lumberjack.main(["strategy", str(repo / "strategy.json"), "--repo", str(repo)])
     assert error.value.code == 2 and load_config(repo)["doc_strategy"] == strategy
+
+
+def test_strategy_command_replaces_an_old_style_strategy(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    apply(repo, capsys, doc_strategy={})
+    config = repo / ".lumberjack.toml"
+    old = 'doc_strategy = {scope = "bundle", ephemeral = "trash", reference = "promote", trash_days = 7, tracker = "gh"}'
+    config.write_text(re.sub(r"(?m)^doc_strategy = .*$", lambda _: old, config.read_text("utf-8")), "utf-8")
+    strategy = ANSWERS["doc_strategy"]
+    write(repo, "strategy.json", json.dumps(strategy))
+    assert setup_lumberjack.main(["strategy", str(repo / "strategy.json"), "--repo", str(repo)]) == 0
+    saved = load_config(repo)
+    assert saved["doc_strategy"] == strategy
+    assert saved == {k: v for k, v in ANSWERS.items() if k in saved}
 
 
 def test_unknown_key_exits_2_and_writes_nothing(

@@ -551,7 +551,9 @@ def apply(answers: Facts, repo: Path) -> None:
 def save_strategy(strategy: Any, repo: Path) -> None:
     """Write a doc strategy into the config, keeping every other saved value."""
     try:
-        write_file(repo, ".lumberjack.toml", config_text({**load_config(repo), "doc_strategy": strategy}))
+        source, table = config_table(repo)
+        table.pop("doc_strategy", None)  # replaced whole, so an old-style one never blocks its own fix
+        write_file(repo, ".lumberjack.toml", config_text({**parse_config(table, source), "doc_strategy": strategy}))
     except ConfigError as error:
         raise abort(str(error)) from error
 
@@ -563,7 +565,7 @@ def main(argv: list[str] | None = None) -> int:
     put = sub.add_parser("apply", help="write config, hook, settings and instructions")
     put.add_argument("answers", type=Path, help="JSON file of setup answers")
     keep = sub.add_parser("strategy", help="save the doc strategy in the config")
-    keep.add_argument("strategy", type=Path, help="JSON file: scope, ephemeral, reference, trash_days, tracker")
+    keep.add_argument("strategy", type=Path, help="JSON file: scope, trash_days, grace_days, roots")
     for command in (find, put, keep):
         command.add_argument(
             "--repo", type=Path, help="repository path (default: the current repository)"

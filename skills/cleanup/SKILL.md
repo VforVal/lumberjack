@@ -92,14 +92,12 @@ by hand.
 When `doc_strategy` is `{}`, ask in one message, with these choices, then save the answers:
 
 - scope: `markdown` (only `.md` files) or `bundle` (whole entries, run output included)
-- ephemeral bundles: `trash` (recoverable), `delete` (permanent) or `keep`
-- reference bundles: `promote` or `keep`
 - trash days: whole days a trashed folder is kept (suggest 30)
-- tracker: where tickets are checked, in words (for example `github issues`)
+- grace days: whole days a bundle must stay linked before session start trashes it, 0 or more (suggest 7)
 - doc roots to always keep, if any (saved as `roots`, each root mapped to `keep`)
 
-Write them as JSON with keys `scope`, `ephemeral`, `reference`, `trash_days`, `tracker`
-(plus `roots`, a table of root to `keep`, when they named any) to a temporary file and
+Write them as JSON with keys `scope`, `trash_days` and `grace_days` (plus `roots`, a table of root to
+`keep`, when they named any) to a temporary file and
 run `python "HELPER" strategy FILE`, where `HELPER` is
 `../../scripts/setup_lumberjack.py` relative to this skill's directory. Relay its output and
 say the maintainer commits `.lumberjack.toml`. If they decline, remove nothing and go to
@@ -108,14 +106,14 @@ step 5. A saved strategy is never asked for again; follow it.
 ### Offer
 
 Take the `linked` docs whose `action` is not `keep`; the sweep sets `action` from the
-strategy, so never work it out yourself. For each, check every id
-in `tickets` in the tracker with your own tools (for example `gh issue view` or a tracker
-connector). Offer a bundle only when all of its tickets are confirmed closed; an unreachable
-tracker or an unknown ticket means skip it. Ask once per group (same `action` and doc root),
+strategy, so never work it out yourself. Ask once per group (same `action` and doc root),
 never bundle by bundle, listing the paths, tickets and sizes. Only an explicit yes counts.
+With `cleanup = "prune"` the session start already trashed the `trash` ones (step 1 relayed the
+`cleared` lines); any left were over the time budget, blocked or inside `grace_days`, so offer them as below.
+If `--clear` answers `no Markdown in scope`, only other files are left: say so and do not offer it again.
 
-- **trash** or **delete**: say which: trash (kept `trash_days` days) or delete (permanent,
-  no copy). On a yes, run `python "SWEEP" --clear "PATH" "PATH" ...` once with the group's paths.
+- **trash**: the bundle moves to the trash, kept `trash_days` days. On a yes, run
+  `python "SWEEP" --clear "PATH" "PATH" ...` once with the group's paths.
 - **promote**: offer only *promote* or *keep*; keep is the default. To promote, write
   the findings into a document without naming the bundle's folder and get it tracked on
   `origin/<primary_branch>` through its pull request, or push the work as a
@@ -128,9 +126,11 @@ bundle stays; do not work around it.
 
 ### Trash
 
-When `trash` lists folders, show them with their age and size and ask once whether to
-purge them. On a yes, run `python "SWEEP" --purge-trash` and relay its lines. Without
-a yes, leave them.
+With `cleanup = "prune"` the session start already purges trash past `trash_days` (step 1
+relayed the `purged` lines); any folder `trash` still lists was over the time budget, blocked or
+kept by `cleanup`. Show those with their age and ask once whether to purge them now. On a yes,
+run `python "SWEEP" --purge-trash` (everything past retention, in one run) and relay its lines.
+Without a yes, leave them.
 
 ## 5. Report
 

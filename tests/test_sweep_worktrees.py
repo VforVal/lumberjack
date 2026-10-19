@@ -2,11 +2,15 @@
 
 import io
 import json
+import math
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
+import types
 from pathlib import Path
 
 import pytest
@@ -590,7 +594,7 @@ def test_doc_bundles_are_untracked_entries_with_tickets_class_and_state(
         "docs/work/agents/eng-97-plan": ("ephemeral", "linked", ["eng-97"]),
     }
     out = cleanup(primary)
-    assert out[0].endswith("orphans 0, docs 4")
+    assert out[0].endswith("orphans 0, docs 0")  # no strategy: the lines only report
     assert "doc ephemeral docs/work/eng-90-handoff: tickets eng-90, eng-91, eng-92; 1.0 KB" in out
     assert "doc reference docs/work/research-notes: tickets eng-95; 24 B" in out
     assert "doc ephemeral docs/work/eng-96-note.md: tickets eng-96; 2.0 KB" in out
@@ -749,7 +753,7 @@ def test_doc_sizes_stay_fast_on_a_large_tree_and_degrade_when_over_budget(
     rows = sweep_worktrees.doc_rows(primary, cfg, trees, {})
     assert time.monotonic() - start < 5
     assert [r["size"] for r in rows] == [4000] * 3
-    monkeypatch.setattr(sweep_worktrees, "DOC_SECONDS", -1)
+    monkeypatch.setattr(sweep_worktrees, "SIZE_SECONDS", -1)
     rows = sweep_worktrees.doc_rows(primary, cfg, trees, {})
     assert [r["size"] for r in rows] == [None] * 3
     assert "size unknown" in sweep_worktrees.doc_line(rows[0])
@@ -1014,13 +1018,18 @@ def test_remove_reports_a_failed_removal_as_blocked(
     )
 
 
-STRATEGY = {"scope": "bundle", "ephemeral": "trash", "reference": "promote",
-            "trash_days": 30, "tracker": "github"}
+STRATEGY = {"scope": "bundle", "trash_days": 30, "grace_days": 0}
 
 
-def strategy_settings(primary: Path, **override: object) -> None:
+def strategy_settings(
+    primary: Path, doc_roots: tuple[str, ...] = ("docs/work",), roots: tuple[str, ...] = (),
+    **override: object,
+) -> None:
+    """Save STRATEGY with overrides; each of `roots` becomes a keep-root."""
     table = ", ".join(f"{k} = {json.dumps(v)}" for k, v in {**STRATEGY, **override}.items())
-    settings(primary, f'doc_roots = ["docs/work"]\ndoc_strategy = {{{table}}}\n')
+    if roots:
+        table += ", roots = {" + ", ".join(f'{json.dumps(r)} = "keep"' for r in roots) + "}"
+    settings(primary, f"doc_roots = {json.dumps(list(doc_roots))}\ndoc_strategy = {{{table}}}\n")
 
 
 def clear(primary: Path, target: str, *args: str) -> tuple[int, str]:
@@ -1055,33 +1064,31 @@ def test_clear_trashes_a_linked_bundle_with_a_timestamp(primary: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("override", "name", "reason"),
+    ("name", "reason"),
     [
-        ({"ephemeral": "keep"}, "eng-132-handoff", "kept by strategy"),
-        ({}, "eng-3-handoff", "live"),  # the open eng-3 worktree carries it
-        ({}, "scratch", "unlinked"),
+        ("eng-3-handoff", "live"),  # the open eng-3 worktree carries it
+        ("scratch", "unlinked"),
     ],
 )
-def test_clear_refuses_kept_live_and_unlinked_bundles(
-    primary: Path, override: dict[str, object], name: str, reason: str
-) -> None:
-    strategy_settings(primary, **override)
+def test_clear_refuses_live_and_unlinked_bundles(primary: Path, name: str, reason: str) -> None:
+    strategy_settings(primary)
     write(primary, f"docs/work/{name}/a.md", "x")
     assert clear(primary, f"docs/work/{name}") == (1, f"blocked docs/work/{name}: {reason}")
     assert (primary / f"docs/work/{name}/a.md").exists() and not trash_folders(primary)
     assert clear(primary, "docs/work/missing")[1] == "blocked docs/work/missing: not a bundle"
 
 
-def test_clear_delete_with_markdown_scope_leaves_other_files(primary: Path) -> None:
-    strategy_settings(primary, ephemeral="delete", scope="markdown")
+def test_clear_with_markdown_scope_trashes_only_markdown(primary: Path) -> None:
+    strategy_settings(primary, scope="markdown")
     write(primary, "docs/work/eng-133-draft/a.md", "Ticket: eng-133\n")
     write(primary, "docs/work/eng-133-draft/deep/b.MD", "x")
     write(primary, "docs/work/eng-133-draft/out.log", "keep")
-    assert clear(primary, "docs/work/eng-133-draft") == (
-        0, "cleared docs/work/eng-133-draft: deleted"
-    )
+    code, line = clear(primary, "docs/work/eng-133-draft")
+    (folder,) = trash_folders(primary)
+    assert (code, line) == (0, f"cleared docs/work/eng-133-draft: trashed {folder.name}")
     left = [p.name for p in (primary / "docs/work/eng-133-draft").rglob("*") if p.is_file()]
-    assert left == ["out.log"] and not trash_folders(primary)
+    assert left == ["out.log"]
+    assert sorted(p.name for p in folder.rglob("*") if p.is_file()) == ["a.md", "b.MD"]
 
 
 def link_dir(link: Path, target: Path) -> None:
@@ -1105,7 +1112,7 @@ def outside_dir(primary: Path) -> Path:
 def test_clear_refuses_a_bundle_that_is_a_link_out_of_the_repository(
     primary: Path, scope: str
 ) -> None:
-    strategy_settings(primary, ephemeral="delete", scope=scope)
+    strategy_settings(primary, scope=scope)
     outside = outside_dir(primary)
     link_dir(primary / "docs/work/eng-136-notes", outside)
     assert clear(primary, "docs/work/eng-136-notes") == (
@@ -1115,26 +1122,34 @@ def test_clear_refuses_a_bundle_that_is_a_link_out_of_the_repository(
     assert os.access(outside / "keep.md", os.W_OK)
 
 
-@pytest.mark.parametrize("action", ["delete", "trash"])
-def test_clear_refuses_a_link_nested_in_a_markdown_scope_bundle(
-    primary: Path, action: str
-) -> None:
-    strategy_settings(primary, ephemeral=action, scope="markdown")
+@pytest.mark.parametrize("into_repo", [False, True])
+def test_clear_refuses_a_link_nested_in_a_markdown_scope_bundle(primary: Path, into_repo: bool) -> None:
+    strategy_settings(primary, scope="markdown")
     outside = outside_dir(primary)
+    if into_repo:  # a link to another folder of the same repository is just as foreign to the bundle
+        shutil.move(outside, primary / "src")
+        outside = primary / "src"
     write(primary, "docs/work/eng-136-notes/own.md", "Ticket: eng-136\n")
     link_dir(primary / "docs/work/eng-136-notes/linked", outside)
     assert clear(primary, "docs/work/eng-136-notes") == (
-        1, "blocked docs/work/eng-136-notes: links outside the repository"
+        1, "blocked docs/work/eng-136-notes: links outside the bundle"
     )
     assert sorted(p.name for p in outside.rglob("*.md")) == ["deep.md", "keep.md"]
     assert (primary / "docs/work/eng-136-notes/own.md").exists() and not trash_folders(primary)
 
 
-@pytest.mark.parametrize("action", ["delete", "trash"])
-def test_clearing_a_whole_bundle_drops_a_nested_link_but_not_its_target(
-    primary: Path, action: str
-) -> None:
-    strategy_settings(primary, ephemeral=action, scope="bundle")
+def test_clear_refuses_a_markdown_scope_bundle_that_is_a_link_into_the_repository(primary: Path) -> None:
+    strategy_settings(primary, scope="markdown")
+    write(primary, "src/guide.md", "x")
+    link_dir(primary / "docs/work/eng-136-notes", primary / "src")
+    assert clear(primary, "docs/work/eng-136-notes") == (
+        1, "blocked docs/work/eng-136-notes: links outside the bundle"
+    )
+    assert (primary / "src/guide.md").exists() and not trash_folders(primary)
+
+
+def test_clearing_a_whole_bundle_drops_a_nested_link_but_not_its_target(primary: Path) -> None:
+    strategy_settings(primary, scope="bundle")
     outside = outside_dir(primary)
     write(primary, "docs/work/eng-136-notes/own.md", "Ticket: eng-136\n")
     link_dir(primary / "docs/work/eng-136-notes/linked", outside)
@@ -1155,13 +1170,8 @@ def test_clear_with_markdown_scope_blocks_when_nothing_is_in_scope(primary: Path
     assert not trash_folders(primary)
 
 
-def test_root_override_keeps_a_bundle_the_class_action_would_trash(primary: Path) -> None:
-    settings(
-        primary,
-        'doc_roots = ["docs/work", "docs/handoffs"]\n'
-        'doc_strategy = {scope = "bundle", ephemeral = "trash", reference = "promote",'
-        ' trash_days = 30, tracker = "github", roots = {"./docs/handoffs/" = "keep"}}\n',
-    )
+def test_keep_root_keeps_a_bundle_the_rule_would_trash(primary: Path) -> None:
+    strategy_settings(primary, ("docs/work", "docs/handoffs"), roots=("./docs/handoffs/",))
     write(primary, "docs/handoffs/eng-139-a/a.md", "Ticket: eng-139\n")
     write(primary, "docs/work/eng-139-b/a.md", "Ticket: eng-139\n")
     assert clear(primary, "docs/handoffs/eng-139-a") == (
@@ -1180,19 +1190,15 @@ def test_each_doc_row_names_the_action_its_strategy_gives_it(
     write(primary, "docs/lab/eng-145-research/a.md", "Ticket: eng-145\n")
     settings(primary, 'doc_roots = ["docs/work", "docs/handoffs", "docs/lab"]\n')
     assert {d["action"] for d in docs_by_path(primary, capsys).values()} == {""}  # no strategy
-    settings(
-        primary,
-        'doc_roots = ["docs/work", "docs/handoffs", "docs/lab"]\n'
-        'doc_strategy = {scope = "bundle", ephemeral = "trash", reference = "promote",'
-        ' trash_days = 30, tracker = "github",'
-        ' roots = {"docs/handoffs" = "keep", "docs/lab" = "delete"}}\n',
+    strategy_settings(
+        primary, ("docs/work", "docs/handoffs", "docs/lab"), roots=("docs/handoffs", "docs/lab")
     )
     actions = {p: d["action"] for p, d in docs_by_path(primary, capsys).items()}
     assert actions == {
         "docs/work/eng-142-handoff": "trash",
         "docs/work/eng-143-research": "promote",
-        "docs/handoffs/eng-144-a": "keep",  # the root's entry wins over the class action
-        "docs/lab/eng-145-research": "keep",  # delete does not fit a reference bundle
+        "docs/handoffs/eng-144-a": "keep",  # a keep-root wins over the class action
+        "docs/lab/eng-145-research": "keep",
     }
 
 
@@ -1235,28 +1241,648 @@ def test_reference_bundle_is_cleared_once_a_tracked_doc_is_on_origin(primary: Pa
     # Stale origin/main, as when the promotion merged after the session's fetch: --clear fetches.
     git(primary, "update-ref", "refs/remotes/origin/main", "HEAD~1")
     assert clear(primary, bundle, "--promoted", "findings.md")[0] == 0
-    strategy_settings(primary, reference="keep")
+    strategy_settings(primary, roots=("docs/work",))
     write(primary, f"{bundle}/a.md", "Ticket: eng-135\n")
     assert clear(primary, bundle, "--promoted", "findings.md") == (
         1, f"blocked {bundle}: kept by strategy"
     )
 
 
-def test_sweep_reports_trash_past_retention_and_only_purge_removes_it(
+OLD = "20200101T000000Z"
+
+
+def old_trash(primary: Path, files: int = 1) -> Path:
+    """An expired trash folder, plus a fresh one and a stray that are not past retention."""
+    trash = primary / ".git" / "lumberjack-trash"
+    for n in range(files):
+        write(trash, f"{OLD}/docs/work/old/{n}.md", "x")
+    write(trash, f"{time.strftime(sweep_worktrees.TRASH_STAMP, time.gmtime())}/docs/work/new/a.md", "x")
+    write(trash, "stray/a.md", "not ours")
+    return trash
+
+
+def test_session_start_purges_trash_past_retention(primary: Path) -> None:
+    strategy_settings(primary, trash_days=7)
+    trash = old_trash(primary)
+    out = cleanup(primary)
+    assert "purged " + OLD in out and out[0].endswith("docs 0")
+    assert not any(line.startswith("trash ") for line in out)
+    assert not (trash / OLD).exists() and (trash / "stray").exists() and len(list(trash.iterdir())) == 2
+
+
+@pytest.mark.parametrize("mode", ["report", "keep", "none"])
+def test_report_keep_and_no_strategy_purge_no_trash(primary: Path, mode: str) -> None:
+    saved = 'doc_strategy = {scope = "bundle", trash_days = 7, grace_days = 0}\n'
+    settings(primary, f'cleanup = "{"report" if mode == "none" else mode}"\n' + ("" if mode == "none" else saved))
+    trash = old_trash(primary)
+    out = cleanup(primary)
+    assert (trash / OLD).exists() and len(list(trash.iterdir())) == 3
+    assert not any(line.startswith("purged") for line in out)
+    assert (f"trash {OLD}: would purge" in out) is (mode == "report")
+
+
+def tick_clock(m: pytest.MonkeyPatch) -> None:
+    """The sweep's clock advances one second per check, so a budget ends after that many checks."""
+    ticks = iter(range(10**6))
+    m.setattr(sweep_worktrees, "time", types.SimpleNamespace(monotonic=lambda: next(ticks), time=time.time))
+
+
+def test_purge_stops_at_the_budget_and_a_later_session_start_finishes_it(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy_settings(primary, trash_days=7)
+    folder = old_trash(primary, files=40).joinpath(OLD)
+    with monkeypatch.context() as short:  # the budget ends mid-folder
+        short.setattr(sweep_worktrees, "DOC_SECONDS", 25)
+        tick_clock(short)
+        out = sweep_worktrees.cleanup_session(primary)
+    left = sum(1 for _ in folder.rglob("*.md"))
+    assert 0 < left < 40 and not any(line.startswith("purged") for line in out)
+    assert "purged " + OLD in sweep_worktrees.cleanup_session(primary)
+    assert not folder.exists()
+
+
+@pytest.mark.parametrize("kind", ["symlink", "junction"])
+def test_purge_removes_a_link_in_the_trash_and_leaves_its_target(tmp_path: Path, kind: str) -> None:
+    outside = tmp_path / "outside"
+    write(outside, "keep/a.md", "x")
+    folder = tmp_path / "trash" / OLD
+    write(folder, "docs/a.md", "x")
+    link = folder / "docs" / "link"
+    if kind == "junction":
+        if sys.platform != "win32":
+            pytest.skip("junctions are Windows only")
+        import _winapi
+
+        _winapi.CreateJunction(str(outside), str(link))  # Windows tools leave these behind
+    else:
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except OSError:  # Windows without the symlink privilege
+            pytest.skip("cannot create a symlink")
+    assert sweep_worktrees.purge_tree(str(folder), math.inf)
+    assert not folder.exists() and (outside / "keep" / "a.md").exists()
+
+
+def test_a_folder_the_purge_cannot_delete_is_blocked_not_raised(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def too_deep(path: str, deadline: float) -> bool:
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(sweep_worktrees, "purge_tree", too_deep)
+    assert sweep_worktrees.purge_expired(primary, [{"name": OLD}], math.inf) == [
+        f"blocked trash {OLD}: cannot delete"
+    ]
+
+
+def test_purge_trash_command_deletes_everything_past_retention_in_one_run(
     primary: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     strategy_settings(primary, trash_days=7)
-    trash = primary / ".git" / "lumberjack-trash"
-    write(trash, "20200101T000000Z/docs/work/old/a.md", "x")
-    fresh = time.strftime(sweep_worktrees.TRASH_STAMP, time.gmtime())
-    write(trash, f"{fresh}/docs/work/new/a.md", "x")
-    write(trash, "stray/a.md", "not ours")
-    out = cleanup(primary)
-    assert out[0].endswith("docs 0, trash 1")
-    assert any(l.startswith("trash 20200101T000000Z: ") and l.endswith("days old; 1 B") for l in out)
-    assert [t["name"] for t in report(capsys)["trash"]] == ["20200101T000000Z"]  # type: ignore[attr-defined]
-    assert (trash / "20200101T000000Z").exists()  # reporting never deletes
+    trash = old_trash(primary, files=40)
+    assert [t["name"] for t in report(capsys)["trash"]] == [OLD]  # type: ignore[attr-defined]
     done = sweep(primary, "--purge-trash")
-    assert done.stdout.splitlines() == ["purged 20200101T000000Z"]
-    assert sorted(p.name for p in trash.iterdir()) == sorted([fresh, "stray"])
+    assert done.stdout.splitlines() == ["purged " + OLD]
+    assert not (trash / OLD).exists() and len(list(trash.iterdir())) == 2
     assert sweep(primary, "--purge-trash").stdout.strip() == "trash: nothing past retention"
+
+
+def rule_bundles(
+    primary: Path, mode: str = "prune", strategy: bool = True, scope: str = "bundle"
+) -> None:
+    saved = f'doc_strategy = {{scope = "{scope}", trash_days = 30, grace_days = 0, roots = {{"docs/handoffs" = "keep"}}}}\n'
+    settings(
+        primary,
+        f'cleanup = "{mode}"\ndoc_roots = ["docs/work", "docs/handoffs"]\n' + (saved if strategy else ""),
+    )
+    write(primary, "docs/work/eng-150-handoff/a.md", "x\n")  # linked, ephemeral
+    write(primary, "docs/work/eng-151-research/a.md", "x\n")  # linked, reference
+    write(primary, "docs/work/scratch/a.md", "no ticket\n")  # unlinked
+    write(primary, "docs/work/eng-3-handoff/a.md", "x\n")  # live: the eng-3 worktree is open
+    write(primary, "docs/handoffs/eng-152-a/a.md", "x\n")  # under a keep-root
+
+
+def test_session_start_trashes_only_linked_ephemeral_bundles(primary: Path) -> None:
+    rule_bundles(primary)
+    out = cleanup(primary)
+    (folder,) = trash_folders(primary)
+    assert f"cleared docs/work/eng-150-handoff: trashed {folder.name}" in out
+    assert out[0].endswith("docs 1")
+    assert not (primary / "docs/work/eng-150-handoff").exists()
+    for stays in ("docs/work/eng-151-research", "docs/work/scratch", "docs/work/eng-3-handoff",
+                  "docs/handoffs/eng-152-a"):
+        assert (primary / stays / "a.md").exists()
+    assert not any("would trash" in line for line in out)
+
+
+@pytest.mark.parametrize("mode", ["report", "keep", "none"])
+def test_report_keep_and_no_strategy_move_no_bundle(primary: Path, mode: str) -> None:
+    rule_bundles(primary, "report" if mode == "none" else mode, strategy=mode != "none")
+    out = cleanup(primary)
+    assert (primary / "docs/work/eng-150-handoff/a.md").exists() and not trash_folders(primary)
+    assert out[0].endswith("docs 0")
+    assert not any(line.startswith("cleared") for line in out)
+    assert any("would trash" in line for line in out) is (mode == "report")
+
+
+def test_bundles_past_the_time_budget_wait_for_the_next_session_start(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    with monkeypatch.context() as short:
+        short.setattr(sweep_worktrees, "DOC_SECONDS", -1)
+        assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 0")
+    assert (primary / "docs/work/eng-150-handoff/a.md").exists()
+    assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")
+    assert not (primary / "docs/work/eng-150-handoff").exists()
+
+
+def test_sizing_never_takes_the_budget_trashing_needs(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    monkeypatch.setattr(sweep_worktrees, "DOC_SECONDS", 3)
+    monkeypatch.setattr(sweep_worktrees, "PURGE_SECONDS", 1)
+    monkeypatch.setattr(sweep_worktrees, "SIZE_SECONDS", 0.5)
+
+    def huge(path: Path, deadline: float) -> None:  # sizing runs until its deadline
+        time.sleep(max(0.0, deadline - time.monotonic()))
+
+    monkeypatch.setattr(sweep_worktrees, "tree_size", huge)
+    assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")
+
+
+def test_markdown_walk_stops_at_the_deadline_and_moves_nothing(primary: Path) -> None:
+    rule_bundles(primary, scope="markdown")
+    write(primary, "docs/work/eng-150-handoff/run/out.log", "log")
+    cfg = sweep_worktrees.load_config(primary)
+    docs = {d["path"]: d for d in sweep_worktrees.build_report(primary, cfg)["docs"]}
+    bundle = "docs/work/eng-150-handoff"
+    assert sweep_worktrees.clear_bundle(primary, cfg, docs, bundle, "", "stamp", deadline=0) == ("timeout", "")
+    assert (primary / bundle / "a.md").exists() and not trash_folders(primary)
+    assert sweep_worktrees.clear_bundle(primary, cfg, docs, bundle, "", "stamp")[0] == "partial"
+    assert not (primary / bundle / "a.md").exists() and (primary / bundle / "run/out.log").exists()
+
+
+def test_session_start_skips_a_bundle_with_no_markdown_left_silently(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary, scope="markdown")
+    write(primary, "docs/work/eng-150-handoff/run/out.log", "log")
+    first = cleanup(primary)
+    assert first[0].endswith("docs 1") and any(l.startswith("cleared docs/work/eng-150-handoff: ") for l in first)
+    assert recorded(primary, "skipped") == ["docs/work/eng-150-handoff"]
+    again = cleanup(primary)
+    assert again[0].endswith("blocked 2, unverified 3, orphans 0, docs 0")  # the two worktrees only
+    assert not any("no Markdown in scope" in line for line in again)
+    assert clear(primary, "docs/work/eng-150-handoff") == (
+        1, "blocked docs/work/eng-150-handoff: no Markdown in scope"
+    )
+    write(primary, "docs/work/eng-150-handoff/late.md", "x\n")
+    sweep_worktrees.cleanup_session(primary)
+    assert (primary / "docs/work/eng-150-handoff/late.md").exists()  # skipped: not walked again
+    assert clear(primary, "docs/work/eng-150-handoff")[0] == 0  # --clear takes it
+
+
+def test_a_bundle_too_large_to_walk_in_time_is_left_to_the_cleanup_command(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary, scope="markdown")
+    big = "docs/work/eng-150-handoff"
+    for n in range(40):
+        write(primary, f"{big}/n{n}.md", "x\n")
+    write(primary, "docs/work/eng-153-handoff/a.md", "x\n")
+    with monkeypatch.context() as short:  # its walk outlasts all of trashing's time
+        short.setattr(sweep_worktrees, "DOC_SECONDS", 10)
+        short.setattr(sweep_worktrees, "PURGE_SECONDS", 0)
+        tick_clock(short)
+        out = sweep_worktrees.cleanup_session(primary)
+    assert f"blocked {big}: too large to walk in time" in out and out[0].endswith("docs 0")
+    assert recorded(primary, "skipped") == [big]
+    assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")  # the next bundle gets the time
+    assert (primary / big / "a.md").exists() and not (primary / "docs/work/eng-153-handoff").exists()
+    assert clear(primary, big)[0] == 0  # --clear has no deadline
+
+
+def test_trashing_never_takes_the_time_purging_needs(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary, scope="markdown")
+    for n in range(40):  # a walk that runs until trashing's deadline
+        write(primary, f"docs/work/eng-150-handoff/n{n}.md", "x\n")
+    trash = old_trash(primary)
+    monkeypatch.setattr(sweep_worktrees, "DOC_SECONDS", 20)
+    monkeypatch.setattr(sweep_worktrees, "PURGE_SECONDS", 10)
+    tick_clock(monkeypatch)
+    out = sweep_worktrees.cleanup_session(primary)
+    assert "blocked docs/work/eng-150-handoff: too large to walk in time" in out
+    assert "purged " + OLD in out and not (trash / OLD).exists()
+
+
+def test_slow_branch_checks_never_eat_the_doc_budget(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    real = sweep_worktrees.classify
+
+    def slow(*a: object, **k: object) -> object:  # gh near its timeout
+        time.sleep(1.5)
+        return real(*a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sweep_worktrees, "classify", slow)
+    monkeypatch.setattr(sweep_worktrees, "DOC_SECONDS", 1)
+    monkeypatch.setattr(sweep_worktrees, "PURGE_SECONDS", 0.2)
+    assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")
+
+
+def test_a_session_start_looks_up_the_git_folder_once(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary, scope="markdown")
+    for n in range(10):
+        write(primary, f"docs/work/eng-150-handoff/n{n}.md", "x\n")
+    trash = old_trash(primary)
+    write(trash, "20190101T000000Z/a.md", "x")  # a second expired folder
+    calls: list[tuple[str, ...]] = []
+    real = sweep_worktrees.git
+
+    def counting(cwd: Path, *args: str, **k: object) -> subprocess.CompletedProcess[str]:
+        if cwd == primary:
+            calls.append(args)
+        return real(cwd, *args, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sweep_worktrees, "git", counting)
+    out = sweep_worktrees.cleanup_session(primary)
+    assert out[0].endswith("docs 1") and "purged " + OLD in out and "purged 20190101T000000Z" in out
+    assert sum("--absolute-git-dir" in a for a in calls) == 1  # not one git call per file or folder
+
+
+def test_markdown_trash_removes_the_folders_it_empties(primary: Path) -> None:
+    rule_bundles(primary, scope="markdown")
+    write(primary, "docs/work/eng-150-handoff/notes/b.md", "x\n")
+    write(primary, "docs/work/eng-150-handoff/run/out.log", "log")
+    write(primary, "docs/work/eng-153-handoff/deep/c.md", "x\n")  # Markdown only
+    assert cleanup(primary)[0].endswith("docs 2")
+    bundle = primary / "docs/work/eng-150-handoff"
+    assert not (bundle / "notes").exists() and (bundle / "run/out.log").exists()
+    assert not (primary / "docs/work/eng-153-handoff").exists()
+    assert recorded(primary, "skipped") == ["docs/work/eng-150-handoff"]
+
+
+def test_sizing_never_follows_a_link_out_of_the_bundle(primary: Path) -> None:
+    outside = outside_dir(primary)
+    write(outside, "big.bin", "x" * 100_000)
+    write(primary, "docs/work/eng-136-notes/own.md", "12345")
+    link_dir(primary / "docs/work/eng-136-notes/linked", outside)
+    assert sweep_worktrees.tree_size(primary / "docs/work/eng-136-notes", math.inf) < 1000  # type: ignore[operator]
+
+
+def test_a_future_first_seen_date_is_rewritten_to_today(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    save_state(primary, {BUNDLE: "2999-01-01"})  # a clock that once ran ahead
+    cleanup(primary)
+    assert recorded(primary) == {BUNDLE: datetime.now(timezone.utc).date().isoformat()}
+
+
+def test_a_huge_bundle_behind_a_blocked_one_is_still_left_to_the_cleanup_command(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary, scope="markdown")
+    link_dir(primary / "docs/work/eng-140-handoff/out", outside_dir(primary))  # blocked every run
+    big = "docs/work/eng-150-handoff"
+    for n in range(40):
+        write(primary, f"{big}/n{n}.md", "x\n")
+    write(primary, "docs/work/eng-153-handoff/a.md", "x\n")
+    with monkeypatch.context() as short:
+        short.setattr(sweep_worktrees, "DOC_SECONDS", 20)
+        short.setattr(sweep_worktrees, "PURGE_SECONDS", 0)
+        tick_clock(short)
+        out = sweep_worktrees.cleanup_session(primary)
+    assert "blocked docs/work/eng-140-handoff: links outside the bundle" in out
+    assert f"blocked {big}: too large to walk in time" in out
+    assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")  # the next bundle gets the time
+    assert not (primary / "docs/work/eng-153-handoff").exists()
+
+
+def test_markdown_trash_works_under_a_doc_root_that_is_a_link(primary: Path) -> None:
+    strategy_settings(primary, scope="markdown")
+    write(primary, "notes/work/eng-150-handoff/a.md", "x\n")
+    write(primary, "notes/work/eng-150-handoff/run/out.log", "log")
+    link_dir(primary / "docs/work", primary / "notes/work")
+    out = cleanup(primary)
+    assert out[0].endswith("docs 1"), out
+    assert not (primary / "notes/work/eng-150-handoff/a.md").exists()
+    assert (primary / "notes/work/eng-150-handoff/run/out.log").exists()
+
+
+HOLD = """import pathlib, sys, time
+sys.path.insert(0, sys.argv[1])
+import sweep_worktrees
+with sweep_worktrees.doc_work(pathlib.Path(sys.argv[2])) as state:
+    print(state is not None, flush=True)
+    time.sleep(120)
+"""
+
+
+def test_a_session_start_leaves_doc_work_to_a_sweep_holding_the_lock_until_it_dies(primary: Path) -> None:
+    rule_bundles(primary)
+    scripts = str(Path(sweep_worktrees.__file__).parent)
+    holder = subprocess.Popen([sys.executable, "-c", HOLD, scripts, str(primary)], stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout and holder.stdout.readline().strip() == "True"  # another session start is trashing
+        assert cleanup(primary)[0].endswith("docs 0")
+        assert (primary / "docs/work/eng-150-handoff/a.md").exists()
+    finally:
+        holder.kill()  # the hook timeout kills it mid-run
+        holder.wait()
+    assert cleanup(primary)[0].endswith("docs 1")  # the OS released its lock: no stale lock to wait out
+
+
+def test_report_mode_still_lists_trash_it_would_purge_while_the_lock_is_held(primary: Path) -> None:
+    rule_bundles(primary, mode="report")
+    old_trash(primary)
+    with sweep_worktrees.doc_work(primary) as held:
+        assert held is not None
+        assert f"trash {OLD}: would purge" in cleanup(primary)
+
+
+def test_a_doc_lock_the_run_cannot_open_never_hides_the_worktree_cleanup(primary: Path) -> None:
+    rule_bundles(primary)
+    (primary / ".git" / "lumberjack-docs.lock").mkdir()  # stands in for an unwritable git folder
+    out = cleanup(primary)
+    assert out[0].startswith("sweep: cleaned") and out[0].endswith("docs 0"), out
+    assert any(line.startswith("docs: unavailable (") for line in out), out
+
+
+def test_the_cleanup_commands_report_a_lock_they_cannot_open_at_once(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    (primary / ".git" / "lumberjack-docs.lock").mkdir()
+
+    def never(seconds: float) -> None:
+        raise AssertionError("waited for a lock nobody holds")
+
+    monkeypatch.setattr(sweep_worktrees.time, "sleep", never)
+    with pytest.raises(OSError):
+        sweep_worktrees.clear_bundles(primary, ["docs/work/eng-150-handoff"])
+    with pytest.raises(OSError):
+        sweep_worktrees.purge_trash(primary)
+
+
+def test_the_cleanup_commands_wait_for_a_sweep_holding_the_lock_then_refuse(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    trash = old_trash(primary)
+    monkeypatch.setattr(sweep_worktrees, "DOC_WAIT", 0.3)
+    monkeypatch.chdir(primary)
+    bundle = "docs/work/eng-150-handoff"
+    with sweep_worktrees.doc_work(primary) as held:  # a session start is trashing, and outlasts the wait
+        assert held is not None
+        assert sweep_worktrees.clear_bundles(primary, [bundle]) == [
+            ("blocked", f"blocked {bundle}: a sweep is trashing")
+        ]
+        assert sweep_worktrees.purge_trash(primary) == ["blocked trash: a sweep is trashing"]
+        assert sweep_worktrees.main(["--purge-trash"]) == 1
+        assert (primary / bundle / "a.md").exists() and (trash / OLD).exists()
+    assert sweep_worktrees.clear_bundles(primary, [bundle])[0][0] == "cleared"
+    assert sweep_worktrees.main(["--purge-trash"]) == 0
+    assert not (trash / OLD).exists()
+
+
+def test_clear_fetches_the_promotion_before_taking_the_doc_lock(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    fetched = []
+
+    def fetch(where: Path) -> bool:
+        with sweep_worktrees.doc_work(where) as state:  # a session start now still gets the docs
+            fetched.append(state is not None)
+        return False
+
+    monkeypatch.setattr(sweep_worktrees, "fetch", fetch)
+    sweep_worktrees.clear_bundles(primary, ["docs/work/eng-151-research"], "docs/findings.md")
+    assert fetched == [True]
+
+
+def test_markdown_clear_never_follows_a_link_inside_the_bundle(primary: Path) -> None:
+    rule_bundles(primary, scope="markdown")
+    bundle = primary / "docs/work/eng-150-handoff"
+    write(bundle, "sub/b.md", "x\n")
+    link_dir(bundle / "alias", bundle / "sub")  # the same files under a second name
+    code, line = clear(primary, "docs/work/eng-150-handoff")
+    assert code == 0 and line.startswith("cleared docs/work/eng-150-handoff: trashed"), line
+    [folder] = trash_folders(primary)
+    moved = sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*.md"))
+    assert moved == ["docs/work/eng-150-handoff/a.md", "docs/work/eng-150-handoff/sub/b.md"]
+    assert os.path.lexists(bundle / "alias")  # a link is a leaf: it stays, not walked
+
+
+def test_a_failed_git_folder_lookup_never_moves_docs_elsewhere(
+    primary: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    real = sweep_worktrees.git
+
+    def broken(cwd: Path, *args: str, **k: object) -> subprocess.CompletedProcess[str]:
+        if "--absolute-git-dir" in args:
+            return subprocess.CompletedProcess(args, 128, "", "fatal: not a git repository")
+        return real(cwd, *args, **k)  # type: ignore[arg-type]
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setattr(sweep_worktrees, "git", broken)
+    out = sweep_worktrees.cleanup_session(primary)
+    assert out[0].startswith("sweep: unavailable"), out
+    assert (primary / "docs/work/eng-150-handoff/a.md").exists() and not any(elsewhere.iterdir())
+
+
+def test_the_markdown_walk_resolves_only_links(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary, scope="markdown")
+    bundle = primary / "docs/work/eng-150-handoff"
+    for n in range(10):
+        write(bundle, f"n{n}.md", "x\n")
+    resolved: list[Path] = []
+    real = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda self, *a, **k: resolved.append(self) or real(self, *a, **k))
+    assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")
+    assert [p for p in resolved if bundle in p.parents] == []  # a realpath per file costs the budget
+
+
+def test_is_folder_never_stats_a_file() -> None:
+    class File:
+        def is_dir(self, follow_symlinks: bool = True) -> bool:
+            return False
+
+        def stat(self, follow_symlinks: bool = True) -> os.stat_result:
+            raise AssertionError("an lstat per file")
+
+    assert not sweep_worktrees.is_folder(File())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("tag", "link"),
+    [(0xA000000C, True), (0xA0000003, True), (0x9000001A, False), (0, False)],
+    ids=["symlink", "junction", "onedrive-cloud", "none"],
+)
+def test_only_reparse_points_that_redirect_count_as_links(tag: int, link: bool) -> None:
+    st = types.SimpleNamespace(st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT if tag else 0, st_reparse_tag=tag)
+    assert sweep_worktrees.reparse(st) is link  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "error", [OSError(13, "Permission denied", "/abs/secret/path"), RuntimeError("Symlink loop")]
+)
+def test_a_bundle_that_cannot_be_read_is_a_blocked_line_not_an_error(
+    primary: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    rule_bundles(primary)
+
+    def broken(*_: object, **__: object) -> tuple[bool, str]:
+        raise error
+
+    monkeypatch.setattr(sweep_worktrees, "clear_bundle", broken)
+    out = sweep_worktrees.cleanup_session(primary)
+    line = next(l for l in out if l.startswith("blocked docs/work/eng-150-handoff: "))
+    assert "/abs" not in line and str(primary) not in line
+    assert out[0].endswith("blocked 3, unverified 3, orphans 0, docs 0")  # two worktrees plus this one
+
+
+STATE = "lumberjack-docs.json"
+BUNDLE = "docs/work/eng-160-handoff"
+
+
+def save_state(primary: Path, since: dict[str, str], skipped: list[str] | None = None) -> None:
+    write(primary / ".git", STATE, json.dumps({"since": since, "skipped": skipped or []}))
+
+
+def seen_on(primary: Path, days_ago: int, path: str = BUNDLE) -> None:
+    save_state(primary, {path: (datetime.now(timezone.utc) - timedelta(days=days_ago)).date().isoformat()})
+
+
+def recorded(primary: Path, key: str = "since") -> dict[str, str] | list[str]:
+    return json.loads((primary / ".git" / STATE).read_text())[key]  # type: ignore[no-any-return]
+
+
+def grace_bundle(primary: Path, grace_days: int, mode: str = "prune") -> None:
+    strategy_settings(primary, grace_days=grace_days)
+    (primary / ".lumberjack.toml").write_text(
+        (primary / ".lumberjack.toml").read_text() + f'cleanup = "{mode}"\n'
+    )
+    write(primary, f"{BUNDLE}/a.md", "x\n")
+
+
+def test_a_linked_bundle_waits_out_its_grace_days_from_the_first_session_start(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    today = datetime.now(timezone.utc).date().isoformat()
+    out = cleanup(primary)
+    assert out[0].endswith("docs 0") and any(l.startswith(f"doc ephemeral {BUNDLE}:") for l in out)
+    assert recorded(primary) == {BUNDLE: today} and (primary / BUNDLE).exists()
+    seen_on(primary, 2)
+    assert cleanup(primary)[0].endswith("docs 0") and (primary / BUNDLE).exists()
+    seen_on(primary, 3)
+    out = cleanup(primary)
+    assert out[0].endswith("docs 1") and not (primary / BUNDLE).exists()
+    assert any(l.startswith(f"cleared {BUNDLE}: trashed ") for l in out)
+    assert recorded(primary) == {}
+
+
+def test_zero_grace_days_trashes_at_the_first_session_start_that_sees_the_bundle(primary: Path) -> None:
+    grace_bundle(primary, 0)
+    assert cleanup(primary)[0].endswith("docs 1") and not (primary / BUNDLE).exists()
+
+
+def test_a_bundle_that_turns_live_or_vanishes_loses_its_date(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    write(primary, "docs/work/eng-3-handoff/a.md", "x\n")  # the open eng-3 worktree carries it
+    gone = ["docs/work/eng-3-handoff", "docs/work/gone"]
+    save_state(primary, dict.fromkeys(gone, "2020-01-01"), gone)
+    cleanup(primary)
+    assert list(recorded(primary)) == [BUNDLE] and recorded(primary, "skipped") == []  # live and gone dropped
+    assert (primary / "docs/work/eng-3-handoff/a.md").exists()
+    # Linked again later: the count starts over instead of trashing at once.
+    save_state(primary, {BUNDLE: "2020-01-01"})
+    (primary / BUNDLE).rename(primary / "docs/work/elsewhere")  # no ticket: unlinked
+    cleanup(primary)
+    assert recorded(primary) == {}
+    (primary / "docs/work/elsewhere").rename(primary / BUNDLE)
+    assert cleanup(primary)[0].endswith("docs 0") and (primary / BUNDLE).exists()
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["", "not json", "[]", '{"docs/work/eng-160-handoff": "2020-01-01"}',
+     '{"since": {"docs/work/eng-160-handoff": 5}, "skipped": []}',
+     '{"since": {"docs/work/eng-160-handoff": "soon"}, "skipped": []}', '{"since": {}, "skipped": 5}',
+     b"\xff\xfe"],
+)
+def test_a_damaged_state_file_never_trashes_early_and_is_rewritten(
+    primary: Path, content: str | bytes
+) -> None:
+    grace_bundle(primary, 3)
+    state = primary / ".git" / STATE
+    state.write_bytes(content if isinstance(content, bytes) else content.encode())
+    out = cleanup(primary)
+    assert out[0].endswith("docs 0") and (primary / BUNDLE / "a.md").exists()
+    assert recorded(primary) == {BUNDLE: datetime.now(timezone.utc).date().isoformat()}
+
+
+def test_a_deeply_nested_state_file_counts_as_empty(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    (primary / ".git" / STATE).write_text("[" * 200000)  # json raises RecursionError
+    assert cleanup(primary)[0].endswith("docs 0") and (primary / BUNDLE / "a.md").exists()
+    assert recorded(primary) == {BUNDLE: datetime.now(timezone.utc).date().isoformat()}
+
+
+def test_keep_mode_never_creates_the_state_file(primary: Path) -> None:
+    grace_bundle(primary, 3, "keep")
+    cleanup(primary)
+    assert not (primary / ".git" / STATE).exists()
+
+
+def test_reference_and_keep_root_bundles_get_no_date(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    write(primary, "docs/work/eng-162-research/a.md", "x\n")  # reference
+    write(primary, "docs/handoffs/eng-163-a/a.md", "x\n")  # under a keep-root
+    (primary / ".lumberjack.toml").write_text(
+        (primary / ".lumberjack.toml").read_text().replace(
+            '"docs/work"]', '"docs/work", "docs/handoffs"]'
+        ).replace("grace_days = 3}", 'grace_days = 3, roots = {"docs/handoffs" = "keep"}}')
+    )
+    cleanup(primary)
+    assert list(recorded(primary)) == [BUNDLE]
+
+
+def test_an_unwritable_state_file_never_trashes_early_or_fails_the_session_start(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    (primary / ".git" / STATE).mkdir()  # reads and writes both fail
+    out = cleanup(primary)
+    assert out[0].endswith("docs 0") and (primary / BUNDLE / "a.md").exists()
+
+
+def test_report_mode_lists_a_bundle_to_trash_only_once_its_grace_is_over(primary: Path) -> None:
+    grace_bundle(primary, 3, "report")
+    assert not any("would trash" in l for l in cleanup(primary))
+    seen_on(primary, 3)
+    assert f"doc ephemeral {BUNDLE}: would trash" in cleanup(primary)
+
+
+def test_clear_ignores_the_grace_period(primary: Path) -> None:
+    grace_bundle(primary, 30)
+    assert clear(primary, BUNDLE)[0] == 0 and not (primary / BUNDLE).exists()
+
+
+def test_trashing_one_bundle_keeps_the_date_of_one_still_waiting(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    write(primary, "docs/work/eng-161-handoff/a.md", "x\n")
+    yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    save_state(primary, {BUNDLE: "2020-01-01", "docs/work/eng-161-handoff": yesterday})
+    out = cleanup(primary)
+    assert out[0].endswith("docs 1") and not (primary / BUNDLE).exists()
+    assert recorded(primary) == {"docs/work/eng-161-handoff": yesterday}
