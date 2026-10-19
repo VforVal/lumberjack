@@ -3,6 +3,7 @@
 import argparse
 import glob
 import json
+import math
 import os
 import posixpath
 import re
@@ -11,7 +12,7 @@ import stat
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 if sys.version_info < (3, 11):  # before tomllib: a plain message instead of a traceback
     sys.exit(f"lumberjack: Python 3.11+ required, found {sys.version.split()[0]}")
@@ -52,7 +53,13 @@ DOC_COMMITS = 1000  # newest commits read from unlanded branches when looking fo
 TRASH_STAMP = "%Y%m%dT%H%M%SZ"  # a trash folder is named for the UTC moment its files moved
 SCOPES = ("markdown", "bundle")  # doc_strategy scope: only .md files, or whole bundles
 BUNDLE_ACTION = {"ephemeral": "trash", "reference": "promote"}  # by class, outside a keep-root
-DOC_SECONDS = 10  # budget for sizing bundles; the SessionStart hook times out at 30
+DOC_SECONDS = 10  # one budget for all doc work in a run (sizing, trashing, purging); the hook times out at 30
+NO_MARKDOWN = "no Markdown in scope"
+
+
+def budget(deadline: float | None) -> float:
+    """The run's shared doc deadline, or a fresh one for a caller that has none."""
+    return time.monotonic() + DOC_SECONDS if deadline is None else deadline
 
 
 def branch_pattern(cfg: Config) -> re.Pattern[str]:
@@ -125,18 +132,20 @@ def parse_config(table: Config, source: str = "") -> Config:
     if strategy.keys() & {"ephemeral", "reference", "tracker"}:
         raise ConfigError(
             "lumberjack: doc_strategy no longer takes ephemeral, reference or tracker;"
-            " keep scope, trash_days and roots", source,
+            " keep scope, trash_days, grace_days and roots", source,
         )
     if strategy and not (
-        strategy.keys() - {"roots"} == {"scope", "trash_days"}
+        strategy.keys() - {"roots"} == {"scope", "trash_days", "grace_days"}
         and strategy["scope"] in SCOPES
         and type(strategy["trash_days"]) is int and strategy["trash_days"] > 0
+        and type(strategy["grace_days"]) is int and strategy["grace_days"] >= 0
         and isinstance(roots, dict)
         and all(isinstance(r, str) and a == "keep" for r, a in roots.items())
     ):
         raise ConfigError(
             "lumberjack: doc_strategy must be empty or set scope (markdown or bundle) and"
-            " trash_days (at least 1), optionally roots (each root = \"keep\")", source,
+            " trash_days (at least 1) and grace_days (0 or more), optionally roots"
+            " (each root = \"keep\")", source,
         )
     if roots:
         strategy["roots"] = {posixpath.normpath(r): a for r, a in roots.items()}
@@ -441,7 +450,6 @@ def format_rows(report: Row) -> list[str]:
     ]
     out += [f"orphan {o['kind']} {o['path']}" for o in report["orphans"]]
     out += map(doc_line, linked_docs(report))
-    out += map(trash_line, report["trash"])
     out += [f"branch {b['state']}{detail(b)} {b['name']}" for b in report["branches"]]
     out += [f"prototype {p['issue']} {p['name']}" for p in report["prototypes"]]
     p = report["primary"]
@@ -555,7 +563,10 @@ def bundle_action(strategy: Config, root: str, kind: str) -> str:
     return "keep" if root in strategy.get("roots", {}) else BUNDLE_ACTION[kind]
 
 
-def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verdict]) -> list[Row]:
+def doc_rows(
+    primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verdict],
+    deadline: float | None = None,
+) -> list[Row]:
     """Untracked doc-root bundles: class, tickets and live/linked/unlinked; size for linked."""
     # Any worktree counts, by branch or folder name, so a detached Codex worktree does too.
     # A branch without one counts until it lands: landed local branches are never deleted.
@@ -563,7 +574,7 @@ def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verd
     names = [n for t in trees[1:] for n in (t["branch"], Path(t["path"]).name) if n]
     names += [n for _, n in unlanded if n]
     carried = {t for name in names for t in ticket_ids(cfg, name)}
-    deadline = time.monotonic() + DOC_SECONDS
+    deadline = budget(deadline)
     worktrees = [Path(tree["path"]).resolve() for tree in trees[1:]]
     bundles = [
         (root, rel) for root, rel in doc_entries(primary, cfg)
@@ -609,28 +620,47 @@ def trash_dir(primary: Path) -> Path:
     return Path(git(primary, "rev-parse", "--absolute-git-dir").stdout.strip()) / "lumberjack-trash"
 
 
+def grace_wait(primary: Path, strategy: Config, marked: list[Row]) -> list[Row]:
+    """The marked bundles still inside grace_days; records the first date a session start saw each.
+
+    The state file holds {bundle path: first UTC date seen linked}. Anything unreadable counts as
+    empty, so a damaged file only restarts the count; a bundle no longer marked loses its date."""
+    state = trash_dir(primary).with_name("lumberjack-docs.json")
+    today = datetime.now(timezone.utc).date()
+    try:
+        saved = json.loads(state.read_text("utf-8"))
+        seen = {k: min(date.fromisoformat(v), today) for k, v in saved.items()}
+    except (OSError, ValueError, AttributeError, TypeError, RecursionError):
+        seen = {}
+    kept = {d["path"]: seen.get(d["path"], today) for d in marked}
+    if kept != seen:
+        try:
+            state.write_text(json.dumps({k: v.isoformat() for k, v in kept.items()}), "utf-8")
+        except OSError:  # without a date the bundle waits; grace_days = 0 needs none
+            pass
+    return [d for d in marked if (today - kept[d["path"]]).days < strategy["grace_days"]]
+
+
 def trash_rows(primary: Path, cfg: Config) -> list[Row]:
     """Trash folders older than the saved retention, oldest first."""
     days, folder = cfg["doc_strategy"].get("trash_days"), trash_dir(primary)
     if not days or not folder.is_dir():
         return []
     now, rows = datetime.now(timezone.utc), []
-    deadline = time.monotonic() + DOC_SECONDS
     for name in sorted(os.listdir(folder)):
         try:
             age = (now - datetime.strptime(name, TRASH_STAMP).replace(tzinfo=timezone.utc)).days
         except ValueError:  # not ours
             continue
         if age >= days:
-            rows.append({"name": name, "days": age, "size": tree_size(folder / name, deadline)})
+            rows.append({"name": name, "days": age})
     return rows
 
 
-def trash_line(row: Row) -> str:
-    return f"trash {row['name']}: {row['days']} days old; {human_size(row['size'])}"
-
-
-def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
+def build_report(
+    primary: Path, cfg: Config, stale: bool = False, deadline: float | None = None
+) -> Row:
+    deadline = budget(deadline)
     trees = registered(primary)
     loose = branch_tips(primary, cfg, trees)
     tips = {(t["head"], t["branch"]) for t in trees[1:]}
@@ -641,7 +671,7 @@ def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
     return {
         "worktrees": worktree_rows(trees, tiers),
         "orphans": orphan_rows(primary, cfg, trees),
-        "docs": doc_rows(primary, cfg, trees, tiers),
+        "docs": doc_rows(primary, cfg, trees, tiers, deadline),
         "doc_strategy": cfg["doc_strategy"],
         "trash": trash_rows(primary, cfg),
         "branches": branch_rows(loose, tiers),
@@ -793,8 +823,10 @@ def clear_bundles(start: Path, targets: list[str], promoted: str = "") -> list[t
 
 
 def clear_bundle(
-    primary: Path, cfg: Config, docs: dict[str, Row], target: str, promoted: str, stamp: str
+    primary: Path, cfg: Config, docs: dict[str, Row], target: str, promoted: str, stamp: str,
+    deadline: float | None = None,
 ) -> tuple[bool, str]:
+    """Trash one bundle; (done, output line). Past a deadline the scan stops with nothing moved: (False, "")."""
     strategy, rel = cfg["doc_strategy"], posixpath.normpath(target.replace("\\", "/"))
     doc = docs.get(rel)
     action = doc["action"] if doc else ""
@@ -816,19 +848,24 @@ def clear_bundle(
     )
     if reason:
         return False, f"blocked {rel}: {reason}"
-    path = primary / rel
+    path, root = primary / rel, primary.resolve()
+    # A link (symlink or Windows junction) can lead a bundle or an entry in it out of the
+    # repository; move takes a link nested in a bundle as a link, so the target survives.
+    outside, inner = not path.resolve().is_relative_to(root), []
     # rglob("*") yields a nested link itself on every platform (Windows also walks into junctions).
-    inner = list(path.rglob("*")) if strategy["scope"] == "markdown" and path.is_dir() else []
+    for entry in path.rglob("*") if strategy["scope"] == "markdown" and path.is_dir() else ():
+        if deadline is not None and time.monotonic() > deadline:
+            return False, ""  # nothing has moved: the next session start scans it again
+        inner.append(entry)
+        outside = outside or not entry.resolve().is_relative_to(root)
     # shortcut: markdown scope matches the .md suffix only; widen it if other text formats matter.
     units = [path] if strategy["scope"] == "bundle" else [
         f for f in (inner if path.is_dir() else [path]) if f.suffix.lower() == ".md"
     ]
-    # A link (symlink or Windows junction) can lead a bundle or an entry in it out of the
-    # repository; move takes a link nested in a bundle as a link, so the target survives.
-    if any(not u.resolve().is_relative_to(primary.resolve()) for u in [path, *inner]):
+    if outside:
         return False, f"blocked {rel}: links outside the repository"
     if not units:
-        return False, f"blocked {rel}: no Markdown in scope"
+        return False, f"blocked {rel}: {NO_MARKDOWN}"
     for unit in units:  # only the purge deletes; a cleared bundle always goes to the trash
         dest = trash_dir(primary) / stamp / unit.relative_to(primary)
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -836,14 +873,52 @@ def clear_bundle(
     return True, f"cleared {rel}: trashed {stamp}"
 
 
+def remove(func: Callable[[str], object], path: str) -> None:
+    try:
+        func(path)
+    except PermissionError:
+        make_writable(func, path, None)
+
+
+def purge_tree(path: str, deadline: float) -> bool:
+    """Delete path bottom-up; False once the deadline passes, leaving the rest for a later run."""
+    with os.scandir(path) as entries:  # shortcut: one folder is listed before the first check; split listing if one folder holds millions
+        children = list(entries)
+    for entry in children:
+        if time.monotonic() > deadline:
+            return False
+        # A Windows junction reads as a plain directory (is_junction is 3.12+): any reparse point is a leaf.
+        reparse = getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+        if entry.is_dir(follow_symlinks=False) and not reparse:
+            if not purge_tree(entry.path, deadline):
+                return False
+        else:
+            remove(os.unlink, entry.path)
+    remove(os.rmdir, path)
+    return True
+
+
+def purge_expired(primary: Path, rows: list[Row], deadline: float) -> list[str]:
+    """Delete the expired trash folders, oldest first, until the deadline; one line each.
+
+    A folder the deadline cuts short keeps its name (and so its age); a later run finishes it."""
+    out = []
+    for row in rows:
+        try:
+            if not purge_tree(str(trash_dir(primary) / row["name"]), deadline):
+                break
+        except (OSError, RuntimeError) as error:  # the session start never raises (RuntimeError: too deep)
+            out.append(f"blocked trash {row['name']}: {getattr(error, 'strerror', None) or 'cannot delete'}")
+        else:
+            out.append(f"purged {row['name']}")
+    return out
+
+
 def purge_trash(start: Path) -> list[str]:
-    """Delete the trash folders past retention; one line each."""
+    """Delete every trash folder past retention in one run; one line each."""
     primary = find_primary(start)
-    cfg = load_config(primary)
-    expired = trash_rows(primary, cfg)
-    for row in expired:
-        shutil.rmtree(trash_dir(primary) / row["name"], **{RMTREE_HANDLER: make_writable})
-    return [f"purged {row['name']}" for row in expired] or ["trash: nothing past retention"]
+    done = purge_expired(primary, trash_rows(primary, load_config(primary)), math.inf)
+    return done or ["trash: nothing past retention"]
 
 
 def stray_ignored(path: Path) -> bool:
@@ -881,8 +956,42 @@ def clean_orphans(primary: Path, orphans: list[Row], mode: str) -> tuple[int, li
     return cleaned, out
 
 
+def trash_docs(primary: Path, cfg: Config, report: Row, deadline: float) -> tuple[int, list[str]]:
+    """Trash the linked bundles the strategy marks for trash; (count, lines).
+
+    Stops at the time budget; the rest wait for the next session start."""
+    marked = [d for d in linked_docs(report) if d["action"] == "trash"]
+    if cfg["cleanup"] == "keep":
+        return 0, []
+    waiting = grace_wait(primary, cfg["doc_strategy"], marked)
+    out = list(map(doc_line, waiting))  # inside grace_days: its doc line, not trashed or counted
+    due = [d for d in marked if d not in waiting]
+    if cfg["cleanup"] == "report":
+        return 0, out + [f"doc {d['class']} {d['path']}: would trash" for d in due]
+    docs = {d["path"]: d for d in report["docs"]}
+    stamp = datetime.now(timezone.utc).strftime(TRASH_STAMP)
+    gone = []
+    for doc in due:
+        if time.monotonic() > deadline:
+            break
+        try:
+            moved, line = clear_bundle(primary, cfg, docs, doc["path"], "", stamp, deadline)
+        except (OSError, RuntimeError) as error:  # the session start never raises
+            # RuntimeError: a symlink loop in resolve(); an OSError message would carry an absolute path
+            reason = getattr(error, "strerror", None) or "cannot read the bundle"
+            moved, line = False, f"blocked {doc['path']}: {reason}"
+        if moved:
+            gone.append(doc)
+        if line and not line.endswith(NO_MARKDOWN):  # nothing left in scope: not worth repeating
+            out.append(line)
+    if gone:  # a trashed bundle loses its date, so one restored from the trash starts over
+        grace_wait(primary, cfg["doc_strategy"], [d for d in marked if d not in gone])
+    return len(gone), out
+
+
 def run_cleanup(
-    primary: Path, cfg: Config, report: Row, stale: bool, here: Path | None = None
+    primary: Path, cfg: Config, report: Row, stale: bool, here: Path | None = None,
+    deadline: float | None = None,
 ) -> list[str]:
     """Remove verified-landed, clean, pushed worktrees (the branch stays); one line per event."""
     mode, trunk = cfg["cleanup"], cfg["primary_branch"]
@@ -914,15 +1023,21 @@ def run_cleanup(
     cleaned, orphan_lines = clean_orphans(primary, report["orphans"], mode)
     counts["cleaned"] += cleaned
     out += orphan_lines
-    docs = linked_docs(report)
-    out += map(doc_line, docs)
-    out += map(trash_line, report["trash"])
+    out += map(doc_line, (d for d in linked_docs(report) if d["action"] != "trash"))
+    trashed, doc_lines = trash_docs(primary, cfg, report, budget(deadline))
+    counts["blocked"] += sum(line.startswith("blocked") for line in doc_lines)
+    out += doc_lines
+    if mode == "report":
+        out += [f"trash {t['name']}: would purge" for t in report["trash"]]
+    elif mode == "prune":
+        purged = purge_expired(primary, report["trash"], budget(deadline))
+        counts["blocked"] += sum(line.startswith("blocked") for line in purged)
+        out += purged
     summary = (
         f"sweep: cleaned {counts['cleaned']}, landed {counts['landed']},"
         f" dependents {counts['dependents']}, blocked {counts['blocked']},"
         f" unverified {counts['unverified']}, orphans {len(report['orphans'])},"
-        f" docs {len(docs)}"
-        + (f", trash {len(report['trash'])}" if report["trash"] else "")
+        f" docs {trashed}"
         + (", origin stale" if stale else "")
     )
     return [summary, *out]
@@ -1023,8 +1138,9 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
     if git(primary, "rev-parse", "--verify", "-q", f"origin/{trunk}").returncode:
         return [f"sweep: origin/{trunk} is missing; skipped", *notes]
     try:
-        report = build_report(primary, cfg, stale)
-        return [*run_cleanup(primary, cfg, report, stale, here), *notes]
+        deadline = budget(None)  # one budget for every doc step of this run
+        report = build_report(primary, cfg, stale, deadline)
+        return [*run_cleanup(primary, cfg, report, stale, here, deadline), *notes]
     except OSError as error:
         return [f"sweep: unavailable ({error})", *notes]
 
