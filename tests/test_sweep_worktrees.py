@@ -2,12 +2,14 @@
 
 import io
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+import types
 from pathlib import Path
 
 import pytest
@@ -1233,23 +1235,98 @@ def test_reference_bundle_is_cleared_once_a_tracked_doc_is_on_origin(primary: Pa
     )
 
 
-def test_sweep_reports_trash_past_retention_and_only_purge_removes_it(
+OLD = "20200101T000000Z"
+
+
+def old_trash(primary: Path, files: int = 1) -> Path:
+    """An expired trash folder, plus a fresh one and a stray that are not past retention."""
+    trash = primary / ".git" / "lumberjack-trash"
+    for n in range(files):
+        write(trash, f"{OLD}/docs/work/old/{n}.md", "x")
+    write(trash, f"{time.strftime(sweep_worktrees.TRASH_STAMP, time.gmtime())}/docs/work/new/a.md", "x")
+    write(trash, "stray/a.md", "not ours")
+    return trash
+
+
+def test_session_start_purges_trash_past_retention(primary: Path) -> None:
+    strategy_settings(primary, trash_days=7)
+    trash = old_trash(primary)
+    out = cleanup(primary)
+    assert "purged " + OLD in out and out[0].endswith("docs 0")
+    assert not any(line.startswith("trash ") for line in out)
+    assert not (trash / OLD).exists() and (trash / "stray").exists() and len(list(trash.iterdir())) == 2
+
+
+@pytest.mark.parametrize("mode", ["report", "keep", "none"])
+def test_report_keep_and_no_strategy_purge_no_trash(primary: Path, mode: str) -> None:
+    saved = 'doc_strategy = {scope = "bundle", trash_days = 7}\n'
+    settings(primary, f'cleanup = "{"report" if mode == "none" else mode}"\n' + ("" if mode == "none" else saved))
+    trash = old_trash(primary)
+    out = cleanup(primary)
+    assert (trash / OLD).exists() and len(list(trash.iterdir())) == 3
+    assert not any(line.startswith("purged") for line in out)
+    assert (f"trash {OLD}: would purge" in out) is (mode == "report")
+
+
+def test_purge_stops_at_the_budget_and_a_later_session_start_finishes_it(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy_settings(primary, trash_days=7)
+    folder = old_trash(primary, files=40).joinpath(OLD)
+    ticks = iter(range(10**6))  # the clock advances one per check, so the budget ends mid-folder
+    with monkeypatch.context() as short:
+        short.setattr(sweep_worktrees, "DOC_SECONDS", 25)
+        short.setattr(sweep_worktrees, "time", types.SimpleNamespace(monotonic=lambda: next(ticks), time=time.time))
+        out = sweep_worktrees.cleanup_session(primary)
+    left = sum(1 for _ in folder.rglob("*.md"))
+    assert 0 < left < 40 and not any(line.startswith("purged") for line in out)
+    assert "purged " + OLD in sweep_worktrees.cleanup_session(primary)
+    assert not folder.exists()
+
+
+@pytest.mark.parametrize("kind", ["symlink", "junction"])
+def test_purge_removes_a_link_in_the_trash_and_leaves_its_target(tmp_path: Path, kind: str) -> None:
+    outside = tmp_path / "outside"
+    write(outside, "keep/a.md", "x")
+    folder = tmp_path / "trash" / OLD
+    write(folder, "docs/a.md", "x")
+    link = folder / "docs" / "link"
+    if kind == "junction":
+        if sys.platform != "win32":
+            pytest.skip("junctions are Windows only")
+        import _winapi
+
+        _winapi.CreateJunction(str(outside), str(link))  # Windows tools leave these behind
+    else:
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except OSError:  # Windows without the symlink privilege
+            pytest.skip("cannot create a symlink")
+    assert sweep_worktrees.purge_tree(str(folder), math.inf)
+    assert not folder.exists() and (outside / "keep" / "a.md").exists()
+
+
+def test_a_folder_the_purge_cannot_delete_is_blocked_not_raised(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def too_deep(path: str, deadline: float) -> bool:
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(sweep_worktrees, "purge_tree", too_deep)
+    assert sweep_worktrees.purge_expired(primary, [{"name": OLD}], math.inf) == [
+        f"blocked trash {OLD}: cannot delete"
+    ]
+
+
+def test_purge_trash_command_deletes_everything_past_retention_in_one_run(
     primary: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     strategy_settings(primary, trash_days=7)
-    trash = primary / ".git" / "lumberjack-trash"
-    write(trash, "20200101T000000Z/docs/work/old/a.md", "x")
-    fresh = time.strftime(sweep_worktrees.TRASH_STAMP, time.gmtime())
-    write(trash, f"{fresh}/docs/work/new/a.md", "x")
-    write(trash, "stray/a.md", "not ours")
-    out = cleanup(primary)
-    assert out[0].endswith("docs 0, trash 1")
-    assert any(l.startswith("trash 20200101T000000Z: ") and l.endswith("days old; 1 B") for l in out)
-    assert [t["name"] for t in report(capsys)["trash"]] == ["20200101T000000Z"]  # type: ignore[attr-defined]
-    assert (trash / "20200101T000000Z").exists()  # reporting never deletes
+    trash = old_trash(primary, files=40)
+    assert [t["name"] for t in report(capsys)["trash"]] == [OLD]  # type: ignore[attr-defined]
     done = sweep(primary, "--purge-trash")
-    assert done.stdout.splitlines() == ["purged 20200101T000000Z"]
-    assert sorted(p.name for p in trash.iterdir()) == sorted([fresh, "stray"])
+    assert done.stdout.splitlines() == ["purged " + OLD]
+    assert not (trash / OLD).exists() and len(list(trash.iterdir())) == 2
     assert sweep(primary, "--purge-trash").stdout.strip() == "trash: nothing past retention"
 
 

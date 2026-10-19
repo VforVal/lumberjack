@@ -3,6 +3,7 @@
 import argparse
 import glob
 import json
+import math
 import os
 import posixpath
 import re
@@ -52,7 +53,7 @@ DOC_COMMITS = 1000  # newest commits read from unlanded branches when looking fo
 TRASH_STAMP = "%Y%m%dT%H%M%SZ"  # a trash folder is named for the UTC moment its files moved
 SCOPES = ("markdown", "bundle")  # doc_strategy scope: only .md files, or whole bundles
 BUNDLE_ACTION = {"ephemeral": "trash", "reference": "promote"}  # by class, outside a keep-root
-DOC_SECONDS = 10  # one budget for all doc work in a run (sizing, trash sizing, trashing); the hook times out at 30
+DOC_SECONDS = 10  # one budget for all doc work in a run (sizing, trashing, purging); the hook times out at 30
 NO_MARKDOWN = "no Markdown in scope"
 
 
@@ -449,7 +450,6 @@ def format_rows(report: Row) -> list[str]:
     ]
     out += [f"orphan {o['kind']} {o['path']}" for o in report["orphans"]]
     out += map(doc_line, linked_docs(report))
-    out += map(trash_line, report["trash"])
     out += [f"branch {b['state']}{detail(b)} {b['name']}" for b in report["branches"]]
     out += [f"prototype {p['issue']} {p['name']}" for p in report["prototypes"]]
     p = report["primary"]
@@ -641,25 +641,20 @@ def grace_wait(primary: Path, strategy: Config, marked: list[Row]) -> list[Row]:
     return [d for d in marked if (today - kept[d["path"]]).days < strategy["grace_days"]]
 
 
-def trash_rows(primary: Path, cfg: Config, deadline: float | None = None) -> list[Row]:
+def trash_rows(primary: Path, cfg: Config) -> list[Row]:
     """Trash folders older than the saved retention, oldest first."""
     days, folder = cfg["doc_strategy"].get("trash_days"), trash_dir(primary)
     if not days or not folder.is_dir():
         return []
     now, rows = datetime.now(timezone.utc), []
-    deadline = budget(deadline)
     for name in sorted(os.listdir(folder)):
         try:
             age = (now - datetime.strptime(name, TRASH_STAMP).replace(tzinfo=timezone.utc)).days
         except ValueError:  # not ours
             continue
         if age >= days:
-            rows.append({"name": name, "days": age, "size": tree_size(folder / name, deadline)})
+            rows.append({"name": name, "days": age})
     return rows
-
-
-def trash_line(row: Row) -> str:
-    return f"trash {row['name']}: {row['days']} days old; {human_size(row['size'])}"
 
 
 def build_report(
@@ -678,7 +673,7 @@ def build_report(
         "orphans": orphan_rows(primary, cfg, trees),
         "docs": doc_rows(primary, cfg, trees, tiers, deadline),
         "doc_strategy": cfg["doc_strategy"],
-        "trash": trash_rows(primary, cfg, deadline),
+        "trash": trash_rows(primary, cfg),
         "branches": branch_rows(loose, tiers),
         "prototypes": prototype_rows(primary, cfg),
         "primary": primary_row(primary, cfg),
@@ -878,14 +873,52 @@ def clear_bundle(
     return True, f"cleared {rel}: trashed {stamp}"
 
 
+def remove(func: Callable[[str], object], path: str) -> None:
+    try:
+        func(path)
+    except PermissionError:
+        make_writable(func, path, None)
+
+
+def purge_tree(path: str, deadline: float) -> bool:
+    """Delete path bottom-up; False once the deadline passes, leaving the rest for a later run."""
+    with os.scandir(path) as entries:  # shortcut: one folder is listed before the first check; split listing if one folder holds millions
+        children = list(entries)
+    for entry in children:
+        if time.monotonic() > deadline:
+            return False
+        # A Windows junction reads as a plain directory (is_junction is 3.12+): any reparse point is a leaf.
+        reparse = getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+        if entry.is_dir(follow_symlinks=False) and not reparse:
+            if not purge_tree(entry.path, deadline):
+                return False
+        else:
+            remove(os.unlink, entry.path)
+    remove(os.rmdir, path)
+    return True
+
+
+def purge_expired(primary: Path, rows: list[Row], deadline: float) -> list[str]:
+    """Delete the expired trash folders, oldest first, until the deadline; one line each.
+
+    A folder the deadline cuts short keeps its name (and so its age); a later run finishes it."""
+    out = []
+    for row in rows:
+        try:
+            if not purge_tree(str(trash_dir(primary) / row["name"]), deadline):
+                break
+        except (OSError, RuntimeError) as error:  # the session start never raises (RuntimeError: too deep)
+            out.append(f"blocked trash {row['name']}: {getattr(error, 'strerror', None) or 'cannot delete'}")
+        else:
+            out.append(f"purged {row['name']}")
+    return out
+
+
 def purge_trash(start: Path) -> list[str]:
-    """Delete the trash folders past retention; one line each."""
+    """Delete every trash folder past retention in one run; one line each."""
     primary = find_primary(start)
-    cfg = load_config(primary)
-    expired = trash_rows(primary, cfg)
-    for row in expired:
-        shutil.rmtree(trash_dir(primary) / row["name"], **{RMTREE_HANDLER: make_writable})
-    return [f"purged {row['name']}" for row in expired] or ["trash: nothing past retention"]
+    done = purge_expired(primary, trash_rows(primary, load_config(primary)), math.inf)
+    return done or ["trash: nothing past retention"]
 
 
 def stray_ignored(path: Path) -> bool:
@@ -994,13 +1027,17 @@ def run_cleanup(
     trashed, doc_lines = trash_docs(primary, cfg, report, budget(deadline))
     counts["blocked"] += sum(line.startswith("blocked") for line in doc_lines)
     out += doc_lines
-    out += map(trash_line, report["trash"])
+    if mode == "report":
+        out += [f"trash {t['name']}: would purge" for t in report["trash"]]
+    elif mode == "prune":
+        purged = purge_expired(primary, report["trash"], budget(deadline))
+        counts["blocked"] += sum(line.startswith("blocked") for line in purged)
+        out += purged
     summary = (
         f"sweep: cleaned {counts['cleaned']}, landed {counts['landed']},"
         f" dependents {counts['dependents']}, blocked {counts['blocked']},"
         f" unverified {counts['unverified']}, orphans {len(report['orphans'])},"
         f" docs {trashed}"
-        + (f", trash {len(report['trash'])}" if report["trash"] else "")
         + (", origin stale" if stale else "")
     )
     return [summary, *out]

@@ -42,7 +42,8 @@ are always kept. Ephemeral bundles are trashed at session start and reference bu
 
 **trash**: `lumberjack-trash/` inside the git directory, where `--clear` and session start move bundle files into a
 UTC-timestamped folder; clearing never deletes outright. A folder older than `trash_days` is
-reported by the sweep and deleted only by `--purge-trash` in cleanup.
+purged at session start, within the time budget (a large one is left partly deleted and finished
+by a later run), or at once by `--purge-trash` in cleanup.
 
 **promote**: save a reference bundle's findings as a document tracked on the primary branch or on
 a pushed prototype branch. Only then is the bundle cleared (into the trash).

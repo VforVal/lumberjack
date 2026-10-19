@@ -125,9 +125,11 @@ bundle stays; do not work around it.
 
 ### Trash
 
-When `trash` lists folders, show them with their age and size and ask once whether to
-purge them. On a yes, run `python "SWEEP" --purge-trash` and relay its lines. Without
-a yes, leave them.
+With `cleanup = "prune"` the session start already purges trash past `trash_days` (step 1
+relayed the `purged` lines); any folder `trash` still lists was over the time budget, blocked or
+kept by `cleanup`. Show those with their age and ask once whether to purge them now. On a yes,
+run `python "SWEEP" --purge-trash` (everything past retention, in one run) and relay its lines.
+Without a yes, leave them.
 
 ## 5. Report
 
