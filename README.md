@@ -287,6 +287,8 @@ what produced them and asks once per group: delete, ignore (`.git/info/exclude` 
 
 ### Work documents
 
+![First session start: the sweep lists three linked bundles in docs/work and trashes none. At the first session start after grace_days, it trashes the two ephemeral bundles into .git/lumberjack-trash; the research bundle and the live handoff stay.](assets/docs-cleanup.png)
+
 When `doc_roots` holds linked bundles, `/lumberjack:cleanup` asks the maintainer once for a
 `doc_strategy` (scope, trash days, grace days, keep-roots) and saves it with
 `setup_lumberjack.py strategy <file.json>`; later runs ask nothing, and until it is saved
