@@ -114,7 +114,7 @@ SessionStart prints the error and cleans nothing.
 | `evidence_dir` | `""` | Directory inside a worktree whose contents block cleanup; empty protects nothing extra |
 | `doc_roots` | `[]` | Folders inside a worktree for work documents (handoffs, plans, research, run output); an untracked or ignored file under one blocks cleanup with `docs`. `evidence_dir` is one more such folder but keeps its own reason, `evidence` |
 | `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); a root not listed uses `["research", "prototype"]`. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
-| `doc_strategy` | `{}` | How `/lumberjack:cleanup` trashes doc bundles, saved after it asks once (empty: nothing is removed). Keys, both required once set: `scope` (`markdown` or `bundle`) and `trash_days` (whole days, at least 1); optional `roots`, a table of doc root to `keep` whose bundles are always kept, so `roots = {"docs/handoffs" = "keep"}` keeps every handoff. The old keys `ephemeral`, `reference` and `tracker` are a config error. A table: `[doc_strategy]` then `scope = "bundle"` |
+| `doc_strategy` | `{}` | How `/lumberjack:cleanup` trashes doc bundles, saved after it asks once (empty: nothing is removed). Keys, all required once set: `scope` (`markdown` or `bundle`), `trash_days` (whole days, at least 1) and `grace_days` (whole days, 0 or more: how long a bundle stays `linked` before session start trashes it; 0 trashes it at the first session start that sees it linked); optional `roots`, a table of doc root to `keep` whose bundles are always kept, so `roots = {"docs/handoffs" = "keep"}` keeps every handoff. The old keys `ephemeral`, `reference` and `tracker` are a config error. A table: `[doc_strategy]` then `scope = "bundle"` |
 | `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where worktrees live: `~` is home, `*` a glob, `{name}` the repo name |
 | `cleanup` | `"prune"` | `prune` removes landed worktrees and trashes linked ephemeral bundles; `report` lists them as `would remove` and `would trash`; `keep` does nothing |
 | `stop_gate` | `true` | `false` turns the Stop hook off |
@@ -286,18 +286,23 @@ what produced them and asks once per group: delete, ignore (`.git/info/exclude` 
 ### Work documents
 
 When `doc_roots` holds linked bundles, `/lumberjack:cleanup` asks the maintainer once for a
-`doc_strategy` (scope, trash days, keep-roots) and saves it with
+`doc_strategy` (scope, trash days, grace days, keep-roots) and saves it with
 `setup_lumberjack.py strategy <file.json>`; later runs ask nothing, and until it is saved
 nothing is removed. A linked bundle's work is done by git alone: no tracker is checked.
 With a strategy saved, every session start (and the post-merge sweep) trashes each `linked`
-`ephemeral` bundle by rule, without asking, as it removes a landed worktree: each prints
+`ephemeral` bundle by rule, without asking, as it removes a landed worktree, once it has stayed
+`linked` for `grace_days` (a follow-up branch can still carry its ticket): each prints
 `cleared <path>: trashed <timestamp>` and `docs N` counts them. A bundle the sweep cannot move
 prints `blocked <path>: <reason>` and counts in `blocked N`; a Markdown-scope bundle with no
 `.md` file left is skipped silently. `cleanup = "report"` prints `doc <class> <path>: would trash`
 and moves nothing, and `"keep"` moves nothing and prints nothing. `reference`, `unlinked`, `live`
 and keep-root bundles stay. Sizing bundles and trash folders, walking a Markdown-scope bundle and
 trashing share one 10 second budget per run; a bundle not reached (or whose walk ran out) stays
-untouched for the next session start. The command offers what is left, one question per group. Nothing deletes
+untouched for the next session start. The first date a session start saw a bundle `linked` is kept in
+`<git dir>/lumberjack-docs.json`; a bundle that turns `live` again (or vanishes) loses its date, so the
+count restarts, and a missing or damaged file only restarts it. A bundle inside `grace_days` stays,
+prints its normal `doc` line and is not counted in `docs N`; `--clear` ignores the grace period. The
+command offers what is left, one question per group. Nothing deletes
 a bundle outright: `--clear` only moves it to the trash. `--json` gives each doc its resolved `action` (`trash`, `promote` or
 `keep`), empty until a strategy is saved.
 `reference` bundles are only offered promote or keep: promote writes the findings to a document

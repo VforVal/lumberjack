@@ -62,7 +62,7 @@ or its pull request carries the squashed commits.
 `landed`, `blocked`, `dependent`, `orphan`, `cleared`, `doc` or `hint`. When nothing was swept the only
 line says why: a config error, or `sweep: ...; skipped`. The exit code is always 0.
 Paths are relative to the primary's parent directory, or start with `~`.
-`doc <ephemeral|reference> <path>: tickets <ids>; <size>` is a linked `doc_roots` bundle (tickets, none kept live) the sweep leaves.
+`doc <ephemeral|reference> <path>: tickets <ids>; <size>` is a linked `doc_roots` bundle (tickets, none kept live) the sweep leaves, one inside `grace_days` too.
 `cleared <path>: trashed <stamp>` is a linked ephemeral bundle moved to the trash; `docs N` counts them.
 `unverified` counts unproven branches; only the maintainer's `/lumberjack:cleanup` removes them.
 

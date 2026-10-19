@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -1014,7 +1015,7 @@ def test_remove_reports_a_failed_removal_as_blocked(
     )
 
 
-STRATEGY = {"scope": "bundle", "trash_days": 30}
+STRATEGY = {"scope": "bundle", "trash_days": 30, "grace_days": 0}
 
 
 def strategy_settings(primary: Path, **override: object) -> None:
@@ -1150,7 +1151,7 @@ def test_keep_root_keeps_a_bundle_the_rule_would_trash(primary: Path) -> None:
     settings(
         primary,
         'doc_roots = ["docs/work", "docs/handoffs"]\n'
-        'doc_strategy = {scope = "bundle", trash_days = 30, roots = {"./docs/handoffs/" = "keep"}}\n',
+        'doc_strategy = {scope = "bundle", trash_days = 30, grace_days = 0, roots = {"./docs/handoffs/" = "keep"}}\n',
     )
     write(primary, "docs/handoffs/eng-139-a/a.md", "Ticket: eng-139\n")
     write(primary, "docs/work/eng-139-b/a.md", "Ticket: eng-139\n")
@@ -1173,7 +1174,7 @@ def test_each_doc_row_names_the_action_its_strategy_gives_it(
     settings(
         primary,
         'doc_roots = ["docs/work", "docs/handoffs", "docs/lab"]\n'
-        'doc_strategy = {scope = "bundle", trash_days = 30,'
+        'doc_strategy = {scope = "bundle", trash_days = 30, grace_days = 0,'
         ' roots = {"docs/handoffs" = "keep", "docs/lab" = "keep"}}\n',
     )
     actions = {p: d["action"] for p, d in docs_by_path(primary, capsys).items()}
@@ -1225,7 +1226,7 @@ def test_reference_bundle_is_cleared_once_a_tracked_doc_is_on_origin(primary: Pa
     git(primary, "update-ref", "refs/remotes/origin/main", "HEAD~1")
     assert clear(primary, bundle, "--promoted", "findings.md")[0] == 0
     settings(primary, 'doc_roots = ["docs/work"]\n'
-             'doc_strategy = {scope = "bundle", trash_days = 30, roots = {"docs/work" = "keep"}}\n')
+             'doc_strategy = {scope = "bundle", trash_days = 30, grace_days = 0, roots = {"docs/work" = "keep"}}\n')
     write(primary, f"{bundle}/a.md", "Ticket: eng-135\n")
     assert clear(primary, bundle, "--promoted", "findings.md") == (
         1, f"blocked {bundle}: kept by strategy"
@@ -1255,7 +1256,7 @@ def test_sweep_reports_trash_past_retention_and_only_purge_removes_it(
 def rule_bundles(
     primary: Path, mode: str = "prune", strategy: bool = True, scope: str = "bundle"
 ) -> None:
-    saved = f'doc_strategy = {{scope = "{scope}", trash_days = 30, roots = {{"docs/handoffs" = "keep"}}}}\n'
+    saved = f'doc_strategy = {{scope = "{scope}", trash_days = 30, grace_days = 0, roots = {{"docs/handoffs" = "keep"}}}}\n'
     settings(
         primary,
         f'cleanup = "{mode}"\ndoc_roots = ["docs/work", "docs/handoffs"]\n' + (saved if strategy else ""),
@@ -1342,3 +1343,107 @@ def test_a_bundle_that_cannot_be_read_is_a_blocked_line_not_an_error(
     line = next(l for l in out if l.startswith("blocked docs/work/eng-150-handoff: "))
     assert "/abs" not in line and str(primary) not in line
     assert out[0].endswith("blocked 3, unverified 3, orphans 0, docs 0")  # two worktrees plus this one
+
+
+STATE = "lumberjack-docs.json"
+BUNDLE = "docs/work/eng-160-handoff"
+
+
+def seen_on(primary: Path, days_ago: int, path: str = BUNDLE) -> None:
+    day = (datetime.now(timezone.utc) - timedelta(days=days_ago)).date().isoformat()
+    write(primary / ".git", STATE, json.dumps({path: day}))
+
+
+def recorded(primary: Path) -> dict[str, str]:
+    return json.loads((primary / ".git" / STATE).read_text())  # type: ignore[no-any-return]
+
+
+def grace_bundle(primary: Path, grace_days: int, mode: str = "prune") -> None:
+    strategy_settings(primary, grace_days=grace_days)
+    (primary / ".lumberjack.toml").write_text(
+        (primary / ".lumberjack.toml").read_text() + f'cleanup = "{mode}"\n'
+    )
+    write(primary, f"{BUNDLE}/a.md", "x\n")
+
+
+def test_a_linked_bundle_waits_out_its_grace_days_from_the_first_session_start(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    today = datetime.now(timezone.utc).date().isoformat()
+    out = cleanup(primary)
+    assert out[0].endswith("docs 0") and any(l.startswith(f"doc ephemeral {BUNDLE}:") for l in out)
+    assert recorded(primary) == {BUNDLE: today} and (primary / BUNDLE).exists()
+    seen_on(primary, 2)
+    assert cleanup(primary)[0].endswith("docs 0") and (primary / BUNDLE).exists()
+    seen_on(primary, 3)
+    out = cleanup(primary)
+    assert out[0].endswith("docs 1") and not (primary / BUNDLE).exists()
+    assert any(l.startswith(f"cleared {BUNDLE}: trashed ") for l in out)
+    assert recorded(primary) == {}
+
+
+def test_zero_grace_days_trashes_at_the_first_session_start_that_sees_the_bundle(primary: Path) -> None:
+    grace_bundle(primary, 0)
+    assert cleanup(primary)[0].endswith("docs 1") and not (primary / BUNDLE).exists()
+
+
+def test_a_bundle_that_turns_live_or_vanishes_loses_its_date(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    write(primary, "docs/work/eng-3-handoff/a.md", "x\n")  # the open eng-3 worktree carries it
+    write(primary / ".git", STATE, json.dumps({
+        "docs/work/eng-3-handoff": "2020-01-01", "docs/work/gone": "2020-01-01",
+    }))
+    cleanup(primary)
+    assert list(recorded(primary)) == [BUNDLE]  # live and gone entries dropped
+    assert (primary / "docs/work/eng-3-handoff/a.md").exists()
+    # Linked again later: the count starts over instead of trashing at once.
+    write(primary / ".git", STATE, json.dumps({BUNDLE: "2020-01-01"}))
+    (primary / BUNDLE).rename(primary / "docs/work/elsewhere")  # no ticket: unlinked
+    cleanup(primary)
+    assert recorded(primary) == {}
+    (primary / "docs/work/elsewhere").rename(primary / BUNDLE)
+    assert cleanup(primary)[0].endswith("docs 0") and (primary / BUNDLE).exists()
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["", "not json", "[]", '{"docs/work/eng-160-handoff": 5}', '{"docs/work/eng-160-handoff": "soon"}',
+     b"\xff\xfe"],
+)
+def test_a_damaged_state_file_never_trashes_early_and_is_rewritten(
+    primary: Path, content: str | bytes
+) -> None:
+    grace_bundle(primary, 3)
+    state = primary / ".git" / STATE
+    state.write_bytes(content if isinstance(content, bytes) else content.encode())
+    out = cleanup(primary)
+    assert out[0].endswith("docs 0") and (primary / BUNDLE / "a.md").exists()
+    assert recorded(primary) == {BUNDLE: datetime.now(timezone.utc).date().isoformat()}
+
+
+def test_an_unwritable_state_file_never_trashes_early_or_fails_the_session_start(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    (primary / ".git" / STATE).mkdir()  # reads and writes both fail
+    out = cleanup(primary)
+    assert out[0].endswith("docs 0") and (primary / BUNDLE / "a.md").exists()
+
+
+def test_report_mode_lists_a_bundle_to_trash_only_once_its_grace_is_over(primary: Path) -> None:
+    grace_bundle(primary, 3, "report")
+    assert not any("would trash" in l for l in cleanup(primary))
+    seen_on(primary, 3)
+    assert f"doc ephemeral {BUNDLE}: would trash" in cleanup(primary)
+
+
+def test_clear_ignores_the_grace_period(primary: Path) -> None:
+    grace_bundle(primary, 30)
+    assert clear(primary, BUNDLE)[0] == 0 and not (primary / BUNDLE).exists()
+
+
+def test_trashing_one_bundle_keeps_the_date_of_one_still_waiting(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    write(primary, "docs/work/eng-161-handoff/a.md", "x\n")
+    yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    write(primary / ".git", STATE, json.dumps({BUNDLE: "2020-01-01", "docs/work/eng-161-handoff": yesterday}))
+    out = cleanup(primary)
+    assert out[0].endswith("docs 1") and not (primary / BUNDLE).exists()
+    assert recorded(primary) == {"docs/work/eng-161-handoff": yesterday}

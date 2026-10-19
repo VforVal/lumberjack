@@ -11,7 +11,7 @@ import stat
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 if sys.version_info < (3, 11):  # before tomllib: a plain message instead of a traceback
     sys.exit(f"lumberjack: Python 3.11+ required, found {sys.version.split()[0]}")
@@ -131,18 +131,19 @@ def parse_config(table: Config, source: str = "") -> Config:
     if strategy.keys() & {"ephemeral", "reference", "tracker"}:
         raise ConfigError(
             "lumberjack: doc_strategy no longer takes ephemeral, reference or tracker;"
-            " keep scope, trash_days and roots", source,
+            " keep scope, trash_days, grace_days and roots", source,
         )
     if strategy and not (
-        strategy.keys() - {"roots"} == {"scope", "trash_days"}
+        strategy.keys() - {"roots"} == {"scope", "trash_days", "grace_days"}
         and strategy["scope"] in SCOPES
         and type(strategy["trash_days"]) is int and strategy["trash_days"] > 0
+        and type(strategy["grace_days"]) is int and strategy["grace_days"] >= 0
         and isinstance(roots, dict)
         and all(isinstance(r, str) and a == "keep" for r, a in roots.items())
     ):
         raise ConfigError(
             "lumberjack: doc_strategy must be empty or set scope (markdown or bundle) and"
-            " trash_days (at least 1), optionally roots (each root = \"keep\")", source,
+            " trash_days (at least 1) and grace_days (0 or more), optionally roots (each root = \"keep\")", source,
         )
     if roots:
         strategy["roots"] = {posixpath.normpath(r): a for r, a in roots.items()}
@@ -618,6 +619,25 @@ def trash_dir(primary: Path) -> Path:
     return Path(git(primary, "rev-parse", "--absolute-git-dir").stdout.strip()) / "lumberjack-trash"
 
 
+def grace_wait(primary: Path, strategy: Config, marked: list[Row]) -> list[Row]:
+    """The marked bundles still inside grace_days; records the first date a session start saw each.
+
+    The state file holds {bundle path: first UTC date seen linked}. Anything unreadable counts as
+    empty, so a damaged file only restarts the count; a bundle no longer marked loses its date."""
+    state, today = trash_dir(primary).with_name("lumberjack-docs.json"), datetime.now(timezone.utc).date()
+    try:
+        seen = {k: min(date.fromisoformat(v), today) for k, v in json.loads(state.read_text("utf-8")).items()}
+    except (OSError, ValueError, AttributeError, TypeError, RecursionError):
+        seen = {}
+    kept = {d["path"]: seen.get(d["path"], today) for d in marked}
+    if kept != seen:
+        try:
+            state.write_text(json.dumps({k: v.isoformat() for k, v in kept.items()}), "utf-8")
+        except OSError:  # without a date the bundle waits; grace_days = 0 needs none
+            pass
+    return [d for d in marked if (today - kept[d["path"]]).days < strategy["grace_days"]]
+
+
 def trash_rows(primary: Path, cfg: Config, deadline: float | None = None) -> list[Row]:
     """Trash folders older than the saved retention, oldest first."""
     days, folder = cfg["doc_strategy"].get("trash_days"), trash_dir(primary)
@@ -905,14 +925,17 @@ def trash_docs(primary: Path, cfg: Config, report: Row, deadline: float) -> tupl
 
     Stops at the time budget; the rest wait for the next session start."""
     marked = [d for d in linked_docs(report) if d["action"] == "trash"]
-    if cfg["cleanup"] == "report":
-        return 0, [f"doc {d['class']} {d['path']}: would trash" for d in marked]
     if cfg["cleanup"] == "keep":
         return 0, []
+    waiting = grace_wait(primary, cfg["doc_strategy"], marked)
+    out = list(map(doc_line, waiting))  # inside grace_days: the normal doc line, not trashed or counted
+    due = [d for d in marked if d not in waiting]
+    if cfg["cleanup"] == "report":
+        return 0, out + [f"doc {d['class']} {d['path']}: would trash" for d in due]
     docs = {d["path"]: d for d in report["docs"]}
     stamp = datetime.now(timezone.utc).strftime(TRASH_STAMP)
-    done, out = 0, []
-    for doc in marked:
+    gone = []
+    for doc in due:
         if time.monotonic() > deadline:
             break
         try:
@@ -921,10 +944,13 @@ def trash_docs(primary: Path, cfg: Config, report: Row, deadline: float) -> tupl
             # RuntimeError: a symlink loop in resolve(); an OSError message would carry an absolute path
             reason = getattr(error, "strerror", None) or "cannot read the bundle"
             moved, line = False, f"blocked {doc['path']}: {reason}"
-        done += moved
+        if moved:
+            gone.append(doc)
         if line and not line.endswith(NO_MARKDOWN):  # nothing left in scope: not worth repeating
             out.append(line)
-    return done, out
+    if gone:  # a trashed bundle loses its date, so one restored from the trash starts over
+        grace_wait(primary, cfg["doc_strategy"], [d for d in marked if d not in gone])
+    return len(gone), out
 
 
 def run_cleanup(
