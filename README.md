@@ -209,7 +209,7 @@ the newest 1000), so a bundle that lists a ticket whose branch has landed stays 
 another listed ticket is open; `linked` when it has tickets and none is live, `unlinked` without
 tickets and not named. `doc` lines list the linked bundles the sweep leaves (`--json` lists
 all three states under `docs`); the size comes from file metadata, never file contents, and
-reads `size unknown` if sizing runs past 10 seconds. `docs N` counts the bundles trashed this
+reads `size unknown` if sizing runs past 3 seconds. `docs N` counts the bundles trashed this
 run (see Work documents). Orphans are leftover directories in a worktree root: those holding
 only caches (`node_modules-only`) are deleted, others (`mixed`, `not-git`; an empty directory counts as `not-git`) are listed.
 A root outside the repository without `{name}` is shared with other repositories, so only
@@ -293,12 +293,12 @@ With a strategy saved, every session start (and the post-merge sweep) trashes ea
 `linked` for `grace_days` (a follow-up branch can still carry its ticket): each prints
 `cleared <path>: trashed <timestamp>` and `docs N` counts them. A bundle the sweep cannot move
 prints `blocked <path>: <reason>` and counts in `blocked N`; a Markdown-scope bundle with no
-`.md` file left is skipped silently. `cleanup = "report"` prints `doc <class> <path>: would trash`
+`.md` file left is skipped silently, and not walked again while it stays `linked`. `cleanup = "report"` prints `doc <class> <path>: would trash`
 and moves nothing (it still records first-seen dates, so `would trash` matches what `prune` will do),
 and `"keep"` moves nothing, records nothing and prints nothing. `reference`, `unlinked`, `live`
-and keep-root bundles stay. Sizing bundles, walking a Markdown-scope bundle, trashing and purging share one 10 second budget per run; a bundle not reached (or whose walk ran out) stays
-untouched for the next session start. The first date a session start saw a bundle `linked` is kept in
-`<git dir>/lumberjack-docs.json`; a bundle that turns `live` again (or vanishes) loses its date, so the
+and keep-root bundles stay. Sizing bundles (at most 3 seconds of it), walking a Markdown-scope bundle, trashing and purging share one 10 second budget per run; a bundle not reached (or whose walk ran out) stays
+untouched for the next session start. The first date a session start saw a bundle `linked`, and which bundles have no `.md` left, are kept in
+`<git dir>/lumberjack-docs.json`; a bundle that turns `live` again (or vanishes) loses both, so the
 count restarts, and a missing or damaged file only restarts it. A bundle inside `grace_days` stays,
 prints its normal `doc` line and is not counted in `docs N`; `--clear` ignores the grace period. The
 command offers what is left, one question per group. Nothing deletes
@@ -323,7 +323,7 @@ blocked docs/work/eng-9-handoff: kept by strategy
 ```
 
 Reasons: `no strategy saved`, `not a bundle`, `live`, `unlinked` (only a `linked` bundle is
-cleared), `links outside the repository` (the bundle, or with `scope = "markdown"` any entry in it, resolves outside the repository through a symbolic link or Windows junction; a link inside a bundle cleared whole moves to the trash as a link, not followed), `kept by strategy`
+cleared), `links outside the repository` (the bundle resolves outside the repository through a symbolic link or Windows junction; a link inside a bundle cleared whole moves to the trash as a link, not followed), `links outside the bundle` (with `scope = "markdown"`, an entry in the bundle, or the bundle itself, resolves elsewhere, even inside the repository), `kept by strategy`
 (its doc root is a keep-root), `no Markdown in scope` (`scope = "markdown"` and the bundle holds no `.md` file), `promote it first (--promoted)` and `the promoted copy is not on
 origin`. A trashed bundle moves to `<git dir>/lumberjack-trash/<UTC timestamp>/<its path>`, which
 git never sees. With a strategy saved, every session start (and the post-merge sweep) also deletes

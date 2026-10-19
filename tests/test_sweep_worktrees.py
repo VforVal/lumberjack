@@ -1121,16 +1121,30 @@ def test_clear_refuses_a_bundle_that_is_a_link_out_of_the_repository(
     assert os.access(outside / "keep.md", os.W_OK)
 
 
-def test_clear_refuses_a_link_nested_in_a_markdown_scope_bundle(primary: Path) -> None:
+@pytest.mark.parametrize("into_repo", [False, True])
+def test_clear_refuses_a_link_nested_in_a_markdown_scope_bundle(primary: Path, into_repo: bool) -> None:
     strategy_settings(primary, scope="markdown")
     outside = outside_dir(primary)
+    if into_repo:  # a link to another folder of the same repository is just as foreign to the bundle
+        shutil.move(outside, primary / "src")
+        outside = primary / "src"
     write(primary, "docs/work/eng-136-notes/own.md", "Ticket: eng-136\n")
     link_dir(primary / "docs/work/eng-136-notes/linked", outside)
     assert clear(primary, "docs/work/eng-136-notes") == (
-        1, "blocked docs/work/eng-136-notes: links outside the repository"
+        1, "blocked docs/work/eng-136-notes: links outside the bundle"
     )
     assert sorted(p.name for p in outside.rglob("*.md")) == ["deep.md", "keep.md"]
     assert (primary / "docs/work/eng-136-notes/own.md").exists() and not trash_folders(primary)
+
+
+def test_clear_refuses_a_markdown_scope_bundle_that_is_a_link_into_the_repository(primary: Path) -> None:
+    strategy_settings(primary, scope="markdown")
+    write(primary, "src/guide.md", "x")
+    link_dir(primary / "docs/work/eng-136-notes", primary / "src")
+    assert clear(primary, "docs/work/eng-136-notes") == (
+        1, "blocked docs/work/eng-136-notes: links outside the bundle"
+    )
+    assert (primary / "src/guide.md").exists() and not trash_folders(primary)
 
 
 def test_clearing_a_whole_bundle_drops_a_nested_link_but_not_its_target(primary: Path) -> None:
@@ -1378,6 +1392,20 @@ def test_bundles_past_the_time_budget_wait_for_the_next_session_start(
     assert not (primary / "docs/work/eng-150-handoff").exists()
 
 
+def test_sizing_never_takes_the_budget_trashing_needs(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    monkeypatch.setattr(sweep_worktrees, "DOC_SECONDS", 3)
+    monkeypatch.setattr(sweep_worktrees, "SIZE_SECONDS", 0.5)
+
+    def huge(path: Path, deadline: float) -> None:  # sizing runs until its deadline
+        time.sleep(max(0.0, deadline - time.monotonic()))
+
+    monkeypatch.setattr(sweep_worktrees, "tree_size", huge)
+    assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")
+
+
 def test_markdown_walk_stops_at_the_deadline_and_moves_nothing(primary: Path) -> None:
     rule_bundles(primary, scope="markdown")
     write(primary, "docs/work/eng-150-handoff/run/out.log", "log")
@@ -1390,10 +1418,20 @@ def test_markdown_walk_stops_at_the_deadline_and_moves_nothing(primary: Path) ->
     assert not (primary / bundle / "a.md").exists() and (primary / bundle / "run/out.log").exists()
 
 
-def test_session_start_skips_a_bundle_with_no_markdown_left_silently(primary: Path) -> None:
+def test_session_start_skips_a_bundle_with_no_markdown_left_silently(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     rule_bundles(primary, scope="markdown")
     write(primary, "docs/work/eng-150-handoff/run/out.log", "log")
-    assert cleanup(primary)[0].endswith("docs 1")
+    first = cleanup(primary)
+    assert first[0].endswith("docs 1") and any(l.startswith("cleared docs/work/eng-150-handoff: ") for l in first)
+    assert recorded(primary, "bare") == ["docs/work/eng-150-handoff"]
+    walked: list[str] = []
+    real = sweep_worktrees.clear_bundle
+    with monkeypatch.context() as spy:
+        spy.setattr(sweep_worktrees, "clear_bundle", lambda *a, **k: walked.append(a[3]) or real(*a, **k))
+        sweep_worktrees.cleanup_session(primary)
+    assert walked == []  # remembered as bare: not walked at every session start
     again = cleanup(primary)
     assert again[0].endswith("blocked 2, unverified 3, orphans 0, docs 0")  # the two worktrees only
     assert not any("no Markdown in scope" in line for line in again)
@@ -1424,13 +1462,16 @@ STATE = "lumberjack-docs.json"
 BUNDLE = "docs/work/eng-160-handoff"
 
 
+def save_state(primary: Path, since: dict[str, str], bare: list[str] | None = None) -> None:
+    write(primary / ".git", STATE, json.dumps({"since": since, "bare": bare or []}))
+
+
 def seen_on(primary: Path, days_ago: int, path: str = BUNDLE) -> None:
-    day = (datetime.now(timezone.utc) - timedelta(days=days_ago)).date().isoformat()
-    write(primary / ".git", STATE, json.dumps({path: day}))
+    save_state(primary, {path: (datetime.now(timezone.utc) - timedelta(days=days_ago)).date().isoformat()})
 
 
-def recorded(primary: Path) -> dict[str, str]:
-    return json.loads((primary / ".git" / STATE).read_text())  # type: ignore[no-any-return]
+def recorded(primary: Path, key: str = "since") -> dict[str, str] | list[str]:
+    return json.loads((primary / ".git" / STATE).read_text())[key]  # type: ignore[no-any-return]
 
 
 def grace_bundle(primary: Path, grace_days: int, mode: str = "prune") -> None:
@@ -1464,14 +1505,13 @@ def test_zero_grace_days_trashes_at_the_first_session_start_that_sees_the_bundle
 def test_a_bundle_that_turns_live_or_vanishes_loses_its_date(primary: Path) -> None:
     grace_bundle(primary, 3)
     write(primary, "docs/work/eng-3-handoff/a.md", "x\n")  # the open eng-3 worktree carries it
-    write(primary / ".git", STATE, json.dumps({
-        "docs/work/eng-3-handoff": "2020-01-01", "docs/work/gone": "2020-01-01",
-    }))
+    gone = ["docs/work/eng-3-handoff", "docs/work/gone"]
+    save_state(primary, dict.fromkeys(gone, "2020-01-01"), gone)
     cleanup(primary)
-    assert list(recorded(primary)) == [BUNDLE]  # live and gone entries dropped
+    assert list(recorded(primary)) == [BUNDLE] and recorded(primary, "bare") == []  # live and gone dropped
     assert (primary / "docs/work/eng-3-handoff/a.md").exists()
     # Linked again later: the count starts over instead of trashing at once.
-    write(primary / ".git", STATE, json.dumps({BUNDLE: "2020-01-01"}))
+    save_state(primary, {BUNDLE: "2020-01-01"})
     (primary / BUNDLE).rename(primary / "docs/work/elsewhere")  # no ticket: unlinked
     cleanup(primary)
     assert recorded(primary) == {}
@@ -1481,7 +1521,9 @@ def test_a_bundle_that_turns_live_or_vanishes_loses_its_date(primary: Path) -> N
 
 @pytest.mark.parametrize(
     "content",
-    ["", "not json", "[]", '{"docs/work/eng-160-handoff": 5}', '{"docs/work/eng-160-handoff": "soon"}',
+    ["", "not json", "[]", '{"docs/work/eng-160-handoff": "2020-01-01"}',
+     '{"since": {"docs/work/eng-160-handoff": 5}, "bare": []}',
+     '{"since": {"docs/work/eng-160-handoff": "soon"}, "bare": []}', '{"since": {}, "bare": 5}',
      b"\xff\xfe"],
 )
 def test_a_damaged_state_file_never_trashes_early_and_is_rewritten(
@@ -1544,7 +1586,7 @@ def test_trashing_one_bundle_keeps_the_date_of_one_still_waiting(primary: Path) 
     grace_bundle(primary, 3)
     write(primary, "docs/work/eng-161-handoff/a.md", "x\n")
     yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
-    write(primary / ".git", STATE, json.dumps({BUNDLE: "2020-01-01", "docs/work/eng-161-handoff": yesterday}))
+    save_state(primary, {BUNDLE: "2020-01-01", "docs/work/eng-161-handoff": yesterday})
     out = cleanup(primary)
     assert out[0].endswith("docs 1") and not (primary / BUNDLE).exists()
     assert recorded(primary) == {"docs/work/eng-161-handoff": yesterday}

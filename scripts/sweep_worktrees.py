@@ -54,6 +54,7 @@ TRASH_STAMP = "%Y%m%dT%H%M%SZ"  # a trash folder is named for the UTC moment its
 SCOPES = ("markdown", "bundle")  # doc_strategy scope: only .md files, or whole bundles
 BUNDLE_ACTION = {"ephemeral": "trash", "reference": "promote"}  # by class, outside a keep-root
 DOC_SECONDS = 10  # one budget for all doc work in a run (sizing, trashing, purging); the hook times out at 30
+SIZE_SECONDS = 3  # sizing's share of DOC_SECONDS, so trashing and purging always get the rest
 NO_MARKDOWN = "no Markdown in scope"
 
 
@@ -620,25 +621,19 @@ def trash_dir(primary: Path) -> Path:
     return Path(git(primary, "rev-parse", "--absolute-git-dir").stdout.strip()) / "lumberjack-trash"
 
 
-def grace_wait(primary: Path, strategy: Config, marked: list[Row]) -> list[Row]:
-    """The marked bundles still inside grace_days; records the first date a session start saw each.
+def doc_state(primary: Path) -> tuple[Path, dict[str, date], set[str]]:
+    """The state file, the first UTC date a session start saw each bundle linked, and the bare bundles.
 
-    The state file holds {bundle path: first UTC date seen linked}. Anything unreadable counts as
-    empty, so a damaged file only restarts the count; a bundle no longer marked loses its date."""
+    A bare bundle has nothing left in scope, so session start skips it instead of walking it again.
+    Anything unreadable counts as empty, so a damaged file only restarts the count."""
     state = trash_dir(primary).with_name("lumberjack-docs.json")
     today = datetime.now(timezone.utc).date()
     try:
         saved = json.loads(state.read_text("utf-8"))
-        seen = {k: min(date.fromisoformat(v), today) for k, v in saved.items()}
-    except (OSError, ValueError, AttributeError, TypeError, RecursionError):
-        seen = {}
-    kept = {d["path"]: seen.get(d["path"], today) for d in marked}
-    if kept != seen:
-        try:
-            state.write_text(json.dumps({k: v.isoformat() for k, v in kept.items()}), "utf-8")
-        except OSError:  # without a date the bundle waits; grace_days = 0 needs none
-            pass
-    return [d for d in marked if (today - kept[d["path"]]).days < strategy["grace_days"]]
+        since = {k: min(date.fromisoformat(v), today) for k, v in saved["since"].items()}
+        return state, since, set(saved["bare"])
+    except (OSError, ValueError, AttributeError, TypeError, KeyError, RecursionError):
+        return state, {}, set()
 
 
 def trash_rows(primary: Path, cfg: Config) -> list[Row]:
@@ -849,21 +844,23 @@ def clear_bundle(
     if reason:
         return False, f"blocked {rel}: {reason}"
     path, root = primary / rel, primary.resolve()
-    # A link (symlink or Windows junction) can lead a bundle or an entry in it out of the
-    # repository; move takes a link nested in a bundle as a link, so the target survives.
-    outside, inner = not path.resolve().is_relative_to(root), []
-    # rglob("*") yields a nested link itself on every platform (Windows also walks into junctions).
+    # A link (symlink or Windows junction) can lead a bundle out of the repository; move takes
+    # a bundle cleared whole, and a link nested in it, as a link, so the target survives.
+    if not path.resolve().is_relative_to(root):
+        return False, f"blocked {rel}: links outside the repository"
+    inner = []
+    # rglob("*") yields a nested link itself on every platform (Windows also walks into junctions),
+    # and Markdown scope moves the files it finds: any that resolves elsewhere is not the bundle's.
     for entry in path.rglob("*") if strategy["scope"] == "markdown" and path.is_dir() else ():
         if deadline is not None and time.monotonic() > deadline:
             return False, ""  # nothing has moved: the next session start scans it again
+        if not entry.resolve().is_relative_to(root / rel):
+            return False, f"blocked {rel}: links outside the bundle"
         inner.append(entry)
-        outside = outside or not entry.resolve().is_relative_to(root)
     # shortcut: markdown scope matches the .md suffix only; widen it if other text formats matter.
     units = [path] if strategy["scope"] == "bundle" else [
         f for f in (inner if path.is_dir() else [path]) if f.suffix.lower() == ".md"
     ]
-    if outside:
-        return False, f"blocked {rel}: links outside the repository"
     if not units:
         return False, f"blocked {rel}: {NO_MARKDOWN}"
     for unit in units:  # only the purge deletes; a cleared bundle always goes to the trash
@@ -963,14 +960,20 @@ def trash_docs(primary: Path, cfg: Config, report: Row, deadline: float) -> tupl
     marked = [d for d in linked_docs(report) if d["action"] == "trash"]
     if cfg["cleanup"] == "keep":
         return 0, []
-    waiting = grace_wait(primary, cfg["doc_strategy"], marked)
-    out = list(map(doc_line, waiting))  # inside grace_days: its doc line, not trashed or counted
-    due = [d for d in marked if d not in waiting]
+    state, seen, bare = doc_state(primary)
+    today = datetime.now(timezone.utc).date()
+    since = {d["path"]: seen.get(d["path"], today) for d in marked}  # one no longer marked is dropped
+    skip = bare & since.keys()
+    waiting = [d for d in marked if (today - since[d["path"]]).days < cfg["doc_strategy"]["grace_days"]]
+    # inside grace_days: its doc line, not trashed or counted; a bare one stays silent
+    out = [doc_line(d) for d in waiting if d["path"] not in skip]
+    due = [d for d in marked if d not in waiting and d["path"] not in skip]
     if cfg["cleanup"] == "report":
-        return 0, out + [f"doc {d['class']} {d['path']}: would trash" for d in due]
+        out += [f"doc {d['class']} {d['path']}: would trash" for d in due]
+        due = []
     docs = {d["path"]: d for d in report["docs"]}
     stamp = datetime.now(timezone.utc).strftime(TRASH_STAMP)
-    gone = []
+    trashed = 0
     for doc in due:
         if time.monotonic() > deadline:
             break
@@ -980,13 +983,23 @@ def trash_docs(primary: Path, cfg: Config, report: Row, deadline: float) -> tupl
             # RuntimeError: a symlink loop in resolve(); an OSError message would carry an absolute path
             reason = getattr(error, "strerror", None) or "cannot read the bundle"
             moved, line = False, f"blocked {doc['path']}: {reason}"
-        if moved:
-            gone.append(doc)
-        if line and not line.endswith(NO_MARKDOWN):  # nothing left in scope: not worth repeating
+        if moved:  # a trashed bundle loses its date, so one restored from the trash starts over
+            trashed += 1
+            del since[doc["path"]]
+        # shortcut: a bare bundle stays skipped while linked, so a new .md in it needs --clear;
+        # recheck bare bundles by mtime if new files in them turn out to matter.
+        if line.endswith(NO_MARKDOWN) or (moved and (primary / doc["path"]).exists()):
+            skip.add(doc["path"])  # nothing left in scope: not worth walking or reporting again
+        if line and not line.endswith(NO_MARKDOWN):
             out.append(line)
-    if gone:  # a trashed bundle loses its date, so one restored from the trash starts over
-        grace_wait(primary, cfg["doc_strategy"], [d for d in marked if d not in gone])
-    return len(gone), out
+    if (since, skip) != (seen, bare):
+        try:
+            state.write_text(json.dumps({
+                "since": {k: v.isoformat() for k, v in since.items()}, "bare": sorted(skip),
+            }), "utf-8")
+        except OSError:  # without a date the bundle waits; grace_days = 0 needs none
+            pass
+    return trashed, out
 
 
 def run_cleanup(
@@ -1139,7 +1152,7 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
         return [f"sweep: origin/{trunk} is missing; skipped", *notes]
     try:
         deadline = budget(None)  # one budget for every doc step of this run
-        report = build_report(primary, cfg, stale, deadline)
+        report = build_report(primary, cfg, stale, time.monotonic() + SIZE_SECONDS)
         return [*run_cleanup(primary, cfg, report, stale, here, deadline), *notes]
     except OSError as error:
         return [f"sweep: unavailable ({error})", *notes]

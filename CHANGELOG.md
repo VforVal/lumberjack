@@ -48,10 +48,11 @@
   `cleared <path>: trashed <timestamp>`, and `docs N` in the summary line counts the bundles trashed
   this run (a bundle inside its grace period stays, prints its `doc` line and is not counted).
   A bundle that cannot be moved prints `blocked <path>: <reason>` and counts in `blocked N`;
-  a Markdown-scope bundle with no `.md` file left is skipped silently. Reference, `unlinked`, live
+  a Markdown-scope bundle with no `.md` file left is skipped silently and, recorded in the same
+  file, not walked again while it stays linked. Reference, `unlinked`, live
   and keep-root bundles stay. `cleanup = "report"` prints `doc <class> <path>: would trash`, moves
   nothing and still records first-seen dates; `"keep"` moves nothing, records nothing and prints
-  nothing. Sizing, the Markdown walk, trashing and purging share
+  nothing. Sizing (at most 3 seconds of it), the Markdown walk, trashing and purging share
   one 10 second doc budget per run; what it does not reach waits for the next session start.
 - `sweep_worktrees.py --clear <path> [--promoted <ref>]` trashes one linked bundle as the
   strategy says, never deleting it outright (refusing `no strategy saved`, `not a bundle`,
@@ -67,7 +68,8 @@
 - `doc_strategy.roots` (optional): doc roots mapped to `keep`, so
   `roots = {"docs/handoffs" = "keep"}` keeps one root's bundles while others are trashed. `--clear` also
   refuses a bundle whose path or files lead outside the repository through a symlink or junction
-  (`links outside the repository`) and a markdown-scope bundle with no `.md` file
+  (`links outside the repository`), a markdown-scope bundle with an entry that resolves anywhere else,
+  even inside the repository (`links outside the bundle`), and a markdown-scope bundle with no `.md` file
   (`no Markdown in scope`) instead of reporting success.
 - `--clear` takes several paths (one line each, one trash folder, exit 1 when any is blocked) and,
   with `--promoted`, fetches `origin` first so a promotion merged during the session counts.
