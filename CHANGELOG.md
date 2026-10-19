@@ -49,7 +49,8 @@
   one 10 second doc budget per run; what it does not reach waits for the next session start.
 - `sweep_worktrees.py --clear <path> [--promoted <ref>]` trashes one linked bundle as the
   strategy says, never deleting it outright (refusing `no strategy saved`, `not a bundle`,
-  `live`, `unlinked`, `kept by strategy` and an unpromoted reference bundle). Trash lives in `<git dir>/lumberjack-trash/<UTC timestamp>/`.
+  `live`, `unlinked`, `kept by strategy` and an unpromoted reference bundle). Trash lives in
+  `<git dir>/lumberjack-trash/<UTC timestamp>/`.
   The sweep prints a `trash <timestamp>: N days old; <size>` line (and `, trash N` in the summary)
   for folders past `trash_days`; only `--purge-trash` deletes them.
 - `doc_strategy.roots` (optional): doc roots mapped to `keep`, so
