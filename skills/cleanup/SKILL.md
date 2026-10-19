@@ -110,6 +110,7 @@ strategy, so never work it out yourself. Ask once per group (same `action` and d
 never bundle by bundle, listing the paths, tickets and sizes. Only an explicit yes counts.
 With `cleanup = "prune"` the session start already trashed the `trash` ones (step 1 relayed the
 `cleared` lines); any left were over the time budget, blocked or inside `grace_days`, so offer them as below.
+If `--clear` answers `no Markdown in scope`, only other files are left: say so and do not offer it again.
 
 - **trash**: the bundle moves to the trash, kept `trash_days` days. On a yes, run
   `python "SWEEP" --clear "PATH" "PATH" ...` once with the group's paths.

@@ -293,11 +293,14 @@ With a strategy saved, every session start (and the post-merge sweep) trashes ea
 `linked` for `grace_days` (a follow-up branch can still carry its ticket): each prints
 `cleared <path>: trashed <timestamp>` and `docs N` counts them. A bundle the sweep cannot move
 prints `blocked <path>: <reason>` and counts in `blocked N`; a Markdown-scope bundle with no
-`.md` file left is skipped silently, and not walked again while it stays `linked`. `cleanup = "report"` prints `doc <class> <path>: would trash`
+`.md` file left is skipped silently, and not walked again while it stays `linked`; one whose walk
+alone outlasts trashing's time prints `blocked <path>: too large to walk in time` once and is then
+left to the cleanup command (`--clear` has no time limit). Markdown scope also removes the folders
+its move empties, so a bundle of Markdown only goes away whole. `cleanup = "report"` prints `doc <class> <path>: would trash`
 and moves nothing (it still records first-seen dates, so `would trash` matches what `prune` will do),
 and `"keep"` moves nothing, records nothing and prints nothing. `reference`, `unlinked`, `live`
-and keep-root bundles stay. Sizing bundles (at most 3 seconds of it), walking a Markdown-scope bundle, trashing and purging share one 10 second budget per run; a bundle not reached (or whose walk ran out) stays
-untouched for the next session start. The first date a session start saw a bundle `linked`, and which bundles have no `.md` left, are kept in
+and keep-root bundles stay. Sizing bundles gets 3 seconds; then walking Markdown-scope bundles, trashing and purging share 7 more, of which the last 3 are kept for purging, so neither starves the other. The clock starts after the branch checks, so a slow `git` or `gh` never eats it. A bundle not reached stays
+untouched for the next session start. The first date a session start saw a bundle `linked`, and which bundles it skips, are kept in
 `<git dir>/lumberjack-docs.json`; a bundle that turns `live` again (or vanishes) loses both, so the
 count restarts, and a missing or damaged file only restarts it. A bundle inside `grace_days` stays,
 prints its normal `doc` line and is not counted in `docs N`; `--clear` ignores the grace period. The

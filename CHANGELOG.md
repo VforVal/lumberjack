@@ -49,17 +49,20 @@
   this run (a bundle inside its grace period stays, prints its `doc` line and is not counted).
   A bundle that cannot be moved prints `blocked <path>: <reason>` and counts in `blocked N`;
   a Markdown-scope bundle with no `.md` file left is skipped silently and, recorded in the same
-  file, not walked again while it stays linked. Reference, `unlinked`, live
+  file, not walked again while it stays linked; one whose walk alone outlasts trashing's time prints
+  `blocked <path>: too large to walk in time` once and is left to the cleanup command. Markdown
+  scope removes the folders its move empties. Reference, `unlinked`, live
   and keep-root bundles stay. `cleanup = "report"` prints `doc <class> <path>: would trash`, moves
   nothing and still records first-seen dates; `"keep"` moves nothing, records nothing and prints
-  nothing. Sizing (at most 3 seconds of it), the Markdown walk, trashing and purging share
-  one 10 second doc budget per run; what it does not reach waits for the next session start.
+  nothing. Sizing gets 3 seconds; the Markdown walk, trashing and purging share 7 more, started
+  after the branch checks, with the last 3 kept for purging; what they do not reach waits for the
+  next session start.
 - `sweep_worktrees.py --clear <path> [--promoted <ref>]` trashes one linked bundle as the
   strategy says, never deleting it outright (refusing `no strategy saved`, `not a bundle`,
   `live`, `unlinked`, `kept by strategy` and an unpromoted reference bundle). Trash lives in
   `<git dir>/lumberjack-trash/<UTC timestamp>/`.
   With a strategy saved, session start and the post-merge sweep delete the folders past `trash_days`,
-  oldest first, printing `purged <timestamp>` for each; the deleting shares the run's 10 second doc
+  oldest first, printing `purged <timestamp>` for each; the deleting shares the run's doc
   budget and goes bottom up, so a folder too large for it is left partly deleted (keeping its name
   and age) and a later session start finishes it. `cleanup = "report"` prints
   `trash <timestamp>: would purge` and deletes nothing; `"keep"` neither purges nor prints. A folder

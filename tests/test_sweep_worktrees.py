@@ -752,7 +752,7 @@ def test_doc_sizes_stay_fast_on_a_large_tree_and_degrade_when_over_budget(
     rows = sweep_worktrees.doc_rows(primary, cfg, trees, {})
     assert time.monotonic() - start < 5
     assert [r["size"] for r in rows] == [4000] * 3
-    monkeypatch.setattr(sweep_worktrees, "DOC_SECONDS", -1)
+    monkeypatch.setattr(sweep_worktrees, "SIZE_SECONDS", -1)
     rows = sweep_worktrees.doc_rows(primary, cfg, trees, {})
     assert [r["size"] for r in rows] == [None] * 3
     assert "size unknown" in sweep_worktrees.doc_line(rows[0])
@@ -1397,6 +1397,7 @@ def test_sizing_never_takes_the_budget_trashing_needs(
 ) -> None:
     rule_bundles(primary)
     monkeypatch.setattr(sweep_worktrees, "DOC_SECONDS", 3)
+    monkeypatch.setattr(sweep_worktrees, "PURGE_SECONDS", 1)
     monkeypatch.setattr(sweep_worktrees, "SIZE_SECONDS", 0.5)
 
     def huge(path: Path, deadline: float) -> None:  # sizing runs until its deadline
@@ -1425,7 +1426,7 @@ def test_session_start_skips_a_bundle_with_no_markdown_left_silently(
     write(primary, "docs/work/eng-150-handoff/run/out.log", "log")
     first = cleanup(primary)
     assert first[0].endswith("docs 1") and any(l.startswith("cleared docs/work/eng-150-handoff: ") for l in first)
-    assert recorded(primary, "bare") == ["docs/work/eng-150-handoff"]
+    assert recorded(primary, "skipped") == ["docs/work/eng-150-handoff"]
     walked: list[str] = []
     real = sweep_worktrees.clear_bundle
     with monkeypatch.context() as spy:
@@ -1438,6 +1439,102 @@ def test_session_start_skips_a_bundle_with_no_markdown_left_silently(
     assert clear(primary, "docs/work/eng-150-handoff") == (
         1, "blocked docs/work/eng-150-handoff: no Markdown in scope"
     )
+
+
+def test_a_bundle_too_large_to_walk_in_time_is_left_to_the_cleanup_command(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary, scope="markdown")
+    write(primary, "docs/work/eng-153-handoff/a.md", "x\n")
+    big, walked = "docs/work/eng-150-handoff", []
+    real = sweep_worktrees.clear_bundle
+
+    def runs_out(*a: object, **k: object) -> tuple[bool, str]:  # its walk always outlasts the budget
+        walked.append(a[3])
+        return (False, "") if a[3] == big else real(*a, **k)  # type: ignore[arg-type]
+
+    with monkeypatch.context() as spy:
+        spy.setattr(sweep_worktrees, "clear_bundle", runs_out)
+        out = sweep_worktrees.cleanup_session(primary)
+        assert f"blocked {big}: too large to walk in time" in out and out[0].endswith("docs 1")
+        assert recorded(primary, "skipped") == [big]
+        walked.clear()
+        sweep_worktrees.cleanup_session(primary)
+        assert walked == []  # the next bundles get the budget instead
+    assert clear(primary, big)[0] == 0  # --clear has no deadline
+
+
+def test_trashing_never_takes_the_time_purging_needs(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    trash = old_trash(primary)
+    monkeypatch.setattr(sweep_worktrees, "DOC_SECONDS", 2)
+    monkeypatch.setattr(sweep_worktrees, "PURGE_SECONDS", 1)
+
+    def slow(*a: object, **k: object) -> tuple[bool, str]:  # trashing runs until its deadline
+        time.sleep(max(0.0, a[6] - time.monotonic()))  # type: ignore[operator]
+        return False, ""
+
+    monkeypatch.setattr(sweep_worktrees, "clear_bundle", slow)
+    assert "purged " + OLD in sweep_worktrees.cleanup_session(primary)
+    assert not (trash / OLD).exists()
+
+
+def test_slow_branch_checks_never_eat_the_doc_budget(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary)
+    real = sweep_worktrees.classify
+
+    def slow(*a: object, **k: object) -> object:  # gh near its timeout
+        time.sleep(1.5)
+        return real(*a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sweep_worktrees, "classify", slow)
+    monkeypatch.setattr(sweep_worktrees, "DOC_SECONDS", 1)
+    monkeypatch.setattr(sweep_worktrees, "PURGE_SECONDS", 0.2)
+    assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")
+
+
+def test_trashing_a_bundle_looks_up_the_trash_folder_once(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rule_bundles(primary, scope="markdown")
+    for n in range(10):
+        write(primary, f"docs/work/eng-150-handoff/n{n}.md", "x\n")
+    calls: list[Path] = []
+    real = sweep_worktrees.trash_dir
+    monkeypatch.setattr(sweep_worktrees, "trash_dir", lambda p: calls.append(p) or real(p))
+    assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")
+    assert len(calls) < 5  # not one git call per moved file
+
+
+def test_markdown_trash_removes_the_folders_it_empties(primary: Path) -> None:
+    rule_bundles(primary, scope="markdown")
+    write(primary, "docs/work/eng-150-handoff/notes/b.md", "x\n")
+    write(primary, "docs/work/eng-150-handoff/run/out.log", "log")
+    write(primary, "docs/work/eng-153-handoff/deep/c.md", "x\n")  # Markdown only
+    assert cleanup(primary)[0].endswith("docs 2")
+    bundle = primary / "docs/work/eng-150-handoff"
+    assert not (bundle / "notes").exists() and (bundle / "run/out.log").exists()
+    assert not (primary / "docs/work/eng-153-handoff").exists()
+    assert recorded(primary, "skipped") == ["docs/work/eng-150-handoff"]
+
+
+def test_sizing_never_follows_a_link_out_of_the_bundle(primary: Path) -> None:
+    outside = outside_dir(primary)
+    write(outside, "big.bin", "x" * 100_000)
+    write(primary, "docs/work/eng-136-notes/own.md", "12345")
+    link_dir(primary / "docs/work/eng-136-notes/linked", outside)
+    assert sweep_worktrees.tree_size(primary / "docs/work/eng-136-notes", math.inf) < 1000  # type: ignore[operator]
+
+
+def test_a_future_first_seen_date_is_rewritten_to_today(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    save_state(primary, {BUNDLE: "2999-01-01"})  # a clock that once ran ahead
+    cleanup(primary)
+    assert recorded(primary) == {BUNDLE: datetime.now(timezone.utc).date().isoformat()}
 
 
 @pytest.mark.parametrize(
@@ -1462,8 +1559,8 @@ STATE = "lumberjack-docs.json"
 BUNDLE = "docs/work/eng-160-handoff"
 
 
-def save_state(primary: Path, since: dict[str, str], bare: list[str] | None = None) -> None:
-    write(primary / ".git", STATE, json.dumps({"since": since, "bare": bare or []}))
+def save_state(primary: Path, since: dict[str, str], skipped: list[str] | None = None) -> None:
+    write(primary / ".git", STATE, json.dumps({"since": since, "skipped": skipped or []}))
 
 
 def seen_on(primary: Path, days_ago: int, path: str = BUNDLE) -> None:
@@ -1508,7 +1605,7 @@ def test_a_bundle_that_turns_live_or_vanishes_loses_its_date(primary: Path) -> N
     gone = ["docs/work/eng-3-handoff", "docs/work/gone"]
     save_state(primary, dict.fromkeys(gone, "2020-01-01"), gone)
     cleanup(primary)
-    assert list(recorded(primary)) == [BUNDLE] and recorded(primary, "bare") == []  # live and gone dropped
+    assert list(recorded(primary)) == [BUNDLE] and recorded(primary, "skipped") == []  # live and gone dropped
     assert (primary / "docs/work/eng-3-handoff/a.md").exists()
     # Linked again later: the count starts over instead of trashing at once.
     save_state(primary, {BUNDLE: "2020-01-01"})
@@ -1522,8 +1619,8 @@ def test_a_bundle_that_turns_live_or_vanishes_loses_its_date(primary: Path) -> N
 @pytest.mark.parametrize(
     "content",
     ["", "not json", "[]", '{"docs/work/eng-160-handoff": "2020-01-01"}',
-     '{"since": {"docs/work/eng-160-handoff": 5}, "bare": []}',
-     '{"since": {"docs/work/eng-160-handoff": "soon"}, "bare": []}', '{"since": {}, "bare": 5}',
+     '{"since": {"docs/work/eng-160-handoff": 5}, "skipped": []}',
+     '{"since": {"docs/work/eng-160-handoff": "soon"}, "skipped": []}', '{"since": {}, "skipped": 5}',
      b"\xff\xfe"],
 )
 def test_a_damaged_state_file_never_trashes_early_and_is_rewritten(
