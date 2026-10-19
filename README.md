@@ -289,12 +289,15 @@ When `doc_roots` holds linked bundles, `/lumberjack:cleanup` asks the maintainer
 `doc_strategy` (scope, trash days, keep-roots) and saves it with
 `setup_lumberjack.py strategy <file.json>`; later runs ask nothing, and until it is saved
 nothing is removed. A linked bundle's work is done by git alone: no tracker is checked.
-With a strategy saved, every session start trashes each `linked` `ephemeral` bundle by rule,
-without asking, as it removes a landed worktree: each prints `cleared <path>: trashed <timestamp>`
-and `docs N` counts them. `cleanup = "report"` prints `doc <class> <path>: would trash` and moves
-nothing, and `"keep"` moves and prints nothing. `reference`, `unlinked`, `live` and keep-root
-bundles stay. Markdown scope walks each bundle, so it stops at a 10 second budget and the rest wait for
-the next session start. The command offers what is left, one question per group. Nothing deletes
+With a strategy saved, every session start (and the post-merge sweep) trashes each `linked`
+`ephemeral` bundle by rule, without asking, as it removes a landed worktree: each prints
+`cleared <path>: trashed <timestamp>` and `docs N` counts them. A bundle the sweep cannot move
+prints `blocked <path>: <reason>` and counts in `blocked N`; a Markdown-scope bundle with no
+`.md` file left is skipped silently. `cleanup = "report"` prints `doc <class> <path>: would trash`
+and moves nothing, and `"keep"` moves nothing and prints nothing. `reference`, `unlinked`, `live`
+and keep-root bundles stay. Sizing bundles and trash folders, walking a Markdown-scope bundle and
+trashing share one 10 second budget per run; a bundle not reached (or whose walk ran out) stays
+untouched for the next session start. The command offers what is left, one question per group. Nothing deletes
 a bundle outright: `--clear` only moves it to the trash. `--json` gives each doc its resolved `action` (`trash`, `promote` or
 `keep`), empty until a strategy is saved.
 `reference` bundles are only offered promote or keep: promote writes the findings to a document

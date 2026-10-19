@@ -1252,8 +1252,10 @@ def test_sweep_reports_trash_past_retention_and_only_purge_removes_it(
     assert sweep(primary, "--purge-trash").stdout.strip() == "trash: nothing past retention"
 
 
-def rule_bundles(primary: Path, mode: str = "prune", strategy: bool = True) -> None:
-    saved = 'doc_strategy = {scope = "bundle", trash_days = 30, roots = {"docs/handoffs" = "keep"}}\n'
+def rule_bundles(
+    primary: Path, mode: str = "prune", strategy: bool = True, scope: str = "bundle"
+) -> None:
+    saved = f'doc_strategy = {{scope = "{scope}", trash_days = 30, roots = {{"docs/handoffs" = "keep"}}}}\n'
     settings(
         primary,
         f'cleanup = "{mode}"\ndoc_roots = ["docs/work", "docs/handoffs"]\n' + (saved if strategy else ""),
@@ -1298,3 +1300,45 @@ def test_bundles_past_the_time_budget_wait_for_the_next_session_start(
     assert (primary / "docs/work/eng-150-handoff/a.md").exists()
     assert sweep_worktrees.cleanup_session(primary)[0].endswith("docs 1")
     assert not (primary / "docs/work/eng-150-handoff").exists()
+
+
+def test_markdown_walk_stops_at_the_deadline_and_moves_nothing(primary: Path) -> None:
+    rule_bundles(primary, scope="markdown")
+    write(primary, "docs/work/eng-150-handoff/run/out.log", "log")
+    cfg = sweep_worktrees.load_config(primary)
+    docs = {d["path"]: d for d in sweep_worktrees.build_report(primary, cfg)["docs"]}
+    bundle = "docs/work/eng-150-handoff"
+    assert sweep_worktrees.clear_bundle(primary, cfg, docs, bundle, "", "stamp", deadline=0) == (False, "")
+    assert (primary / bundle / "a.md").exists() and not trash_folders(primary)
+    assert sweep_worktrees.clear_bundle(primary, cfg, docs, bundle, "", "stamp")[0]
+    assert not (primary / bundle / "a.md").exists() and (primary / bundle / "run/out.log").exists()
+
+
+def test_session_start_skips_a_bundle_with_no_markdown_left_silently(primary: Path) -> None:
+    rule_bundles(primary, scope="markdown")
+    write(primary, "docs/work/eng-150-handoff/run/out.log", "log")
+    assert cleanup(primary)[0].endswith("docs 1")
+    again = cleanup(primary)
+    assert again[0].endswith("blocked 2, unverified 3, orphans 0, docs 0")  # the two worktrees only
+    assert not any("no Markdown in scope" in line for line in again)
+    assert clear(primary, "docs/work/eng-150-handoff") == (
+        1, "blocked docs/work/eng-150-handoff: no Markdown in scope"
+    )
+
+
+@pytest.mark.parametrize(
+    "error", [OSError(13, "Permission denied", "/abs/secret/path"), RuntimeError("Symlink loop")]
+)
+def test_a_bundle_that_cannot_be_read_is_a_blocked_line_not_an_error(
+    primary: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    rule_bundles(primary)
+
+    def broken(*_: object, **__: object) -> tuple[bool, str]:
+        raise error
+
+    monkeypatch.setattr(sweep_worktrees, "clear_bundle", broken)
+    out = sweep_worktrees.cleanup_session(primary)
+    line = next(l for l in out if l.startswith("blocked docs/work/eng-150-handoff: "))
+    assert "/abs" not in line and str(primary) not in line
+    assert out[0].endswith("blocked 3, unverified 3, orphans 0, docs 0")  # two worktrees plus this one
