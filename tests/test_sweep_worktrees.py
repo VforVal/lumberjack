@@ -1018,9 +1018,15 @@ def test_remove_reports_a_failed_removal_as_blocked(
 STRATEGY = {"scope": "bundle", "trash_days": 30, "grace_days": 0}
 
 
-def strategy_settings(primary: Path, **override: object) -> None:
+def strategy_settings(
+    primary: Path, doc_roots: tuple[str, ...] = ("docs/work",), roots: tuple[str, ...] = (),
+    **override: object,
+) -> None:
+    """Save STRATEGY with overrides; each of `roots` becomes a keep-root."""
     table = ", ".join(f"{k} = {json.dumps(v)}" for k, v in {**STRATEGY, **override}.items())
-    settings(primary, f'doc_roots = ["docs/work"]\ndoc_strategy = {{{table}}}\n')
+    if roots:
+        table += ", roots = {" + ", ".join(f'{json.dumps(r)} = "keep"' for r in roots) + "}"
+    settings(primary, f"doc_roots = {json.dumps(list(doc_roots))}\ndoc_strategy = {{{table}}}\n")
 
 
 def clear(primary: Path, target: str, *args: str) -> tuple[int, str]:
@@ -1148,11 +1154,7 @@ def test_clear_with_markdown_scope_blocks_when_nothing_is_in_scope(primary: Path
 
 
 def test_keep_root_keeps_a_bundle_the_rule_would_trash(primary: Path) -> None:
-    settings(
-        primary,
-        'doc_roots = ["docs/work", "docs/handoffs"]\n'
-        'doc_strategy = {scope = "bundle", trash_days = 30, grace_days = 0, roots = {"./docs/handoffs/" = "keep"}}\n',
-    )
+    strategy_settings(primary, ("docs/work", "docs/handoffs"), roots=("./docs/handoffs/",))
     write(primary, "docs/handoffs/eng-139-a/a.md", "Ticket: eng-139\n")
     write(primary, "docs/work/eng-139-b/a.md", "Ticket: eng-139\n")
     assert clear(primary, "docs/handoffs/eng-139-a") == (
@@ -1171,11 +1173,8 @@ def test_each_doc_row_names_the_action_its_strategy_gives_it(
     write(primary, "docs/lab/eng-145-research/a.md", "Ticket: eng-145\n")
     settings(primary, 'doc_roots = ["docs/work", "docs/handoffs", "docs/lab"]\n')
     assert {d["action"] for d in docs_by_path(primary, capsys).values()} == {""}  # no strategy
-    settings(
-        primary,
-        'doc_roots = ["docs/work", "docs/handoffs", "docs/lab"]\n'
-        'doc_strategy = {scope = "bundle", trash_days = 30, grace_days = 0,'
-        ' roots = {"docs/handoffs" = "keep", "docs/lab" = "keep"}}\n',
+    strategy_settings(
+        primary, ("docs/work", "docs/handoffs", "docs/lab"), roots=("docs/handoffs", "docs/lab")
     )
     actions = {p: d["action"] for p, d in docs_by_path(primary, capsys).items()}
     assert actions == {
@@ -1225,8 +1224,7 @@ def test_reference_bundle_is_cleared_once_a_tracked_doc_is_on_origin(primary: Pa
     # Stale origin/main, as when the promotion merged after the session's fetch: --clear fetches.
     git(primary, "update-ref", "refs/remotes/origin/main", "HEAD~1")
     assert clear(primary, bundle, "--promoted", "findings.md")[0] == 0
-    settings(primary, 'doc_roots = ["docs/work"]\n'
-             'doc_strategy = {scope = "bundle", trash_days = 30, grace_days = 0, roots = {"docs/work" = "keep"}}\n')
+    strategy_settings(primary, roots=("docs/work",))
     write(primary, f"{bundle}/a.md", "Ticket: eng-135\n")
     assert clear(primary, bundle, "--promoted", "findings.md") == (
         1, f"blocked {bundle}: kept by strategy"
