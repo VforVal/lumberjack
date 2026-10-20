@@ -685,6 +685,21 @@ class Target:
     suffix: str = ""  # ".md" in Markdown scope
 
 
+@dataclasses.dataclass(frozen=True)
+class FileList:
+    """--files: list every file of all bundles and trash folders, or only of those named in keys."""
+
+    on: bool = False
+    keys: frozenset[str] = frozenset()
+
+    def picks(self, key: str) -> bool:
+        return self.on and (not self.keys or key in self.keys)
+
+    def missing(self, seen: set[str]) -> list[str]:
+        """A line for each named key that matched no bundle or trash folder."""
+        return [f"files: nothing named {key}" for key in sorted(self.keys - seen)]
+
+
 @dataclasses.dataclass
 class DocRun:
     """One run's doc work: bundles trashed and its lines; in report mode, what it would trash and purge."""
@@ -1087,8 +1102,7 @@ def purge_expired(primary: Path, rows: list[Row], deadline: float) -> list[str]:
         except (OSError, RuntimeError) as error:  # the session start never raises (RuntimeError: too deep)
             blocked = getattr(error, "strerror", None) or "cannot delete"
         if done or deleted.files:
-            record(primary, {"event": "purge", "stamp": row["name"], "files": deleted.files,
-                             "size": deleted.size, "done": done})
+            record(primary, {"event": "purge", "stamp": row["name"], "files": deleted.files, "size": deleted.size})
         if blocked:
             out.append(f"blocked trash {row['name']}: {blocked}")
         elif not done:
@@ -1425,11 +1439,11 @@ def fetch_trunk(primary: Path, trunk: str) -> tuple[bool, str]:
     return stale, ""
 
 
-def preview(start: Path, detail: Callable[[str], bool] = lambda key: False) -> list[str]:
+def preview(start: Path, listing: FileList = FileList()) -> list[str]:
     """What the next session start would remove, trash and purge, as `cleanup = "report"` lists it.
 
     Changes nothing but origin's refs (it fetches): no first-seen dates, no hook settings, no tally.
-    Counts files without a time limit. detail picks the bundles (by path) and trash folders (by
+    Counts files without a time limit. listing picks the bundles (by path) and trash folders (by
     timestamp) whose every file is listed after their line."""
     primary = find_primary(start)
     cfg = load_config(primary)
@@ -1447,23 +1461,22 @@ def preview(start: Path, detail: Callable[[str], bool] = lambda key: False) -> l
         return runs[-1]
 
     out = run_cleanup(primary, {**cfg, "cleanup": "report"}, report, stale, here, docs)
-    for target in (t for run in runs for t in run.targets if detail(t.key)):
+    targets = [t for run in runs for t in run.targets]
+    for target in (t for t in targets if listing.picks(t.key)):
         at = out.index(target.line) + 1
         base = trash_dir(primary) if target.path.is_relative_to(trash_dir(primary)) else primary
         out[at:at] = file_lines(target.path, base, target.suffix)
-    return out
+    return out + listing.missing({t.key for t in targets})
 
 
-def tally(start: Path, detail: Callable[[str], bool] = lambda key: False) -> list[str]:
+def tally(start: Path, listing: FileList = FileList()) -> list[str]:
     """Bundles trashed and trash purged since the last session start and in all, and what the trash holds.
 
-    detail picks this session's bundles (by path) whose every file still in the trash is listed."""
+    listing picks this session's bundles (by path) whose every file still in the trash is listed."""
     primary = find_primary(start)
     cfg = load_config(primary)
     events = recorded(primary)
-    starts = [i for i, e in enumerate(events) if e.get("event") == "session"]
-    session = events[starts[-1] + 1:] if starts else events  # the file's order, not the clock's
-    since = events[starts[-1]]["at"] if starts else "none recorded"
+    session, since = this_session(events)
     trash, deadline = trash_dir(primary), math.inf
     out, moved = [], Footprint()
     for e in session:
@@ -1474,7 +1487,7 @@ def tally(start: Path, detail: Callable[[str], bool] = lambda key: False) -> lis
             moved.add(stats)
             where = f"{files_text(stats)}, in {e.get('stamp')}" if held else "no longer in the trash"
             out.append(f"trashed {e.get('bundle')}: {where}")
-            out += file_lines(path, trash) if held and detail(str(e.get("bundle"))) else []
+            out += file_lines(path, trash) if held and listing.picks(str(e.get("bundle"))) else []
     folders = Footprint()
     for name in sorted(os.listdir(trash)) if trash.is_dir() else []:
         if re.fullmatch(r"\d{8}T\d{6}Z", name):  # a TRASH_STAMP name; anything else is not ours
@@ -1486,7 +1499,24 @@ def tally(start: Path, detail: Callable[[str], bool] = lambda key: False) -> lis
         f"tally: in all{first}: trashed {plural(bundles, 'bundle')}, purged {purged(events)}",
         f"tally: in the trash: {folders.text('folder')}, {len(trash_rows(primary, cfg))} past retention",
         *out,
+        *listing.missing({str(e.get("bundle")) for e in session if e.get("event") == "trash"}),
     ]
+
+
+def this_session(events: list[Row]) -> tuple[list[Row], str]:
+    """(events after the current session's first start marker, that marker's time), in the file's order.
+
+    Resume, /clear and compaction fire SessionStart again with the same session id; those markers
+    do not start a new session. A marker without an id stands alone."""
+    starts = [i for i, e in enumerate(events) if e.get("event") == "session"]
+    if not starts:
+        return events, "none recorded"
+    first, sid = starts[-1], events[starts[-1]].get("id")
+    for i in reversed(starts[:-1]):
+        if not sid or events[i].get("id") != sid:
+            break
+        first = i
+    return events[first + 1:], events[first]["at"]
 
 
 def purged(events: list[Row]) -> str:
@@ -1497,11 +1527,15 @@ def purged(events: list[Row]) -> str:
     return files_text((files, size))
 
 
-def mark_session(start: Path) -> None:
-    """Record a session start in the tally, so --tally can tell this session's work from earlier work."""
+def mark_session(start: Path, session_id: str) -> None:
+    """Record a session start in the tally, so --tally can tell this session's work from earlier work.
+
+    Only with a saved doc_strategy: without one nothing is ever trashed, so there is nothing to tally."""
     try:
-        record(find_primary(start), {"event": "session"})
-    except SystemExit:  # not a git repository: nothing to tally
+        primary = find_primary(start)
+        if load_config(primary)["doc_strategy"]:
+            record(primary, {"event": "session", "id": session_id})
+    except (SystemExit, ConfigError):  # not a git repository, or a config the session start reports
         pass
 
 
@@ -1559,7 +1593,7 @@ def hook(payload: dict[str, object]) -> int:
             print(json.dumps({"decision": "block", "reason": "\n".join(reasons)}))
         return 0
     if event == "SessionStart":
-        mark_session(Path.cwd())
+        mark_session(Path.cwd(), str(payload.get("session_id", "")))
         output = "\n".join(cleanup_session(Path.cwd(), include_context=True))
     elif event == "SubagentStart":
         # Claude forks inherit context; Codex children always receive the approved refresh.
@@ -1620,11 +1654,13 @@ def main(argv: list[str] | None = None) -> int:
         help="with --preview or --tally: list every file of these bundle paths or trash timestamps, or of all",
     )
     args = parser.parse_args(argv)
+    if args.files is not None and not (args.preview or args.tally):
+        parser.error("--files needs --preview or --tally")
     if args.preview or args.tally:
-        keys = {posixpath.normpath(k.replace("\\", "/")) for k in args.files or ()}
-        detail = (lambda key: False) if args.files is None else (lambda key: not keys or key in keys)
+        keys = frozenset(posixpath.normpath(k.replace("\\", "/")) for k in args.files or ())
+        listing = FileList(args.files is not None, keys)
         try:
-            print("\n".join(preview(Path.cwd(), detail) if args.preview else tally(Path.cwd(), detail)))
+            print("\n".join(preview(Path.cwd(), listing) if args.preview else tally(Path.cwd(), listing)))
         except (ConfigError, OSError) as error:
             raise SystemExit(error) from error
         return 0

@@ -383,12 +383,15 @@ By default each bundle and trash folder is one line with its file count. `--file
 `file <path> (<size>)` line under each one for every file it would trash or purge (repository paths
 for bundles, `<timestamp>/<path>` for trash); `--files <key>...` does it only for the named bundle
 paths or trash timestamps. With `--tally`, `--files` lists the files this session's bundles still
-hold in the trash. So an agent asked what a sweep would remove can answer from the summary, then
-list one bundle's files when asked for detail.
+hold in the trash. A named key that matches nothing prints `files: nothing named <key>` last, and
+`--files` without `--preview` or `--tally` is refused. So an agent asked what a sweep would remove
+can answer from the summary, then list one bundle's files when asked for detail.
 
 `--tally` shows what was done. Every trashed bundle (by session start, the post-merge sweep or
 `--clear`) and every purge (with the files and bytes it deleted, a purge cut short included) is
-appended to `<git dir>/lumberjack-tally.jsonl`, and each session start adds a marker, so:
+appended to `<git dir>/lumberjack-tally.jsonl`, and each session start adds a marker with the
+harness's session id (only once a `doc_strategy` is saved). A resume, `/clear` or compaction fires
+SessionStart again with the same id, so it does not start a new session in the tally:
 
 ```
 tally: since the last session start (2026-10-20T08:00:05Z): trashed 3 bundles (120 files, 4.2 MB), purged 40 files (1.1 MB)

@@ -1889,8 +1889,9 @@ def test_trashing_one_bundle_keeps_the_date_of_one_still_waiting(primary: Path) 
     assert recorded(primary) == {"docs/work/eng-161-handoff": yesterday}
 
 
-def session_start(primary: Path) -> None:
-    done = sweep(primary, "--hook", stdin='{"hook_event_name":"SessionStart","source":"startup"}')
+def session_start(primary: Path, session_id: str = "s1", source: str = "startup") -> None:
+    payload = {"hook_event_name": "SessionStart", "source": source, "session_id": session_id}
+    done = sweep(primary, "--hook", stdin=json.dumps(payload))
     assert done.returncode == 0, done.stderr
 
 
@@ -1954,7 +1955,7 @@ def test_tally_splits_this_session_from_the_lifetime_and_counts_the_trash(primar
     # the fresh folder old_trash leaves and this run's folder: one or two, by the clock's second
     assert out[2].startswith("tally: in the trash: ") and out[2].endswith("(2 files, 3 B), 0 past retention")
     assert re.fullmatch(r"trashed docs/work/eng-150-handoff: 1 file \(2 B\), in \d{8}T\d{6}Z", out[3])
-    session_start(primary)  # a new session: nothing new trashed or purged
+    session_start(primary, "s2")  # a new session: nothing new trashed or purged
     out = run_lines(primary, "--tally")
     assert out[0].endswith("trashed 0 bundles, purged 0 files (0 B)") and len(out) == 3
     assert out[1].endswith("trashed 1 bundle, purged 3 files (3 B)")
@@ -2017,3 +2018,30 @@ def test_tally_files_lists_what_the_trash_still_holds_for_a_bundle(primary: Path
     out = run_lines(primary, "--tally", "--files", "docs/work/eng-150-handoff")
     (folder,) = trash_folders(primary)
     assert out[-1] == f"file {folder.name}/docs/work/eng-150-handoff/a.md (2 B)"
+
+
+@pytest.mark.parametrize("source", ["compact", "resume", "clear"])
+def test_a_restart_of_the_same_session_keeps_its_tally(primary: Path, source: str) -> None:
+    rule_bundles(primary)
+    session_start(primary)
+    session_start(primary, source=source)  # same session id: still this session
+    assert run_lines(primary, "--tally")[0].endswith("trashed 1 bundle (1 file, 2 B), purged 0 files (0 B)")
+
+
+def test_no_session_marker_without_a_doc_strategy(primary: Path) -> None:
+    rule_bundles(primary, strategy=False)
+    session_start(primary)
+    assert not (primary / ".git" / "lumberjack-tally.jsonl").exists()
+
+
+def test_files_names_a_key_that_matches_nothing(primary: Path) -> None:
+    rule_bundles(primary)
+    out = run_lines(primary, "--preview", "--files", "docs/work/eng-150-handoff", "/abs/docs/work/x")
+    assert out[-1] == "files: nothing named /abs/docs/work/x"
+    assert "file docs/work/eng-150-handoff/a.md (2 B)" in out
+    assert run_lines(primary, "--tally", "--files", "docs/work/none")[-1] == "files: nothing named docs/work/none"
+
+
+def test_files_alone_is_refused(primary: Path) -> None:
+    done = sweep(primary, "--files")
+    assert done.returncode == 2 and "--files needs --preview or --tally" in done.stderr
