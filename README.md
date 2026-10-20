@@ -401,8 +401,9 @@ trashed docs/work/eng-9-handoff: 12 files (300 KB), in 20261020T080005Z
 trashed docs/work/eng-10-plan: no longer in the trash
 ```
 
-The first line counts the bundles trashed since the last session start and the files purged in
-that time; the files are those the trash still holds for each bundle (`at least` when one is gone).
+The first line counts the bundles trashed since the latest session began (its first marker) and
+the files purged in that time, by any session on this clone; the files are those the trash still
+holds for each bundle (`at least` when one is gone, `files uncounted` when all are).
 The second covers everything recorded. The third counts the timestamp folders in the trash,
 waiting for the purge, and how many are past `trash_days`. One `trashed` line follows per bundle
 of this session, with its files and folder, or `no longer in the trash` once it was purged or

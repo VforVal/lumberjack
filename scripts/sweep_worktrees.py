@@ -671,6 +671,8 @@ class Footprint:
         """`3 bundles (120 files, 4.2 MB)`; `at least` when an item went uncounted."""
         if not self.items:
             return plural(0, noun)
+        if self.uncounted == self.items:
+            return f"{plural(self.items, noun)} (files uncounted)"
         floor = "at least " if self.uncounted else ""
         return f"{plural(self.items, noun)} ({floor}{plural(self.files, 'file')}, {human_size(self.size)})"
 
@@ -1259,14 +1261,20 @@ def would_purge(primary: Path, rows: list[Row], deadline: float) -> DocRun:
 
 
 def file_lines(path: Path, base: Path, suffix: str = "") -> list[str]:
-    """`file <path> (<size>)` for each file under path whose name ends in suffix, relative to base."""
-    if not path.is_dir():
-        return [f"file {path.relative_to(base).as_posix()} ({human_size(path.lstat().st_size)})"]
-    cut = len(str(base)) + 1  # walk's paths all start with base: slicing beats relative_to per file
-    sized = sorted(
-        (e.path[cut:].replace(os.sep, "/"), e.stat(follow_symlinks=False).st_size)
-        for e in walk(str(path)) if not is_folder(e) and e.name.lower().endswith(suffix)
-    )
+    """`file <path> (<size>)` for each file under path whose name ends in suffix, relative to base.
+
+    One line saying why instead when path cannot be listed (gone, unreadable, too deep)."""
+    try:
+        if not path.is_dir():
+            found = [(path.relative_to(base).as_posix(), path.lstat().st_size)]
+            return [f"file {n} ({human_size(b)})" for n, b in found if n.lower().endswith(suffix)]
+        cut = len(str(base)) + 1  # walk's paths all start with base: slicing beats relative_to per file
+        sized = sorted(
+            (e.path[cut:].replace(os.sep, "/"), e.stat(follow_symlinks=False).st_size)
+            for e in walk(str(path)) if not is_folder(e) and e.name.lower().endswith(suffix)
+        )
+    except (OSError, RecursionError) as error:
+        return [f"files: cannot list {path.relative_to(base).as_posix()} ({getattr(error, 'strerror', None) or 'too deep'})"]
     return [f"file {name} ({human_size(size)})" for name, size in sized]
 
 
@@ -1504,18 +1512,16 @@ def tally(start: Path, listing: FileList = FileList()) -> list[str]:
 
 
 def this_session(events: list[Row]) -> tuple[list[Row], str]:
-    """(events after the current session's first start marker, that marker's time), in the file's order.
+    """(events after the latest session's first start marker, that marker's time), in the file's order.
 
-    Resume, /clear and compaction fire SessionStart again with the same session id; those markers
-    do not start a new session. A marker without an id stands alone."""
+    Resume, /clear and compaction fire SessionStart again with the same session id, so the window
+    opens at that id's first marker; work other sessions did on this clone since then counts too.
+    A marker without an id stands alone."""
     starts = [i for i, e in enumerate(events) if e.get("event") == "session"]
     if not starts:
         return events, "none recorded"
-    first, sid = starts[-1], events[starts[-1]].get("id")
-    for i in reversed(starts[:-1]):
-        if not sid or events[i].get("id") != sid:
-            break
-        first = i
+    sid = events[starts[-1]].get("id")
+    first = next(i for i in starts if i == starts[-1] or sid and events[i].get("id") == sid)
     return events[first + 1:], events[first]["at"]
 
 

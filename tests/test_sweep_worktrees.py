@@ -1968,7 +1968,7 @@ def test_tally_names_a_bundle_moved_back_out_of_the_trash(primary: Path) -> None
     (folder,) = trash_folders(primary)
     shutil.move(folder / "docs/work/eng-131-handoff", primary / "docs/work/eng-131-handoff")
     out = run_lines(primary, "--tally")
-    assert out[0].startswith("tally: since the last session start (none recorded): trashed 1 bundle (at least 0 files")
+    assert out[0].startswith("tally: since the last session start (none recorded): trashed 1 bundle (files uncounted)")
     assert out[-1] == "trashed docs/work/eng-131-handoff: no longer in the trash"
 
 
@@ -2045,3 +2045,23 @@ def test_files_names_a_key_that_matches_nothing(primary: Path) -> None:
 def test_files_alone_is_refused(primary: Path) -> None:
     done = sweep(primary, "--files")
     assert done.returncode == 2 and "--files needs --preview or --tally" in done.stderr
+
+
+def test_another_session_starting_in_between_never_cuts_this_sessions_tally(primary: Path) -> None:
+    rule_bundles(primary)
+    session_start(primary, "a")  # trashes eng-150
+    session_start(primary, "b")  # another session on the same clone
+    session_start(primary, "a", source="clear")
+    assert run_lines(primary, "--tally")[0].endswith("trashed 1 bundle (1 file, 2 B), purged 0 files (0 B)")
+
+
+def test_a_footprint_with_nothing_counted_says_so() -> None:
+    footprint = sweep_worktrees.Footprint()
+    footprint.add(None)
+    assert footprint.text("bundle") == "1 bundle (files uncounted)"
+
+
+def test_files_lists_a_single_file_bundle_only_in_scope(tmp_path: Path) -> None:
+    write(tmp_path, "docs/notes.txt", "x")
+    assert sweep_worktrees.file_lines(tmp_path / "docs/notes.txt", tmp_path, ".md") == []
+    assert sweep_worktrees.file_lines(tmp_path / "docs/gone", tmp_path)[0].startswith("files: cannot list docs/gone (")
