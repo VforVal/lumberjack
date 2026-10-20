@@ -45,6 +45,12 @@ UTC-timestamped folder; clearing never deletes outright. A folder older than `tr
 purged at session start, within the time budget (a large one is left partly deleted and finished
 by a later run), or at once by `--purge-trash` in cleanup.
 
+**preview**: `--preview`, a read-only run of the next session start's cleanup in report mode,
+with file counts: what it would remove, trash and purge. `--files` lists each file.
+
+**tally**: `--tally`, the count of bundles trashed and files purged since the last session start
+and in all, from `lumberjack-tally.jsonl` in the git directory, plus what the trash still holds.
+
 **promote**: save a reference bundle's findings as a document tracked on the primary branch or on
 a pushed prototype branch. Only then is the bundle cleared (into the trash).
 

@@ -2,6 +2,7 @@
 
 import argparse
 import contextlib
+import dataclasses
 import functools
 import glob
 import json
@@ -64,6 +65,7 @@ DOC_STATE = "lumberjack-docs.json"  # next to the trash: first-seen dates and sk
 DOC_LOCK = "lumberjack-docs.lock"  # next to the trash: OS-locked while one run trashes or purges
 DOC_WAIT = 10  # seconds --clear and --purge-trash wait for a held lock; session start never waits
 BUSY = "a sweep is trashing"
+TALLY = "lumberjack-tally.jsonl"  # next to the trash: one JSON line per session start, trashed bundle and purge
 
 
 def reparse(st: os.stat_result) -> bool:
@@ -544,12 +546,28 @@ def top_file_tickets(cfg: Config, path: Path) -> list[str]:
 
 def tree_size(path: Path, deadline: float) -> int | None:
     """Bytes under path from stat alone (no file is opened); None past the deadline or unreadable."""
+    stats = file_stats(path, deadline)
+    return stats and stats[1]
+
+
+def file_stats(path: Path, deadline: float, suffix: str = "") -> tuple[int, int] | None:
+    """(files, bytes) under path whose names end in suffix, any case; None past the deadline or unreadable."""
     try:
         if not path.is_dir():
-            return path.lstat().st_size
-        return sum(e.stat(follow_symlinks=False).st_size for e in walk(str(path), deadline) if not is_folder(e))
+            return (1, path.lstat().st_size) if path.name.lower().endswith(suffix) else (0, 0)
+        found = [e.stat(follow_symlinks=False).st_size for e in walk(str(path), deadline)
+                 if not is_folder(e) and e.name.lower().endswith(suffix)]
     except (OSError, RecursionError):  # TimeoutError is an OSError; a tree deeper than walk recurses
         return None
+    return len(found), sum(found)
+
+
+def files_text(stats: tuple[int, int] | None) -> str:
+    return "files uncounted" if stats is None else f"{plural(stats[0], 'file')} ({human_size(stats[1])})"
+
+
+def plural(count: int, noun: str) -> str:
+    return f"{count} {noun}" + ("" if count == 1 else "s")
 
 
 def human_size(size: int | None) -> str:
@@ -633,6 +651,71 @@ def linked_docs(report: Row) -> list[Row]:
     return [d for d in report["docs"] if d["state"] == "linked"]
 
 
+@dataclasses.dataclass
+class Footprint:
+    """Bundles or trash folders a step moves or deletes, with the files and bytes under them."""
+
+    items: int = 0
+    files: int = 0
+    size: int = 0
+    uncounted: int = 0  # items past the counting budget, or unreadable: the files are a lower bound
+
+    def add(self, stats: tuple[int, int] | None) -> None:
+        self.items += 1
+        if stats is None:
+            self.uncounted += 1
+        else:
+            self.files, self.size = self.files + stats[0], self.size + stats[1]
+
+    def text(self, noun: str) -> str:
+        """`3 bundles (120 files, 4.2 MB)`; `at least` when an item went uncounted."""
+        if not self.items:
+            return plural(0, noun)
+        if self.uncounted == self.items:
+            return f"{plural(self.items, noun)} (files uncounted)"
+        floor = "at least " if self.uncounted else ""
+        return f"{plural(self.items, noun)} ({floor}{plural(self.files, 'file')}, {human_size(self.size)})"
+
+
+@dataclasses.dataclass(frozen=True)
+class Target:
+    """A bundle or trash folder report mode lists: its line, its key for --files, and the files in scope."""
+
+    line: str
+    key: str  # the bundle's repository path or the trash folder's timestamp
+    path: Path
+    suffix: str = ""  # ".md" in Markdown scope
+
+
+@dataclasses.dataclass(frozen=True)
+class FileList:
+    """--files: list every file of all bundles and trash folders, or only of those named in keys."""
+
+    on: bool = False
+    keys: frozenset[str] = frozenset()
+
+    def picks(self, key: str) -> bool:
+        return self.on and (not self.keys or key in self.keys)
+
+    def missing(self, seen: set[str]) -> list[str]:
+        """A line for each named key that matched no bundle or trash folder."""
+        return [f"files: nothing named {key}" for key in sorted(self.keys - seen)]
+
+
+@dataclasses.dataclass
+class DocRun:
+    """One run's doc work: bundles trashed and its lines; in report mode, what it would trash and purge."""
+
+    trashed: int = 0
+    lines: list[str] = dataclasses.field(default_factory=list)
+    trash: Footprint = dataclasses.field(default_factory=Footprint)
+    purge: Footprint = dataclasses.field(default_factory=Footprint)
+    targets: list[Target] = dataclasses.field(default_factory=list)  # report mode, for --files
+
+    def add_purge(self, other: "DocRun") -> None:
+        self.purge, self.lines, self.targets = other.purge, self.lines + other.lines, self.targets + other.targets
+
+
 @functools.cache  # the git folder never moves during a run; one git call, not one per file
 def trash_dir(primary: Path) -> Path:
     # Inside .git: never tracked, never untracked, never in a worktree removal check.
@@ -661,6 +744,33 @@ def save_doc_state(primary: Path, since: dict[str, date], skipped: set[str]) -> 
         trash_dir(primary).with_name(DOC_STATE).write_text(json.dumps(saved), "utf-8")
     except OSError:  # without a date the bundle waits; grace_days = 0 needs none
         pass
+
+
+def record(primary: Path, event: Row) -> None:
+    """Append one event, stamped with the UTC time, to the tally; a failed write only loses the count."""
+    at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        with trash_dir(primary).with_name(TALLY).open("a", encoding="utf-8") as file:
+            file.write(json.dumps({"at": at, **event}) + "\n")
+    except OSError:
+        pass
+
+
+def recorded(primary: Path) -> list[Row]:
+    """The tally's events, oldest first; a damaged line is skipped."""
+    try:
+        text = trash_dir(primary).with_name(TALLY).read_text("utf-8")
+    except OSError:
+        return []
+    events = []
+    for line in text.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and isinstance(event.get("at"), str):
+            events.append(event)
+    return events
 
 
 def lock_file(fd: int, take: bool = True) -> bool:
@@ -842,7 +952,7 @@ def worktree_event(primary: Path, cfg: Config, w: Row, here: Path | None) -> tup
     if reason := block_reason(primary, cfg, w, here):
         return "blocked", f"blocked {tag(primary, w)}: {reason}"
     if cfg["cleanup"] == "report":
-        return "", f"landed {tag(primary, w)}: would remove"
+        return "removable", f"landed {tag(primary, w)}: would remove"
     return remove_worktree(primary, w)
 
 
@@ -952,6 +1062,7 @@ def clear_bundle(
             os.rmdir(left)
         except OSError:
             pass
+    record(primary, {"event": "trash", "stamp": stamp, "bundle": rel})
     return "partial" if path.exists() else "cleared", f"cleared {rel}: trashed {stamp}"
 
 
@@ -962,11 +1073,18 @@ def remove(func: Callable[[str], object], path: str) -> None:
         make_writable(func, path, None)
 
 
-def purge_tree(path: str, deadline: float) -> bool:
-    """Delete path bottom-up; False once the deadline passes, leaving the rest for a later run."""
+def purge_tree(path: str, deadline: float, deleted: Footprint) -> bool:
+    """Delete path bottom-up, counting each file in deleted; False once the deadline passes.
+
+    The rest is left for a later run."""
     try:
         for entry in walk(path, deadline):  # a link is a leaf: unlink removes the link, not its target
-            remove(os.rmdir if is_folder(entry) else os.unlink, entry.path)
+            if is_folder(entry):
+                remove(os.rmdir, entry.path)
+            else:
+                size = entry.stat(follow_symlinks=False).st_size
+                remove(os.unlink, entry.path)
+                deleted.files, deleted.size = deleted.files + 1, deleted.size + size
     except TimeoutError:
         return False
     remove(os.rmdir, path)
@@ -976,14 +1094,21 @@ def purge_tree(path: str, deadline: float) -> bool:
 def purge_expired(primary: Path, rows: list[Row], deadline: float) -> list[str]:
     """Delete the expired trash folders, oldest first, until the deadline; one line each.
 
-    A folder the deadline cuts short keeps its name (and so its age); a later run finishes it."""
+    A folder the deadline cuts short keeps its name (and so its age); a later run finishes it.
+    The tally records the files each folder lost, finished or not."""
     out = []
     for row in rows:
+        deleted, done, blocked = Footprint(), False, ""
         try:
-            if not purge_tree(str(trash_dir(primary) / row["name"]), deadline):
-                break
+            done = purge_tree(str(trash_dir(primary) / row["name"]), deadline, deleted)
         except (OSError, RuntimeError) as error:  # the session start never raises (RuntimeError: too deep)
-            out.append(f"blocked trash {row['name']}: {getattr(error, 'strerror', None) or 'cannot delete'}")
+            blocked = getattr(error, "strerror", None) or "cannot delete"
+        if done or deleted.files:
+            record(primary, {"event": "purge", "stamp": row["name"], "files": deleted.files, "size": deleted.size})
+        if blocked:
+            out.append(f"blocked trash {row['name']}: {blocked}")
+        elif not done:
+            break  # out of time: the rest waits for a later run
         else:
             out.append(f"purged {row['name']}")
     return out
@@ -1035,15 +1160,14 @@ def clean_orphans(primary: Path, orphans: list[Row], mode: str) -> tuple[int, li
     return cleaned, out
 
 
-def trash_docs(
-    primary: Path, cfg: Config, report: Row, state: Row, deadline: float
-) -> tuple[int, list[str]]:
-    """Trash the linked bundles the strategy marks for trash, updating doc_work's state; (count, lines).
+def trash_docs(primary: Path, cfg: Config, report: Row, state: Row, deadline: float) -> DocRun:
+    """Trash the linked bundles the strategy marks for trash, updating doc_work's state.
 
-    Stops at the time budget; the rest wait for the next session start."""
+    Stops at the time budget; the rest wait for the next session start. Report mode moves
+    nothing and counts the files each due bundle would lose instead."""
     marked = [d for d in linked_docs(report) if d["action"] == "trash"]
     if cfg["cleanup"] == "keep":
-        return 0, []
+        return DocRun()
     seen, skipped = state["since"], state["skipped"]
     today = datetime.now(timezone.utc).date()
     # One no longer marked is dropped; a future date (a clock that ran ahead) becomes today.
@@ -1053,8 +1177,14 @@ def trash_docs(
     # inside grace_days: its doc line, not trashed or counted; a skipped one stays silent
     out = [doc_line(d) for d in waiting if d["path"] not in skip]
     due = [d for d in marked if d not in waiting and d["path"] not in skip]
+    run = DocRun(lines=out)
     if cfg["cleanup"] == "report":
-        out += [f"doc {d['class']} {d['path']}: would trash" for d in due]
+        suffix = ".md" if cfg["doc_strategy"]["scope"] == "markdown" else ""
+        for d in due:
+            stats = file_stats(primary / d["path"], deadline, suffix)
+            run.trash.add(stats)
+            out.append(line := f"doc {d['class']} {d['path']}: would trash {files_text(stats)}")
+            run.targets.append(Target(line, d["path"], primary / d["path"], suffix))
         due = []
     docs = {d["path"]: d for d in report["docs"]}
     stamp = datetime.now(timezone.utc).strftime(TRASH_STAMP)
@@ -1083,36 +1213,84 @@ def trash_docs(
         if line and status != "skip":
             out.append(line)
     state["since"], state["skipped"] = since, skip
-    return trashed, out
+    run.trashed = trashed
+    return run
 
 
-def sweep_docs(primary: Path, cfg: Config, report: Row) -> tuple[int, list[str]]:
-    """Session start's doc work: trash by rule, then purge, within DOC_SECONDS; (bundles trashed, lines).
+def sweep_docs(primary: Path, cfg: Config, report: Row) -> DocRun:
+    """Session start's doc work: trash by rule, then purge, within DOC_SECONDS.
 
     Leaves docs alone while another run holds the doc lock: two at once would move the same files."""
     if not cfg["doc_strategy"] or cfg["cleanup"] == "keep":
-        return 0, []
-    would = [f"trash {t['name']}: would purge" for t in report["trash"]] if cfg["cleanup"] == "report" else []
+        return DocRun()
+    deadline = time.monotonic() + DOC_SECONDS  # started after the branch checks, so slow git or gh never eats it
+    run = DocRun()
     try:
         with doc_work(primary) as state:
-            if state is None:
-                return 0, would
-            deadline = time.monotonic() + DOC_SECONDS  # started after the branch checks, so slow git or gh never eats it
-            trashed, out = trash_docs(primary, cfg, report, state, deadline - PURGE_SECONDS)
-            if cfg["cleanup"] == "prune":
-                out += purge_expired(primary, report["trash"], deadline)
-            return trashed, out + would
+            if state is not None:
+                run = trash_docs(primary, cfg, report, state, deadline - PURGE_SECONDS)
+                if cfg["cleanup"] == "prune":
+                    run.lines += purge_expired(primary, report["trash"], deadline)
     except OSError as error:  # the worktree lines above are still reported
-        return 0, [f"docs: unavailable ({error})", *would]
+        run.lines.append(f"docs: unavailable ({error})")
+    if cfg["cleanup"] == "report":
+        run.add_purge(would_purge(primary, report["trash"], deadline))
+    return run
+
+
+def preview_docs(primary: Path, cfg: Config, report: Row) -> DocRun:
+    """Report mode's doc lines from the saved first-seen dates, which it never writes; counting has no time limit."""
+    if not cfg["doc_strategy"]:
+        return DocRun()
+    since, skipped = doc_state(primary)
+    run = trash_docs(primary, cfg, report, {"since": since, "skipped": skipped}, math.inf)
+    run.add_purge(would_purge(primary, report["trash"], math.inf))
+    return run
+
+
+def would_purge(primary: Path, rows: list[Row], deadline: float) -> DocRun:
+    """Report mode: the expired trash folders with the files each holds, counted until the deadline."""
+    run = DocRun()
+    for row in rows:
+        folder = trash_dir(primary) / row["name"]
+        stats = file_stats(folder, deadline)
+        run.purge.add(stats)
+        run.lines.append(line := f"trash {row['name']}: would purge {files_text(stats)}")
+        run.targets.append(Target(line, row["name"], folder))
+    return run
+
+
+def file_lines(path: Path, base: Path, suffix: str = "") -> list[str]:
+    """`file <path> (<size>)` for each file under path whose name ends in suffix, relative to base.
+
+    One line saying why instead when path cannot be listed (gone, unreadable, too deep)."""
+    try:
+        if not path.is_dir():
+            found = [(path.relative_to(base).as_posix(), path.lstat().st_size)]
+            return [f"file {n} ({human_size(b)})" for n, b in found if n.lower().endswith(suffix)]
+        cut = len(str(base)) + 1  # walk's paths all start with base: slicing beats relative_to per file
+        sized = sorted(
+            (e.path[cut:].replace(os.sep, "/"), e.stat(follow_symlinks=False).st_size)
+            for e in walk(str(path)) if not is_folder(e) and e.name.lower().endswith(suffix)
+        )
+    except (OSError, RecursionError) as error:
+        return [f"files: cannot list {path.relative_to(base).as_posix()} ({getattr(error, 'strerror', None) or 'too deep'})"]
+    return [f"file {name} ({human_size(size)})" for name, size in sized]
+
+
+DocStep = Callable[[Path, Config, Row], DocRun]
 
 
 def run_cleanup(
-    primary: Path, cfg: Config, report: Row, stale: bool, here: Path | None
+    primary: Path, cfg: Config, report: Row, stale: bool, here: Path | None,
+    docs: DocStep = sweep_docs,
 ) -> list[str]:
-    """Remove verified-landed, clean, pushed worktrees (the branch stays); one line per event."""
+    """Remove verified-landed, clean, pushed worktrees (the branch stays); one line per event.
+
+    Report mode adds a `sweep would:` line after the summary with what prune mode would do."""
     mode, trunk = cfg["cleanup"], cfg["primary_branch"]
     out: list[str] = []
-    counts = dict.fromkeys(("cleaned", "landed", "dependents", "blocked", "unverified"), 0)
+    counts = dict.fromkeys(("cleaned", "removable", "landed", "dependents", "blocked", "unverified"), 0)
     for row in (*report["worktrees"], *report["branches"]):
         name, is_worktree = row.get("branch", row.get("name", "")), "path" in row
         if name.startswith(cfg["prototype_prefix"]):
@@ -1140,17 +1318,25 @@ def run_cleanup(
     counts["cleaned"] += cleaned
     out += orphan_lines
     out += map(doc_line, (d for d in linked_docs(report) if d["action"] != "trash"))
-    trashed, doc_lines = sweep_docs(primary, cfg, report)
-    counts["blocked"] += sum(line.startswith("blocked") for line in doc_lines)
-    out += doc_lines
+    run = docs(primary, cfg, report)
+    counts["blocked"] += sum(line.startswith("blocked") for line in run.lines)
+    out += run.lines
     summary = (
         f"sweep: cleaned {counts['cleaned']}, landed {counts['landed']},"
         f" dependents {counts['dependents']}, blocked {counts['blocked']},"
         f" unverified {counts['unverified']}, orphans {len(report['orphans'])},"
-        f" docs {trashed}"
+        f" docs {run.trashed}"
         + (", origin stale" if stale else "")
     )
-    return [summary, *out]
+    if mode != "report":
+        return [summary, *out]
+    caches = sum(o["kind"] == "node_modules-only" for o in report["orphans"])
+    would = (
+        f"sweep would: remove {plural(counts['removable'], 'worktree')},"
+        f" delete {plural(caches, 'orphan')}, trash {run.trash.text('bundle')},"
+        f" purge {run.purge.text('trash folder')}"
+    )
+    return [summary, would, *out]
 
 
 HOOK_BEGIN, HOOK_END = "# >>> lumberjack", "# <<< lumberjack"  # around setup's hook block
@@ -1241,17 +1427,122 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
         return [str(error), *notes]
     if include_context:
         notes.insert(0, active_settings(cfg))
-    trunk = cfg["primary_branch"]
-    if git(primary, "branch", "--show-current").stdout.strip() != trunk:
-        return [f"sweep: primary checkout is not on {trunk}; skipped", *notes]
-    stale = fetch(primary)
-    if git(primary, "rev-parse", "--verify", "-q", f"origin/{trunk}").returncode:
-        return [f"sweep: origin/{trunk} is missing; skipped", *notes]
+    stale, skipped = fetch_trunk(primary, cfg["primary_branch"])
+    if skipped:
+        return [skipped, *notes]
     try:
         report = build_report(primary, cfg, stale)
         return [*run_cleanup(primary, cfg, report, stale, here), *notes]
     except OSError as error:
         return [f"sweep: unavailable ({error})", *notes]
+
+
+def fetch_trunk(primary: Path, trunk: str) -> tuple[bool, str]:
+    """Fetch origin when the primary checkout is on trunk; (origin stale, why the sweep skips or empty)."""
+    if git(primary, "branch", "--show-current").stdout.strip() != trunk:
+        return False, f"sweep: primary checkout is not on {trunk}; skipped"
+    stale = fetch(primary)
+    if git(primary, "rev-parse", "--verify", "-q", f"origin/{trunk}").returncode:
+        return stale, f"sweep: origin/{trunk} is missing; skipped"
+    return stale, ""
+
+
+def preview(start: Path, listing: FileList = FileList()) -> list[str]:
+    """What the next session start would remove, trash and purge, as `cleanup = "report"` lists it.
+
+    Changes nothing but origin's refs (it fetches): no first-seen dates, no hook settings, no tally.
+    Counts files without a time limit. listing picks the bundles (by path) and trash folders (by
+    timestamp) whose every file is listed after their line."""
+    primary = find_primary(start)
+    cfg = load_config(primary)
+    if cfg["cleanup"] == "keep":
+        return ['sweep would: nothing; cleanup = "keep"']
+    stale, skipped = fetch_trunk(primary, cfg["primary_branch"])
+    if skipped:
+        return [skipped]
+    here = Path(git(start, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
+    report = build_report(primary, cfg, stale)
+    runs: list[DocRun] = []
+
+    def docs(*args: Any) -> DocRun:
+        runs.append(preview_docs(*args))
+        return runs[-1]
+
+    out = run_cleanup(primary, {**cfg, "cleanup": "report"}, report, stale, here, docs)
+    targets = [t for run in runs for t in run.targets]
+    for target in (t for t in targets if listing.picks(t.key)):
+        at = out.index(target.line) + 1
+        base = trash_dir(primary) if target.path.is_relative_to(trash_dir(primary)) else primary
+        out[at:at] = file_lines(target.path, base, target.suffix)
+    return out + listing.missing({t.key for t in targets})
+
+
+def tally(start: Path, listing: FileList = FileList()) -> list[str]:
+    """Bundles trashed and trash purged since the last session start and in all, and what the trash holds.
+
+    listing picks this session's bundles (by path) whose every file still in the trash is listed."""
+    primary = find_primary(start)
+    cfg = load_config(primary)
+    events = recorded(primary)
+    session, since = this_session(events)
+    trash, deadline = trash_dir(primary), math.inf
+    out, moved = [], Footprint()
+    for e in session:
+        if e.get("event") == "trash":
+            path = trash / str(e.get("stamp")) / str(e.get("bundle"))
+            held = path.exists()  # gone once purged, or moved back out to restore it
+            stats = file_stats(path, deadline) if held else None
+            moved.add(stats)
+            where = f"{files_text(stats)}, in {e.get('stamp')}" if held else "no longer in the trash"
+            out.append(f"trashed {e.get('bundle')}: {where}")
+            out += file_lines(path, trash) if held and listing.picks(str(e.get("bundle"))) else []
+    folders = Footprint()
+    for name in sorted(os.listdir(trash)) if trash.is_dir() else []:
+        if re.fullmatch(r"\d{8}T\d{6}Z", name):  # a TRASH_STAMP name; anything else is not ours
+            folders.add(file_stats(trash / name, deadline))
+    bundles = sum(e.get("event") == "trash" for e in events)
+    first = f" (since {events[0]['at']})" if events else ""
+    return [
+        f"tally: since the last session start ({since}): trashed {moved.text('bundle')}, purged {purged(session)}",
+        f"tally: in all{first}: trashed {plural(bundles, 'bundle')}, purged {purged(events)}",
+        f"tally: in the trash: {folders.text('folder')}, {len(trash_rows(primary, cfg))} past retention",
+        *out,
+        *listing.missing({str(e.get("bundle")) for e in session if e.get("event") == "trash"}),
+    ]
+
+
+def this_session(events: list[Row]) -> tuple[list[Row], str]:
+    """(events after the latest session's first start marker, that marker's time), in the file's order.
+
+    Resume, /clear and compaction fire SessionStart again with the same session id, so the window
+    opens at that id's first marker; work other sessions did on this clone since then counts too.
+    A marker without an id stands alone."""
+    starts = [i for i, e in enumerate(events) if e.get("event") == "session"]
+    if not starts:
+        return events, "none recorded"
+    sid = events[starts[-1]].get("id")
+    first = next(i for i in starts if i == starts[-1] or sid and events[i].get("id") == sid)
+    return events[first + 1:], events[first]["at"]
+
+
+def purged(events: list[Row]) -> str:
+    """`N files (size)` the purge events among events deleted."""
+    done = [e for e in events if e.get("event") == "purge"]
+    files = sum(e["files"] for e in done if isinstance(e.get("files"), int))
+    size = sum(e["size"] for e in done if isinstance(e.get("size"), int))
+    return files_text((files, size))
+
+
+def mark_session(start: Path, session_id: str) -> None:
+    """Record a session start in the tally, so --tally can tell this session's work from earlier work.
+
+    Only with a saved doc_strategy: without one nothing is ever trashed, so there is nothing to tally."""
+    try:
+        primary = find_primary(start)
+        if load_config(primary)["doc_strategy"]:
+            record(primary, {"event": "session", "id": session_id})
+    except (SystemExit, ConfigError):  # not a git repository, or a config the session start reports
+        pass
 
 
 def gate(start: Path) -> list[str]:
@@ -1308,6 +1599,7 @@ def hook(payload: dict[str, object]) -> int:
             print(json.dumps({"decision": "block", "reason": "\n".join(reasons)}))
         return 0
     if event == "SessionStart":
+        mark_session(Path.cwd(), str(payload.get("session_id", "")))
         output = "\n".join(cleanup_session(Path.cwd(), include_context=True))
     elif event == "SubagentStart":
         # Claude forks inherit context; Codex children always receive the approved refresh.
@@ -1355,7 +1647,29 @@ def main(argv: list[str] | None = None) -> int:
         " branch, holding a reference bundle's findings",
     )
     parser.add_argument("--purge-trash", action="store_true", help="delete trash past retention")
+    parser.add_argument(
+        "--preview", action="store_true",
+        help="list what the next session start would remove, trash and purge, with file counts; change nothing",
+    )
+    parser.add_argument(
+        "--tally", action="store_true",
+        help="count bundles trashed and files purged this session and in all, and what the trash holds",
+    )
+    parser.add_argument(
+        "--files", metavar="KEY", nargs="*",
+        help="with --preview or --tally: list every file of these bundle paths or trash timestamps, or of all",
+    )
     args = parser.parse_args(argv)
+    if args.files is not None and not (args.preview or args.tally):
+        parser.error("--files needs --preview or --tally")
+    if args.preview or args.tally:
+        keys = frozenset(posixpath.normpath(k.replace("\\", "/")) for k in args.files or ())
+        listing = FileList(args.files is not None, keys)
+        try:
+            print("\n".join(preview(Path.cwd(), listing) if args.preview else tally(Path.cwd(), listing)))
+        except (ConfigError, OSError) as error:
+            raise SystemExit(error) from error
+        return 0
     if args.clear is not None or args.purge_trash:
         try:
             if args.purge_trash:

@@ -45,13 +45,13 @@ post-merge run in another worktree, nothing is cleaned. On `dirty`, ask the main
 stray files (delete, ignore or commit), never file by file; `/lumberjack:cleanup` has the steps.
 
 When other branches are built on a landed branch, the sweep prints one line per dependent,
-`dependent <b> of <a>: git rebase --onto <primary> <a-tip> <b>`. Run it before pushing `<b>`,
-or its pull request carries the squashed commits.
+`dependent <b> of <a>: git rebase --onto <primary> <a-tip> <b>`. Run it before pushing `<b>`, or its pull request carries the squashed commits.
 
 ## Keys that change the behavior
 
 - `cleanup = "prune"` (default) removes eligible worktrees and, with a saved `doc_strategy`, trashes linked ephemeral bundles and purges trash past `trash_days`. `"report"` prints
   `landed <branch> <path>: would remove`, `doc <class> <path>: would trash` and `trash <stamp>: would purge`, and keeps them. `"keep"` keeps them silently.
+  Asked what a sweep would remove, run `python "$(git config lumberjack.script)" --preview` (any mode, changes nothing) and summarize it; asked for detail, add `--files <bundle path or stamp>...` (bare `--files`: all) to list each file. `--tally` (same `--files`) counts what was trashed and purged.
 - `stop_gate = false` turns the Stop hook off; it then exits 0 without output.
 - A config error is printed at session start; cleanup does nothing and the Stop gate blocks.
 
@@ -59,7 +59,7 @@ or its pull request carries the squashed commits.
 
 `sweep: cleaned N, landed N, dependents N, blocked N, unverified N, orphans N, docs N`, with
 `, origin stale` appended when the fetch failed, then one line per event: `cleaned`,
-`landed`, `blocked`, `dependent`, `orphan`, `cleared`, `purged`, `doc` or `hint`. When nothing was swept the only
+`landed`, `blocked`, `dependent`, `orphan`, `cleared`, `purged`, `doc` or `hint` (report mode adds a `sweep would:` totals line after the summary). When nothing was swept the only
 line says why: a config error, or `sweep: ...; skipped`. The exit code is always 0.
 Paths are relative to the primary's parent directory, or start with `~`.
 `doc <ephemeral|reference> <path>: tickets <ids>; <size>` is a linked `doc_roots` bundle (tickets, none kept live) the sweep leaves, including while it is inside `grace_days`.

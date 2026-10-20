@@ -4,6 +4,7 @@ import io
 import json
 import math
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -1278,7 +1279,7 @@ def test_report_keep_and_no_strategy_purge_no_trash(primary: Path, mode: str) ->
     out = cleanup(primary)
     assert (trash / OLD).exists() and len(list(trash.iterdir())) == 3
     assert not any(line.startswith("purged") for line in out)
-    assert (f"trash {OLD}: would purge" in out) is (mode == "report")
+    assert (f"trash {OLD}: would purge 1 file (1 B)" in out) is (mode == "report")
 
 
 def tick_clock(m: pytest.MonkeyPatch) -> None:
@@ -1320,14 +1321,14 @@ def test_purge_removes_a_link_in_the_trash_and_leaves_its_target(tmp_path: Path,
             link.symlink_to(outside, target_is_directory=True)
         except OSError:  # Windows without the symlink privilege
             pytest.skip("cannot create a symlink")
-    assert sweep_worktrees.purge_tree(str(folder), math.inf)
+    assert sweep_worktrees.purge_tree(str(folder), math.inf, sweep_worktrees.Footprint())
     assert not folder.exists() and (outside / "keep" / "a.md").exists()
 
 
 def test_a_folder_the_purge_cannot_delete_is_blocked_not_raised(
     primary: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def too_deep(path: str, deadline: float) -> bool:
+    def too_deep(path: str, deadline: float, deleted: object) -> bool:
         raise RecursionError("maximum recursion depth exceeded")
 
     monkeypatch.setattr(sweep_worktrees, "purge_tree", too_deep)
@@ -1604,7 +1605,7 @@ def test_report_mode_still_lists_trash_it_would_purge_while_the_lock_is_held(pri
     old_trash(primary)
     with sweep_worktrees.doc_work(primary) as held:
         assert held is not None
-        assert f"trash {OLD}: would purge" in cleanup(primary)
+        assert f"trash {OLD}: would purge 1 file (1 B)" in cleanup(primary)
 
 
 def test_a_doc_lock_the_run_cannot_open_never_hides_the_worktree_cleanup(primary: Path) -> None:
@@ -1870,7 +1871,7 @@ def test_report_mode_lists_a_bundle_to_trash_only_once_its_grace_is_over(primary
     grace_bundle(primary, 3, "report")
     assert not any("would trash" in l for l in cleanup(primary))
     seen_on(primary, 3)
-    assert f"doc ephemeral {BUNDLE}: would trash" in cleanup(primary)
+    assert f"doc ephemeral {BUNDLE}: would trash 1 file (2 B)" in cleanup(primary)
 
 
 def test_clear_ignores_the_grace_period(primary: Path) -> None:
@@ -1886,3 +1887,181 @@ def test_trashing_one_bundle_keeps_the_date_of_one_still_waiting(primary: Path) 
     out = cleanup(primary)
     assert out[0].endswith("docs 1") and not (primary / BUNDLE).exists()
     assert recorded(primary) == {"docs/work/eng-161-handoff": yesterday}
+
+
+def session_start(primary: Path, session_id: str = "s1", source: str = "startup") -> None:
+    payload = {"hook_event_name": "SessionStart", "source": source, "session_id": session_id}
+    done = sweep(primary, "--hook", stdin=json.dumps(payload))
+    assert done.returncode == 0, done.stderr
+
+
+def run_lines(primary: Path, *args: str) -> list[str]:
+    done = sweep(primary, *args)
+    assert done.returncode == 0, done.stderr
+    return done.stdout.splitlines()
+
+
+def test_preview_lists_what_the_next_session_start_does_and_changes_nothing(primary: Path) -> None:
+    rule_bundles(primary)
+    landed_worktree(primary, "eng-20-a")
+    trash = old_trash(primary, files=3)
+    out = run_lines(primary, "--preview")
+    assert out[1] == (
+        "sweep would: remove 1 worktree, delete 0 orphans, trash 1 bundle (1 file, 2 B),"
+        " purge 1 trash folder (3 files, 3 B)"
+    )
+    assert "landed claude/eng-20-a wt/eng-20-a: would remove" in out
+    assert "doc ephemeral docs/work/eng-150-handoff: would trash 1 file (2 B)" in out
+    assert f"trash {OLD}: would purge 3 files (3 B)" in out
+    assert (primary / "docs/work/eng-150-handoff/a.md").exists() and (trash / OLD).exists()
+    assert (primary.parent / "wt" / "eng-20-a").exists()
+    for written in (STATE, "lumberjack-tally.jsonl"):
+        assert not (primary / ".git" / written).exists()
+    assert config_value(primary, "lumberjack.script") == ""
+    done = cleanup(primary)  # the preview's numbers are what prune does
+    assert done[0].startswith("sweep: cleaned 1,") and done[0].endswith("docs 1")
+    assert "purged " + OLD in done
+
+
+def test_preview_honours_grace_days_without_starting_the_clock(primary: Path) -> None:
+    grace_bundle(primary, 3)
+    assert not any("would trash" in line for line in run_lines(primary, "--preview"))
+    assert not (primary / ".git" / STATE).exists()
+    seen_on(primary, 3)
+    assert f"doc ephemeral {BUNDLE}: would trash 1 file (2 B)" in run_lines(primary, "--preview")
+
+
+def test_preview_with_markdown_scope_counts_only_markdown(primary: Path) -> None:
+    rule_bundles(primary, scope="markdown")
+    write(primary, "docs/work/eng-150-handoff/run/out.log", "log")
+    assert "doc ephemeral docs/work/eng-150-handoff: would trash 1 file (2 B)" in run_lines(primary, "--preview")
+
+
+def test_preview_in_keep_mode_says_nothing_moves(primary: Path) -> None:
+    rule_bundles(primary, mode="keep")
+    assert run_lines(primary, "--preview") == ['sweep would: nothing; cleanup = "keep"']
+
+
+def test_tally_splits_this_session_from_the_lifetime_and_counts_the_trash(primary: Path) -> None:
+    rule_bundles(primary)
+    old_trash(primary, files=3)
+    session_start(primary)
+    out = run_lines(primary, "--tally")
+    assert re.fullmatch(
+        r"tally: since the last session start \(\S+Z\): trashed 1 bundle \(1 file, 2 B\),"
+        r" purged 3 files \(3 B\)", out[0]
+    ), out
+    assert re.fullmatch(r"tally: in all \(since \S+Z\): trashed 1 bundle, purged 3 files \(3 B\)", out[1]), out
+    # the fresh folder old_trash leaves and this run's folder: one or two, by the clock's second
+    assert out[2].startswith("tally: in the trash: ") and out[2].endswith("(2 files, 3 B), 0 past retention")
+    assert re.fullmatch(r"trashed docs/work/eng-150-handoff: 1 file \(2 B\), in \d{8}T\d{6}Z", out[3])
+    session_start(primary, "s2")  # a new session: nothing new trashed or purged
+    out = run_lines(primary, "--tally")
+    assert out[0].endswith("trashed 0 bundles, purged 0 files (0 B)") and len(out) == 3
+    assert out[1].endswith("trashed 1 bundle, purged 3 files (3 B)")
+
+
+def test_tally_names_a_bundle_moved_back_out_of_the_trash(primary: Path) -> None:
+    strategy_settings(primary)
+    write(primary, "docs/work/eng-131-handoff/a.md", "Ticket: eng-131\n")
+    assert clear(primary, "docs/work/eng-131-handoff")[0] == 0  # the cleanup command counts too
+    (folder,) = trash_folders(primary)
+    shutil.move(folder / "docs/work/eng-131-handoff", primary / "docs/work/eng-131-handoff")
+    out = run_lines(primary, "--tally")
+    assert out[0].startswith("tally: since the last session start (none recorded): trashed 1 bundle (files uncounted)")
+    assert out[-1] == "trashed docs/work/eng-131-handoff: no longer in the trash"
+
+
+def test_tally_adds_up_a_purge_cut_short_and_finished_later(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy_settings(primary, trash_days=7)
+    old_trash(primary, files=40)
+    with monkeypatch.context() as short:
+        short.setattr(sweep_worktrees, "DOC_SECONDS", 25)
+        tick_clock(short)
+        sweep_worktrees.cleanup_session(primary)
+    sweep_worktrees.cleanup_session(primary)
+    assert sweep_worktrees.tally(primary)[1].endswith("purged 40 files (40 B)")
+
+
+def test_tally_with_nothing_recorded_still_counts_the_trash(primary: Path) -> None:
+    strategy_settings(primary, trash_days=7)
+    old_trash(primary, files=2)
+    assert run_lines(primary, "--tally") == [
+        "tally: since the last session start (none recorded): trashed 0 bundles, purged 0 files (0 B)",
+        "tally: in all: trashed 0 bundles, purged 0 files (0 B)",
+        "tally: in the trash: 2 folders (3 files, 3 B), 1 past retention",
+    ]
+
+
+def test_preview_files_lists_every_file_only_when_asked(primary: Path) -> None:
+    rule_bundles(primary)
+    write(primary, "docs/work/eng-150-handoff/run/out.log", "log")
+    old_trash(primary, files=2)
+    plain = run_lines(primary, "--preview")
+    assert not any(line.startswith("file ") for line in plain)
+    every = run_lines(primary, "--preview", "--files")
+    at = every.index("doc ephemeral docs/work/eng-150-handoff: would trash 2 files (5 B)")
+    assert every[at + 1:at + 3] == [
+        "file docs/work/eng-150-handoff/a.md (2 B)", "file docs/work/eng-150-handoff/run/out.log (3 B)",
+    ]
+    at = every.index(f"trash {OLD}: would purge 2 files (2 B)")
+    assert every[at + 1:at + 3] == [f"file {OLD}/docs/work/old/0.md (1 B)", f"file {OLD}/docs/work/old/1.md (1 B)"]
+    one = run_lines(primary, "--preview", "--files", "docs/work/eng-150-handoff/")
+    assert sum(line.startswith("file ") for line in one) == 2 and f"file {OLD}/docs/work/old/0.md (1 B)" not in one
+
+
+def test_tally_files_lists_what_the_trash_still_holds_for_a_bundle(primary: Path) -> None:
+    rule_bundles(primary)
+    session_start(primary)
+    out = run_lines(primary, "--tally", "--files", "docs/work/eng-150-handoff")
+    (folder,) = trash_folders(primary)
+    assert out[-1] == f"file {folder.name}/docs/work/eng-150-handoff/a.md (2 B)"
+
+
+@pytest.mark.parametrize("source", ["compact", "resume", "clear"])
+def test_a_restart_of_the_same_session_keeps_its_tally(primary: Path, source: str) -> None:
+    rule_bundles(primary)
+    session_start(primary)
+    session_start(primary, source=source)  # same session id: still this session
+    assert run_lines(primary, "--tally")[0].endswith("trashed 1 bundle (1 file, 2 B), purged 0 files (0 B)")
+
+
+def test_no_session_marker_without_a_doc_strategy(primary: Path) -> None:
+    rule_bundles(primary, strategy=False)
+    session_start(primary)
+    assert not (primary / ".git" / "lumberjack-tally.jsonl").exists()
+
+
+def test_files_names_a_key_that_matches_nothing(primary: Path) -> None:
+    rule_bundles(primary)
+    out = run_lines(primary, "--preview", "--files", "docs/work/eng-150-handoff", "/abs/docs/work/x")
+    assert out[-1] == "files: nothing named /abs/docs/work/x"
+    assert "file docs/work/eng-150-handoff/a.md (2 B)" in out
+    assert run_lines(primary, "--tally", "--files", "docs/work/none")[-1] == "files: nothing named docs/work/none"
+
+
+def test_files_alone_is_refused(primary: Path) -> None:
+    done = sweep(primary, "--files")
+    assert done.returncode == 2 and "--files needs --preview or --tally" in done.stderr
+
+
+def test_another_session_starting_in_between_never_cuts_this_sessions_tally(primary: Path) -> None:
+    rule_bundles(primary)
+    session_start(primary, "a")  # trashes eng-150
+    session_start(primary, "b")  # another session on the same clone
+    session_start(primary, "a", source="clear")
+    assert run_lines(primary, "--tally")[0].endswith("trashed 1 bundle (1 file, 2 B), purged 0 files (0 B)")
+
+
+def test_a_footprint_with_nothing_counted_says_so() -> None:
+    footprint = sweep_worktrees.Footprint()
+    footprint.add(None)
+    assert footprint.text("bundle") == "1 bundle (files uncounted)"
+
+
+def test_files_lists_a_single_file_bundle_only_in_scope(tmp_path: Path) -> None:
+    write(tmp_path, "docs/notes.txt", "x")
+    assert sweep_worktrees.file_lines(tmp_path / "docs/notes.txt", tmp_path, ".md") == []
+    assert sweep_worktrees.file_lines(tmp_path / "docs/gone", tmp_path)[0].startswith("files: cannot list docs/gone (")

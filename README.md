@@ -27,6 +27,10 @@ ships as a plugin for Claude Code and Codex.
    skill picker) and answer its questions.
 3. Review `git diff` and commit. Done: the next session start sweeps, and the Stop gate is on.
 
+Not sure yet? `sweep_worktrees.py --preview` (in the plugin's `scripts/` folder) lists what the
+next session start would remove, trash and purge, with file counts, and changes nothing;
+`--tally` later counts what it trashed and purged. See [Preview and tally](#preview-and-tally).
+
 Setup reads the repository, asks, then writes; it never commits:
 
 ```mermaid
@@ -119,7 +123,7 @@ SessionStart prints the error and cleans nothing.
 | `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); a root not listed uses `["research", "prototype"]`. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
 | `doc_strategy` | `{}` | How `/lumberjack:cleanup` trashes doc bundles, saved after it asks once (empty: nothing is removed). Keys, all required once set: `scope` (`markdown` or `bundle`), `trash_days` (whole days, at least 1) and `grace_days` (whole days, 0 or more: how long a bundle stays `linked` before session start trashes it; 0 trashes it at the first session start that sees it linked); optional `roots`, a table of doc root to `keep` whose bundles are always kept, so `roots = {"docs/handoffs" = "keep"}` keeps every handoff. The old keys `ephemeral`, `reference` and `tracker` are a config error; saving a new strategy replaces them. A table: `[doc_strategy]` then `scope = "bundle"`, `trash_days = 30` and `grace_days = 7` |
 | `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where worktrees live: `~` is home, `*` a glob, `{name}` the repo name |
-| `cleanup` | `"prune"` | `prune` removes landed worktrees, trashes linked ephemeral bundles and purges trash past `trash_days`; `report` lists them as `would remove`, `would trash` and `would purge`; `keep` does nothing |
+| `cleanup` | `"prune"` | `prune` removes landed worktrees, trashes linked ephemeral bundles and purges trash past `trash_days`; `report` lists them as `would remove`, `would trash` and `would purge` (with file counts) under a `sweep would:` line; `keep` does nothing |
 | `stop_gate` | `true` | `false` turns the Stop hook off |
 
 ```toml
@@ -192,6 +196,13 @@ cleared docs/work/eng-9-handoff: trashed 20260101T120000Z
 purged 20251201T120000Z
 doc reference docs/work/eng-11-research: tickets eng-11; 3.2 MB
 dependent alice/eng-14-ui of alice/eng-12-login: git rebase --onto main 0123456789ab alice/eng-14-ui
+```
+
+With `cleanup = "report"` the summary is followed by one line totalling what `prune` would do,
+and nothing moves:
+
+```
+sweep would: remove 2 worktrees, delete 1 orphan, trash 3 bundles (120 files, 4.2 MB), purge 1 trash folder (40 files, 1.1 MB)
 ```
 
 A `dependent` line is a branch built on top of a landed one; run the printed rebase
@@ -309,8 +320,9 @@ and `--purge-trash` wait up to 10 seconds for it, then refuse with
 `blocked <path>: a sweep is trashing` (`blocked trash: a sweep is trashing`). When the lock file
 cannot be opened (an unwritable git folder), a session start prints `docs: unavailable (<error>)`
 and leaves docs alone, and the cleanup commands exit with the error. Markdown scope also removes the folders
-its move empties, so a bundle of Markdown only goes away whole. `cleanup = "report"` prints `doc <class> <path>: would trash`
-and moves nothing (it still records first-seen dates, so `would trash` matches what `prune` will do),
+its move empties, so a bundle of Markdown only goes away whole. `cleanup = "report"` prints `doc <class> <path>: would trash <N> files (<size>)`
+(Markdown files only with `scope = "markdown"`; `files uncounted` when counting runs out of the
+time budget) and moves nothing (it still records first-seen dates, so `would trash` matches what `prune` will do),
 and `"keep"` moves nothing, records nothing and prints nothing. `reference`, `unlinked`, `live`
 and keep-root bundles stay. Sizing bundles gets 3 seconds; then walking Markdown-scope bundles, trashing and purging share 7 more, of which the last 3 are kept for purging, so neither starves the other. The clock starts after the branch checks, so a slow `git` or `gh` never eats it. A bundle not reached stays
 untouched for the next session start. The first date a session start saw a bundle `linked`, and which bundles it skips, are kept in
@@ -344,13 +356,59 @@ cleared), `links outside the repository` (the bundle resolves outside the reposi
 origin`. A trashed bundle moves to `<git dir>/lumberjack-trash/<UTC timestamp>/<its path>`, which
 git never sees. With a strategy saved, every session start (and the post-merge sweep) also deletes
 the timestamp folders older than `trash_days`, oldest first, printing `purged <timestamp>` for
-each; `cleanup = "report"` prints `trash <timestamp>: would purge` and deletes nothing, `"keep"`
+each; `cleanup = "report"` prints `trash <timestamp>: would purge <N> files (<size>)` and deletes nothing, `"keep"`
 neither purges nor prints. The purge deletes from the bottom up within the run's budget: a folder
 too large for it is left partly deleted, keeps its name (and so its age), and a later session
 start finishes it. A folder it cannot delete prints `blocked trash <timestamp>: <reason>` and
 counts in `blocked N`. `--purge-trash` deletes everything past retention in one run, with no
 budget, printing the same `purged <timestamp>` lines, or `trash: nothing past retention`, and
 exits 1 when any line is `blocked`.
+
+## Preview and tally
+
+```
+sweep_worktrees.py --preview [--files [<bundle path or trash timestamp>...]]
+sweep_worktrees.py --tally [--files [<bundle path>...]]
+```
+
+`--preview` shows the blast radius before a sweep: it fetches `origin` and prints what the next
+session start would do, exactly as `cleanup = "report"` does (the summary, the `sweep would:`
+line, then `would remove`, `would trash` and `would purge` lines), whatever `cleanup` says,
+but writes nothing: no first-seen dates, no hook settings, no tally. A bundle that no session
+start has seen yet counts its `grace_days` from today, as the next one would. Counting has no time
+limit (it only reads file metadata), so it takes as long as the doc roots need. With `cleanup = "keep"`
+the only line is `sweep would: nothing; cleanup = "keep"`.
+
+By default each bundle and trash folder is one line with its file count. `--files` adds a
+`file <path> (<size>)` line under each one for every file it would trash or purge (repository paths
+for bundles, `<timestamp>/<path>` for trash); `--files <key>...` does it only for the named bundle
+paths or trash timestamps. With `--tally`, `--files` lists the files this session's bundles still
+hold in the trash. A named key that matches nothing prints `files: nothing named <key>` last, and
+`--files` without `--preview` or `--tally` is refused. So an agent asked what a sweep would remove
+can answer from the summary, then list one bundle's files when asked for detail.
+
+`--tally` shows what was done. Every trashed bundle (by session start, the post-merge sweep or
+`--clear`) and every purge (with the files and bytes it deleted, a purge cut short included) is
+appended to `<git dir>/lumberjack-tally.jsonl`, and each session start adds a marker with the
+harness's session id (only once a `doc_strategy` is saved). A resume, `/clear` or compaction fires
+SessionStart again with the same id, so it does not start a new session in the tally:
+
+```
+tally: since the last session start (2026-10-20T08:00:05Z): trashed 3 bundles (120 files, 4.2 MB), purged 40 files (1.1 MB)
+tally: in all (since 2026-10-01T09:12:44Z): trashed 41 bundles, purged 2310 files (61.0 MB)
+tally: in the trash: 4 folders (300 files, 8.0 MB), 1 past retention
+trashed docs/work/eng-9-handoff: 12 files (300 KB), in 20261020T080005Z
+trashed docs/work/eng-10-plan: no longer in the trash
+```
+
+The first line counts the bundles trashed since the latest session began (its first marker) and
+the files purged in that time, by any session on this clone; the files are those the trash still
+holds for each bundle (`at least` when one is gone, `files uncounted` when all are).
+The second covers everything recorded. The third counts the timestamp folders in the trash,
+waiting for the purge, and how many are past `trash_days`. One `trashed` line follows per bundle
+of this session, with its files and folder, or `no longer in the trash` once it was purged or
+moved back out. Trash from before the record existed counts in the third line only. A failed
+write to the record never fails a sweep; it only loses that count.
 
 ## Hook placement
 
