@@ -70,7 +70,7 @@ purges it.
   (`blocked trash: a sweep is trashing`). A lock file that cannot be opened prints
   `docs: unavailable (<error>)` at session start. Markdown
   scope removes the folders its move empties. Reference, `unlinked`, live
-  and keep-root bundles stay. `cleanup = "report"` prints `doc <class> <path>: would trash`, moves
+  and keep-root bundles stay. `cleanup = "report"` prints `doc <class> <path>: would trash <N> files (<size>)`, moves
   nothing and still records first-seen dates; `"keep"` moves nothing, records nothing and prints
   nothing. Sizing gets 3 seconds; the Markdown walk, trashing and purging share 7 more, started
   after the branch checks, with the last 3 kept for purging; what they do not reach waits for the
@@ -83,7 +83,7 @@ purges it.
   oldest first, printing `purged <timestamp>` for each; the deleting shares the run's doc
   budget and goes bottom up, so a folder too large for it is left partly deleted (keeping its name
   and age) and a later session start finishes it. `cleanup = "report"` prints
-  `trash <timestamp>: would purge` and deletes nothing; `"keep"` neither purges nor prints. A folder
+  `trash <timestamp>: would purge <N> files (<size>)` and deletes nothing; `"keep"` neither purges nor prints. A folder
   that cannot be deleted prints `blocked trash <timestamp>: <reason>` and counts in `blocked N`.
   `--purge-trash` deletes everything past retention in one run, without a budget, and exits 1
   when any folder is blocked.
@@ -98,6 +98,17 @@ purges it.
 - `--json` gives each doc its resolved `action` (`trash` for ephemeral, `promote` for reference,
   `keep` under a keep-root; empty until a strategy is saved), which `--clear` and
   `/lumberjack:cleanup` follow.
+- `cleanup = "report"` adds a `sweep would:` line after the summary that totals what `prune` would
+  do: worktrees removed, cache-only orphans deleted, bundles trashed and trash folders purged, with
+  their files and bytes.
+- `sweep_worktrees.py --preview` prints that report-mode run for the next session start whatever
+  `cleanup` says, and writes nothing (no first-seen dates, hook settings or tally); counting files
+  gets 120 seconds, past which a count reads `files uncounted`. Use it to see the blast radius
+  before the first sweep.
+- `sweep_worktrees.py --tally` counts the bundles trashed and the files purged since the last
+  session start and in all, and the folders and files still in the trash, with one line per bundle
+  trashed this session. Trashing, purging (a cut-short purge included) and each session start are
+  appended to `<git dir>/lumberjack-tally.jsonl`; a failed write never fails a sweep.
 
 ## 1.1.1
 
