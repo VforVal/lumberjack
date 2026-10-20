@@ -1992,3 +1992,28 @@ def test_tally_with_nothing_recorded_still_counts_the_trash(primary: Path) -> No
         "tally: in all: trashed 0 bundles, purged 0 files (0 B)",
         "tally: in the trash: 2 folders (3 files, 3 B), 1 past retention",
     ]
+
+
+def test_preview_files_lists_every_file_only_when_asked(primary: Path) -> None:
+    rule_bundles(primary)
+    write(primary, "docs/work/eng-150-handoff/run/out.log", "log")
+    old_trash(primary, files=2)
+    plain = run_lines(primary, "--preview")
+    assert not any(line.startswith("file ") for line in plain)
+    every = run_lines(primary, "--preview", "--files")
+    at = every.index("doc ephemeral docs/work/eng-150-handoff: would trash 2 files (5 B)")
+    assert every[at + 1:at + 3] == [
+        "file docs/work/eng-150-handoff/a.md (2 B)", "file docs/work/eng-150-handoff/run/out.log (3 B)",
+    ]
+    at = every.index(f"trash {OLD}: would purge 2 files (2 B)")
+    assert every[at + 1:at + 3] == [f"file {OLD}/docs/work/old/0.md (1 B)", f"file {OLD}/docs/work/old/1.md (1 B)"]
+    one = run_lines(primary, "--preview", "--files", "docs/work/eng-150-handoff/")
+    assert sum(line.startswith("file ") for line in one) == 2 and f"file {OLD}/docs/work/old/0.md (1 B)" not in one
+
+
+def test_tally_files_lists_what_the_trash_still_holds_for_a_bundle(primary: Path) -> None:
+    rule_bundles(primary)
+    session_start(primary)
+    out = run_lines(primary, "--tally", "--files", "docs/work/eng-150-handoff")
+    (folder,) = trash_folders(primary)
+    assert out[-1] == f"file {folder.name}/docs/work/eng-150-handoff/a.md (2 B)"

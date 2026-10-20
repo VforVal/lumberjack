@@ -367,17 +367,24 @@ exits 1 when any line is `blocked`.
 ## Preview and tally
 
 ```
-sweep_worktrees.py --preview
-sweep_worktrees.py --tally
+sweep_worktrees.py --preview [--files [<bundle path or trash timestamp>...]]
+sweep_worktrees.py --tally [--files [<bundle path>...]]
 ```
 
 `--preview` shows the blast radius before a sweep: it fetches `origin` and prints what the next
 session start would do, exactly as `cleanup = "report"` does (the summary, the `sweep would:`
 line, then `would remove`, `would trash` and `would purge` lines), whatever `cleanup` says,
 but writes nothing: no first-seen dates, no hook settings, no tally. A bundle that no session
-start has seen yet counts its `grace_days` from today, as the next one would. Counting files gets
-120 seconds in all, so a large doc root reads `files uncounted` (and its total `at least`) instead
-of stalling. With `cleanup = "keep"` the only line is `sweep would: nothing; cleanup = "keep"`.
+start has seen yet counts its `grace_days` from today, as the next one would. Counting has no time
+limit (it only reads file metadata), so it takes as long as the doc roots need. With `cleanup = "keep"`
+the only line is `sweep would: nothing; cleanup = "keep"`.
+
+By default each bundle and trash folder is one line with its file count. `--files` adds a
+`file <path> (<size>)` line under each one for every file it would trash or purge (repository paths
+for bundles, `<timestamp>/<path>` for trash); `--files <key>...` does it only for the named bundle
+paths or trash timestamps. With `--tally`, `--files` lists the files this session's bundles still
+hold in the trash. So an agent asked what a sweep would remove can answer from the summary, then
+list one bundle's files when asked for detail.
 
 `--tally` shows what was done. Every trashed bundle (by session start, the post-merge sweep or
 `--clear`) and every purge (with the files and bytes it deleted, a purge cut short included) is

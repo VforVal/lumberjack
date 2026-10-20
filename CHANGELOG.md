@@ -103,8 +103,10 @@ purges it.
   their files and bytes.
 - `sweep_worktrees.py --preview` prints that report-mode run for the next session start whatever
   `cleanup` says, and writes nothing (no first-seen dates, hook settings or tally); counting files
-  gets 120 seconds, past which a count reads `files uncounted`. Use it to see the blast radius
-  before the first sweep.
+  has no time limit. Use it to see the blast radius before the first sweep. `--files` (all, or the
+  named bundle paths and trash timestamps) adds one `file <path> (<size>)` line per file, and works
+  with `--tally` too. The `lumberjack` skill tells agents to answer from the summary and use
+  `--files` when asked for detail.
 - `sweep_worktrees.py --tally` counts the bundles trashed and the files purged since the last
   session start and in all, and the folders and files still in the trash, with one line per bundle
   trashed this session. Trashing, purging (a cut-short purge included) and each session start are

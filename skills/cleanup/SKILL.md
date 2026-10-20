@@ -137,4 +137,5 @@ Without a yes, leave them.
 List what was removed, what was kept and what was blocked with its reason (worktrees,
 bundles and trash). Mention that a removed worktree comes back with `git worktree add <path> <branch>`.
 Then run `python "SWEEP" --tally` and relay its three `tally:` lines: bundles trashed and files
-purged since the session start and in all, and what the trash still holds.
+purged since the session start and in all, and what the trash still holds. If the maintainer
+asks which files, run it again with `--files <bundle path>` (or bare `--files`) and relay the `file` lines.

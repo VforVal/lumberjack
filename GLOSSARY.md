@@ -46,7 +46,7 @@ purged at session start, within the time budget (a large one is left partly dele
 by a later run), or at once by `--purge-trash` in cleanup.
 
 **preview**: `--preview`, a read-only run of the next session start's cleanup in report mode,
-with file counts: what it would remove, trash and purge.
+with file counts: what it would remove, trash and purge. `--files` lists each file.
 
 **tally**: `--tally`, the count of bundles trashed and files purged since the last session start
 and in all, from `lumberjack-tally.jsonl` in the git directory, plus what the trash still holds.
