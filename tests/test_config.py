@@ -3,6 +3,7 @@
 import io
 import json
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -396,3 +397,11 @@ def test_default_roots_are_harness_conventions(
         primary / ".claude/worktrees/z",
         home / "worktrees/primary/w",
     }
+
+
+def test_readme_config_examples_load_without_a_config_error() -> None:
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    examples = [block.split("```", 1)[0] for block in readme.split("```toml\n")[1:]]
+    assert examples
+    for example in examples:  # a copied example must never block the Stop gate
+        sweep_worktrees.parse_config(tomllib.loads(example))

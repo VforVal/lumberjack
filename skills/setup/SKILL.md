@@ -11,10 +11,9 @@ writing; you only gather answers. Never commit anything.
 
 ## 1. Discover
 
-Check `python3 --version`, then `python --version`: use the first name that reports
-3.11 or newer in place of `python` below. If neither does, stop and point to
-https://www.python.org/downloads/ . If git is
-missing, stop and point to https://git-scm.com/downloads before running the helper.
+Check `python3 --version`, then `python --version`: use the first name that reports 3.11 or
+newer in place of `python` below. If neither does, stop and point to https://www.python.org/downloads/ .
+If git is missing, stop and point to https://git-scm.com/downloads before running the helper.
 
 Resolve the helper at `../../scripts/setup_lumberjack.py` relative to this skill's
 directory. Use its absolute path in place of `HELPER` below, quoted for the active
@@ -63,11 +62,16 @@ set, or a directory named `.evidence`, `evidence` or `.<name>` sits at the root 
 looks like scratch or handoff output. Its contents block cleanup of a worktree.
 Otherwise set `""` without asking.
 
-**G. Doc roots** (`doc_roots`). Ask only when `config.doc_roots` is set or
-`doc_root_candidates` is not empty. Recommend the candidate `path`s, each with its one-line
-`reason`, and say a landed worktree with an untracked or ignored file under a doc root stays,
-reason `docs`. On a re-run keep `config.doc_roots` unless the maintainer changes it. Otherwise
-set `[]` without asking. Copy `config.doc_reference` and `config.doc_strategy` into the answers unchanged, never asking.
+**G. Doc roots** (`doc_roots`). Always ask. Recommend `config.doc_roots` on a re-run, else the
+`doc_root_candidates` `path`s with their `reason`s, else ask where work documents (handoffs, plans,
+research, prototypes) live ("none" is `[]`). Files there keep a landed worktree, reason `docs`.
+
+**H. Durable roots** (`doc_reference`). Ask per doc root: durable (bundles are `reference`, never
+trashed by rule, only promoted or kept) or working (bundles may be trashed once their tickets land,
+under a saved `doc_strategy`). Never assume: one folder name is durable here, working elsewhere.
+Recommend durable when `config.doc_reference` maps the root to `["*"]` or its name holds `research`,
+`prototype` or `archive`. Set `["*"]` per durable root; for a working one drop a `["*"]` entry,
+keeping other words. Copy `config.doc_strategy` unchanged, never asking.
 
 ## 3. Confirm
 

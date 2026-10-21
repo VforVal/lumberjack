@@ -51,7 +51,7 @@ RMTREE_HANDLER = "onexc" if sys.version_info >= (3, 12) else "onerror"
 CLEANUP_MODES = ("prune", "report", "keep")
 CACHE_DIRS = {"node_modules", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist"}
 CACHE_DIRS.add(".codex-worktree-name")
-DOC_REFERENCE = ["research", "prototype"]  # bundle name words that make a bundle reference
+DOC_REFERENCE = ["research", "prototype"]  # bundle or root folder-name words that make a bundle reference
 DOC_COMMITS = 1000  # newest commits read from unlanded branches when looking for bundle names
 TRASH_STAMP = "%Y%m%dT%H%M%SZ"  # a trash folder is named for the UTC moment its files moved
 SCOPES = ("markdown", "bundle")  # doc_strategy scope: only .md files, or whole bundles
@@ -602,12 +602,28 @@ def bundle_action(strategy: Config, root: str, kind: str) -> str:
     return "keep" if root in strategy.get("roots", {}) else BUNDLE_ACTION[kind]
 
 
+def worktree_name(primary: Path, path: str) -> str:
+    """A worktree's folder name; its parent's in the Codex layout `<dir>/<ticket slug>/<repo name>`."""
+    leaf = Path(path)
+    return leaf.parent.name if leaf.name.casefold() == primary.name.casefold() else leaf.name
+
+
+def bundle_class(cfg: Config, root: str, name: str) -> str:
+    """`reference` when a doc_reference word is in the bundle's or its root's folder name, else `ephemeral`.
+
+    The word `*` matches every bundle, so a whole root can hold durable documents.
+    """
+    words = cfg["doc_reference"].get(root, DOC_REFERENCE)
+    folders = (name.lower(), posixpath.basename(root).lower())
+    return "reference" if any(w == "*" or w.lower() in f for w in words for f in folders) else "ephemeral"
+
+
 def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verdict]) -> list[Row]:
     """Untracked doc-root bundles: class, tickets and live/linked/unlinked; size for linked."""
     # Any worktree counts, by branch or folder name, so a detached Codex worktree does too.
     # A branch without one counts until it lands: landed local branches are never deleted.
     unlanded = {tip for tip, (tier, _) in tiers.items() if tier not in VERIFIED}
-    names = [n for t in trees[1:] for n in (t["branch"], Path(t["path"]).name) if n]
+    names = [n for t in trees[1:] for n in (t["branch"], worktree_name(primary, t["path"])) if n]
     names += [n for _, n in unlanded if n]
     carried = {t for name in names for t in ticket_ids(cfg, name)}
     deadline = time.monotonic() + SIZE_SECONDS
@@ -626,10 +642,9 @@ def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verd
     for root, rel in bundles:
         name, path = posixpath.basename(rel), primary / rel
         tickets = list(dict.fromkeys(ticket_ids(cfg, name) + top_file_tickets(cfg, path)))
-        words = cfg["doc_reference"].get(root, DOC_REFERENCE)
         live = rel in named or name in named or carried & set(tickets)
         state = "live" if live else "linked" if tickets else "unlinked"
-        kind = "reference" if any(w.lower() in name.lower() for w in words) else "ephemeral"
+        kind = bundle_class(cfg, root, name)
         rows.append({
             "path": rel,
             "root": root,

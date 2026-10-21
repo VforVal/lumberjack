@@ -414,6 +414,21 @@ def test_instructions_go_to_claude_md_else_agents_md_created_when_absent(
     assert read(repo, "AGENTS.md").count("<!-- >>> lumberjack -->") == 1
 
 
+@pytest.mark.parametrize(("cleanup", "stop_gate", "line"), [
+    ("prune", True, "Session start cleans up landed worktrees; the Stop hook gates debt.\n"),
+    ("report", True, 'Session start only reports what cleanup would remove (`cleanup = "report"`);'
+     " the Stop hook gates debt.\n"),
+    ("keep", False, 'Session start leaves landed worktrees alone (`cleanup = "keep"`); the Stop gate is off.\n'),
+])
+def test_instructions_say_what_the_cleanup_mode_and_stop_gate_do(
+    repo: Path, capsys: pytest.CaptureFixture[str], cleanup: str, stop_gate: bool, line: str
+) -> None:
+    apply(repo, capsys, cleanup=cleanup, stop_gate=stop_gate)
+    text = read(repo, "AGENTS.md")
+    assert line in text
+    assert cleanup == "prune" or "cleans up" not in text
+
+
 def test_instructions_rerun_replaces_only_the_block(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

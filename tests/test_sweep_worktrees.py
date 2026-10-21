@@ -643,6 +643,18 @@ def test_detached_worktree_folder_name_makes_a_bundle_live(
     }
 
 
+def test_codex_worktree_named_for_the_repo_is_matched_by_its_parent_folder(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/eng-82-access/a.md", "x")
+    write(primary, "docs/work/eng-83-review/a.md", "x")
+    codex = primary.parent / "codex" / "eng-82-tester-access" / primary.name  # <dir>/<slug>/<repo>
+    git(primary, "worktree", "add", "-q", "--detach", str(codex))
+    states = {p: d["state"] for p, d in docs_by_path(primary, capsys).items()}
+    assert states == {"docs/work/eng-82-access": "live", "docs/work/eng-83-review": "linked"}
+
+
 def merge_to_main(primary: Path, branch: str) -> None:
     git(primary, "merge", "-q", "--no-edit", branch)
     git(primary, "push", "-q", "origin", "main")
@@ -737,6 +749,24 @@ def test_doc_reference_overrides_the_class_words_per_root(
         "docs/work/research-a": "ephemeral",
         "docs/work/spike-b": "reference",
         "notes/research-c": "reference",
+    }
+
+
+def test_a_doc_root_named_for_reference_work_or_marked_star_holds_reference_bundles(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings(
+        primary,
+        'doc_roots = ["docs/prototype", "docs/lab", "docs/handoffs"]\n'
+        '[doc_reference]\n"docs/lab" = ["*"]\n',
+    )
+    for path in ("docs/prototype/eng-58-probe", "docs/lab/eng-59-run", "docs/handoffs/eng-60-note"):
+        write(primary, f"{path}/x.md", "x")
+    classes = {p: d["class"] for p, d in docs_by_path(primary, capsys).items()}
+    assert classes == {
+        "docs/prototype/eng-58-probe": "reference",
+        "docs/lab/eng-59-run": "reference",
+        "docs/handoffs/eng-60-note": "ephemeral",
     }
 
 

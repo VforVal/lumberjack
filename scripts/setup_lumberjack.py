@@ -229,7 +229,7 @@ CONFIG_DOC = {
     "cleanup": "What SessionStart does with landed worktrees: prune, report or keep.",
     "stop_gate": "Whether the Stop hook blocks on branch and primary-checkout debt.",
     "doc_strategy": "What /lumberjack:cleanup may do with doc bundles; empty until the maintainer answers once.",
-    "doc_reference": "Per doc root, folder-name words that make a bundle reference; default research, prototype.",
+    "doc_reference": "Per doc root, folder-name words that make a bundle reference (* for all: a durable root); default research, prototype.",
 }
 HARNESSES = ("claude", "codex")
 ANSWER_KEYS = {*DEFAULTS, "harnesses", "hook", "pin_claude_settings"}
@@ -317,14 +317,13 @@ if [ -f "$script" ] && [ -n "$python" ]; then
 fi
 {HOOK_END}
 """
-INSTRUCTIONS = f"""{MD_MARKERS[0]}
-## Lumberjack
-
-Worktree rules live in the `lumberjack` skill; config in `.lumberjack.toml`.
-Session start cleans up landed worktrees; the Stop hook gates debt.
-Re-run the `lumberjack:setup` skill after conventions change.
-{MD_MARKERS[1]}
-"""
+# The instructions block must not promise a cleanup or a gate the config turned off.
+SESSION_START = {
+    "prune": "Session start cleans up landed worktrees",
+    "report": "Session start only reports what cleanup would remove (`cleanup = \"report\"`)",
+    "keep": "Session start leaves landed worktrees alone (`cleanup = \"keep\"`)",
+}
+STOP_HOOK = {True: "the Stop hook gates debt", False: "the Stop gate is off"}
 INSTALL_STEPS = {
     "claude": (
         "claude plugin marketplace add VforVal/lumberjack",
@@ -510,12 +509,24 @@ def write_settings(repo: Path, settings: Facts) -> None:
     write_json(repo, ".claude/settings.json", settings)
 
 
-def write_instructions(repo: Path) -> None:
+def instructions(answers: Facts) -> str:
+    """The CLAUDE.md/AGENTS.md block, saying what this config's session start and Stop hook do."""
+    return f"""{MD_MARKERS[0]}
+## Lumberjack
+
+Worktree rules live in the `lumberjack` skill; config in `.lumberjack.toml`.
+{SESSION_START[answers["cleanup"]]}; {STOP_HOOK[answers["stop_gate"]]}.
+Re-run the `lumberjack:setup` skill after conventions change.
+{MD_MARKERS[1]}
+"""
+
+
+def write_instructions(repo: Path, block: str) -> None:
     for name in ("CLAUDE.md", "AGENTS.md"):
         if (repo / name).is_file():
-            write_merged(repo, name, INSTRUCTIONS, markers=MD_MARKERS)
+            write_merged(repo, name, block, markers=MD_MARKERS)
             return
-    write_file(repo, "AGENTS.md", INSTRUCTIONS)
+    write_file(repo, "AGENTS.md", block)
 
 
 def write_ignores(repo: Path, roots: list[str]) -> None:
@@ -538,7 +549,7 @@ def apply(answers: Facts, repo: Path) -> None:
     write_hook(repo, hook)
     if settings is not None:
         write_settings(repo, settings)
-    write_instructions(repo)
+    write_instructions(repo, instructions(answers))
     write_ignores(repo, answers["worktree_roots"])
     for harness in HARNESSES:
         if harness in answers["harnesses"]:

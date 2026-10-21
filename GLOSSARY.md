@@ -27,7 +27,7 @@ reason `docs`; documents go in a folder named for the ticket or branch slug.
 
 **bundle**: the outermost untracked file or folder under a doc root. Its tickets come from its
 folder name (via `ticket_prefix`) and a `Ticket:`/`Tickets:` line in its top file. It is
-`ephemeral` or `reference` (research and prototypes), and `live` (a worktree or an unlanded
+`ephemeral` or `reference` (research and prototypes, or any bundle of a durable root), and `live` (a worktree or an unlanded
 local branch carries one of its tickets, or a tracked file or an unlanded branch's commit
 message names its path or ticketed folder name), `linked` (tickets, none live) or `unlinked`.
 With a strategy saved, session start trashes each linked ephemeral bundle once it has stayed linked

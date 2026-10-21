@@ -98,6 +98,14 @@ purges it.
 - `--json` gives each doc its resolved `action` (`trash` for ephemeral, `promote` for reference,
   `keep` under a keep-root; empty until a strategy is saved), which `--clear` and
   `/lumberjack:cleanup` follow.
+- A doc root can be durable: `doc_reference` takes `"*"` for every bundle of a root, and a root whose
+  own folder name holds a reference word (`prototype`, `research` by default) classes all its bundles
+  `reference`, so they are never trashed by rule. Setup now always asks for doc roots (even when it
+  finds no candidate) and, root by root, whether each is durable or working.
+- A Codex worktree on a detached HEAD in `<dir>/<slug>/<repo name>` is matched to its tickets by
+  its parent folder's name, not the repository name.
+- The `CLAUDE.md`/`AGENTS.md` block setup writes says what session start does in the saved `cleanup`
+  mode (cleans up, only reports, or leaves worktrees alone) and when the Stop gate is off.
 - `cleanup = "report"` adds a `sweep would:` line after the summary that totals what `prune` would
   do: worktrees removed, cache-only orphans deleted, bundles trashed and trash folders purged, with
   their files and bytes.
