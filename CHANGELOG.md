@@ -1,6 +1,9 @@
 # Changelog
 
-## 1.2.0
+## 1.2.1
+
+The first release after 1.1.1. Version 1.2.0 was set on main but never tagged; its changes ship
+here, with `plugin update` now seeing a new version.
 
 Upgrade: the hooks now need Python 3.11+ on PATH as `python3` or `python`; `uv` is no longer
 used. Install Python 3.11+ if `uv` was your only source of it, then re-run `/lumberjack:setup`

@@ -256,7 +256,7 @@ the last line is `hint: post-merge hook managed by <manager>; run /lumberjack:se
 When `.lumberjack.toml` was written by another version's setup (its first line,
 `# written by lumberjack setup <version>`), session start adds
 `hint: .lumberjack.toml was written by lumberjack setup <old>, the plugin is <new>; re-run /lumberjack:setup`,
-because a new version can bring settings only setup asks about (1.2.0: doc roots and which are durable).
+because a new version can bring settings only setup asks about (1.2.1: doc roots and which are durable).
 A hand-written config has no such line and gets no hint.
 
 Every plugin hook runs `--hook`, which reads the harness's hook input on stdin and acts
