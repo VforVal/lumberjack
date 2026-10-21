@@ -70,8 +70,8 @@ research, prototypes) live ("none" is `[]`). Files there keep a landed worktree,
 trashed by rule, only promoted or kept) or working (bundles may be trashed once their tickets land,
 under a saved `doc_strategy`). Never assume: one folder name is durable here, working elsewhere.
 Recommend durable when `config.doc_reference` maps the root to `["*"]` or its name holds `research`,
-`prototype` or `archive`. Set `["*"]` per durable root; for a working one drop a `["*"]` entry,
-keeping other words. Copy `config.doc_strategy` unchanged, never asking.
+`prototype` or `archive`. Start from `config.doc_reference`: set a durable root to `["*"]`; for a
+working one remove `"*"`, deleting the key when no word is left. Copy `config.doc_strategy` as is.
 
 ## 3. Confirm
 

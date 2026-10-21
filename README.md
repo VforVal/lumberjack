@@ -123,7 +123,7 @@ SessionStart prints the error and cleans nothing.
 | `primary_branch` | `"main"` | Branch the primary checkout stays on and work lands in |
 | `evidence_dir` | `""` | Directory inside a worktree whose contents block cleanup; empty protects nothing extra |
 | `doc_roots` | `[]` | Folders inside a worktree for work documents (handoffs, plans, research, run output); an untracked or ignored file under one blocks cleanup with `docs`. `evidence_dir` is one more such folder but keeps its own reason, `evidence` |
-| `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name or the root's own folder name contains one (case-insensitive); `"*"` makes every bundle of the root `reference` (a durable root); a root not listed uses `["research", "prototype"]`, so a root named `prototype` holds only reference bundles. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
+| `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); `"*"` makes every bundle of the root `reference` (a durable root; setup asks root by root); a root not listed uses `["research", "prototype"]`; an empty word is a config error. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
 | `doc_strategy` | `{}` | How `/lumberjack:cleanup` trashes doc bundles, saved after it asks once (empty: nothing is removed). Keys, all required once set: `scope` (`markdown` or `bundle`), `trash_days` (whole days, at least 1) and `grace_days` (whole days, 0 or more: how long a bundle stays `linked` before session start trashes it; 0 trashes it at the first session start that sees it linked); optional `roots`, a table of doc root to `keep` whose bundles are always kept, so `roots = {"docs/handoffs" = "keep"}` keeps every handoff. The old keys `ephemeral`, `reference` and `tracker` are a config error; saving a new strategy replaces them. A table: `[doc_strategy]` then `scope = "bundle"`, `trash_days = 30` and `grace_days = 7` |
 | `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where worktrees live: `~` is home, `*` a glob, `{name}` the repo name |
 | `cleanup` | `"prune"` | `prune` removes landed worktrees, trashes linked ephemeral bundles and purges trash past `trash_days`; `report` lists them as `would remove`, `would trash` and `would purge` (with file counts) under a `sweep would:` line; `keep` does nothing |
@@ -228,9 +228,8 @@ folder, below tracked subfolders too, in the primary checkout; tracked files and
 worktrees (or folders holding them) are never listed. Its tickets are the
 `ticket_prefix` ids in its folder name plus those on a `Ticket:` or `Tickets:` line in the head
 of its top file (the first Markdown file, else the first file); without a `ticket_prefix` no
-ticket is found. The class is `reference` when its name or its doc root's folder name holds
-`research` or `prototype` (`doc_reference` changes the words per root; `"*"` marks the whole root),
-else `ephemeral`. A bundle is `live` when a
+ticket is found. The class is `reference` when its name holds `research` or `prototype`
+(`doc_reference` changes the words per root; `"*"` marks the whole root durable), else `ephemeral`. A bundle is `live` when a
 worktree's branch or folder name, or an unlanded local branch, carries one of its tickets
 (so a Codex worktree on a detached HEAD counts; when its folder is named for the repository, as in
 `~/.codex/worktrees/<slug>/<repo>`, its parent folder's name counts instead), or when its path (or its folder name, when that

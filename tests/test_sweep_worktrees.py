@@ -752,21 +752,19 @@ def test_doc_reference_overrides_the_class_words_per_root(
     }
 
 
-def test_a_doc_root_named_for_reference_work_or_marked_star_holds_reference_bundles(
+def test_a_doc_root_marked_star_holds_only_reference_bundles(
     primary: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     settings(
         primary,
-        'doc_roots = ["docs/prototype", "docs/lab", "docs/handoffs"]\n'
-        '[doc_reference]\n"docs/lab" = ["*"]\n',
+        'doc_roots = ["docs/prototypes", "docs/lab"]\n[doc_reference]\n"docs/lab" = ["*"]\n',
     )
-    for path in ("docs/prototype/eng-58-probe", "docs/lab/eng-59-run", "docs/handoffs/eng-60-note"):
+    for path in ("docs/prototypes/eng-58-probe", "docs/lab/eng-59-run"):
         write(primary, f"{path}/x.md", "x")
     classes = {p: d["class"] for p, d in docs_by_path(primary, capsys).items()}
-    assert classes == {
-        "docs/prototype/eng-58-probe": "reference",
+    assert classes == {  # the root's own name never classes its bundles: setup asks instead
+        "docs/prototypes/eng-58-probe": "ephemeral",
         "docs/lab/eng-59-run": "reference",
-        "docs/handoffs/eng-60-note": "ephemeral",
     }
 
 
