@@ -105,6 +105,9 @@ purges it.
   `doc_reference` word, which matched every bundle, is now a config error.
 - A Codex worktree on a detached HEAD in `<dir>/<slug>/<repo name>` is matched to its tickets by
   its parent folder's name, not the repository name.
+- Session start reminds the maintainer to re-run setup after an upgrade: when `.lumberjack.toml` was
+  written by another version's setup, it prints
+  `hint: .lumberjack.toml was written by lumberjack setup <old>, the plugin is <new>; re-run /lumberjack:setup`.
 - The `CLAUDE.md`/`AGENTS.md` block setup writes says what session start does in the saved `cleanup`
   mode (cleans up, only reports, or leaves worktrees alone) and when the Stop gate is off.
 - `cleanup = "report"` adds a `sweep would:` line after the summary that totals what `prune` would

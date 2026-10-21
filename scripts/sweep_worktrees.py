@@ -66,6 +66,7 @@ DOC_LOCK = "lumberjack-docs.lock"  # next to the trash: OS-locked while one run 
 DOC_WAIT = 10  # seconds --clear and --purge-trash wait for a held lock; session start never waits
 BUSY = "a sweep is trashing"
 TALLY = "lumberjack-tally.jsonl"  # next to the trash: one JSON line per session start, trashed bundle and purge
+SETUP_STAMP = "# written by lumberjack setup "  # first line of a setup-written .lumberjack.toml
 
 
 def reparse(st: os.stat_result) -> bool:
@@ -1424,6 +1425,27 @@ def self_heal(primary: Path) -> list[str]:
     return []
 
 
+def plugin_version() -> str:
+    """This plugin's VERSION; "unknown" when the scripts run outside a plugin checkout."""
+    here = Path(__file__).resolve().parent
+    version = next((d / "VERSION" for d in (here, here.parent) if (d / "VERSION").is_file()), None)
+    return version.read_text(encoding="utf-8").strip() if version else "unknown"
+
+
+def setup_hint(primary: Path) -> list[str]:
+    """A hint to re-run setup when another version's setup wrote .lumberjack.toml: new settings need its questions."""
+    try:
+        with (primary / ".lumberjack.toml").open(encoding="utf-8") as file:
+            first = file.readline()
+    except (OSError, UnicodeDecodeError):
+        return []
+    written, current = first.removeprefix(SETUP_STAMP).strip(), plugin_version()
+    if not first.startswith(SETUP_STAMP) or written == current or current == "unknown":
+        return []  # a hand-written config has no stamp; nothing to compare
+    return [f"hint: .lumberjack.toml was written by lumberjack setup {written}, the plugin is {current};"
+            " re-run /lumberjack:setup"]
+
+
 def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
     """SessionStart mode: self-heal, then the cleanup rule. Never raises, never prompts."""
     try:
@@ -1434,7 +1456,7 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
     # git exports GIT_DIR to hooks: a merge inside a linked worktree must not clean up.
     if "GIT_DIR" in os.environ and not same_dir(here, primary):
         return ["sweep: not the primary checkout; skipped"]
-    notes = self_heal(primary)
+    notes = self_heal(primary) + setup_hint(primary)
     try:
         cfg = load_config(primary)
     except ConfigError as error:

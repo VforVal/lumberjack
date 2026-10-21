@@ -907,6 +907,17 @@ def test_self_heal_sets_script_and_hooks_path_only_when_free(primary: Path) -> N
     assert config_value(primary, "core.hooksPath") == "custom"
 
 
+def test_a_config_from_another_setup_version_hints_to_rerun_setup(primary: Path) -> None:
+    current = sweep_worktrees.plugin_version()
+    write(primary, ".lumberjack.toml", "# written by lumberjack setup 1.1.1\n\ncleanup = \"report\"\n")
+    hint = f"hint: .lumberjack.toml was written by lumberjack setup 1.1.1, the plugin is {current}; re-run /lumberjack:setup"
+    assert hint in cleanup(primary)
+    write(primary, ".lumberjack.toml", f"# written by lumberjack setup {current}\n\ncleanup = \"report\"\n")
+    assert not any(line.startswith("hint:") for line in cleanup(primary))
+    write(primary, ".lumberjack.toml", 'cleanup = "report"\n')  # hand-written: no stamp, no hint
+    assert not any(line.startswith("hint:") for line in cleanup(primary))
+
+
 @pytest.mark.parametrize(
     ("name", "text", "manager"),
     [

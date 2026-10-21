@@ -21,6 +21,7 @@ from sweep_worktrees import (
     HOOK_BEGIN,
     HOOK_END,
     HOOK_MARKERS,
+    SETUP_STAMP,
     ConfigError,
     config_table,
     find_primary,
@@ -31,11 +32,11 @@ from sweep_worktrees import (
     load_config,
     origin_parts,
     parse_config,
+    plugin_version,
     registered,
 )
 
 Facts = dict[str, Any]
-HERE = Path(__file__).resolve().parent
 REMOTE = "refs/remotes/origin/"
 TICKET = re.compile(r"\b([a-z]+-)\d+")
 TRACKER_DOC = Path("docs", "agents", "issue-tracker.md")  # the matt-pocock-skills convention
@@ -282,10 +283,8 @@ def check_answers(answers: Any) -> Facts:
 
 
 def config_text(answers: Facts) -> str:
-    version = next((d / "VERSION" for d in (HERE, HERE.parent) if (d / "VERSION").is_file()), None)
-    number = version.read_text(encoding="utf-8").strip() if version else "unknown"
     keys = (f"# {CONFIG_DOC[k]}\n{k} = {toml_value(answers[k])}\n" for k in DEFAULTS)
-    text = f"# written by lumberjack setup {number}\n\n" + "\n".join(keys)
+    text = f"{SETUP_STAMP}{plugin_version()}\n\n" + "\n".join(keys)
     try:  # validate through the parser sweep uses
         parse_config(tomllib.loads(text), ".lumberjack.toml")
     except tomllib.TOMLDecodeError as error:
