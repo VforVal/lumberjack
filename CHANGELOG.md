@@ -4,7 +4,8 @@
 
 Upgrade: the hooks now need Python 3.11+ on PATH as `python3` or `python`; `uv` is no longer
 used. Install Python 3.11+ if `uv` was your only source of it, then re-run `/lumberjack:setup`
-to refresh the post-merge hook and pick `doc_roots`.
+to refresh the post-merge hook, pick `doc_roots` and answer which of them are durable: only a
+durable root (`doc_reference` `["*"]`) keeps every bundle, prototypes included, from being trashed.
 
 Doc cleanup is now by rule, not by prompt: once a `doc_strategy` is saved (`/lumberjack:cleanup`
 asks for it once; with none saved nothing moves), every session start and post-merge sweep moves
