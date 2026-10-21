@@ -4,7 +4,8 @@
 
 Upgrade: the hooks now need Python 3.11+ on PATH as `python3` or `python`; `uv` is no longer
 used. Install Python 3.11+ if `uv` was your only source of it, then re-run `/lumberjack:setup`
-to refresh the post-merge hook and pick `doc_roots`.
+to refresh the post-merge hook, pick `doc_roots` and answer which of them are durable: only a
+durable root (`doc_reference` `["*"]`) keeps every bundle, prototypes included, from being trashed.
 
 Doc cleanup is now by rule, not by prompt: once a `doc_strategy` is saved (`/lumberjack:cleanup`
 asks for it once; with none saved nothing moves), every session start and post-merge sweep moves
@@ -98,6 +99,17 @@ purges it.
 - `--json` gives each doc its resolved `action` (`trash` for ephemeral, `promote` for reference,
   `keep` under a keep-root; empty until a strategy is saved), which `--clear` and
   `/lumberjack:cleanup` follow.
+- A doc root can be durable: `doc_reference` takes `"*"`, which makes every bundle of the root
+  `reference`, so none is trashed by rule. Setup now always asks for doc roots (even when it finds no
+  candidate) and, root by root, whether each is durable (saved as `["*"]`) or working. An empty
+  `doc_reference` word, which matched every bundle, is now a config error.
+- A Codex worktree on a detached HEAD in `<dir>/<slug>/<repo name>` is matched to its tickets by
+  its parent folder's name, not the repository name.
+- Session start reminds the maintainer to re-run setup after an upgrade: when `.lumberjack.toml` was
+  written by another version's setup, it prints
+  `hint: .lumberjack.toml was written by lumberjack setup <old>, the plugin is <new>; re-run /lumberjack:setup`.
+- The `CLAUDE.md`/`AGENTS.md` block setup writes says what session start does in the saved `cleanup`
+  mode (cleans up, only reports, or leaves worktrees alone) and when the Stop gate is off.
 - `cleanup = "report"` adds a `sweep would:` line after the summary that totals what `prune` would
   do: worktrees removed, cache-only orphans deleted, bundles trashed and trash folders purged, with
   their files and bytes.

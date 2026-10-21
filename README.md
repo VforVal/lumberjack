@@ -90,7 +90,10 @@ In Claude Code, run `/lumberjack:setup` once per repository. In Codex, choose
 cleanup and Stop gate behaviour, the git hook and an evidence directory and doc roots, each with a
 recommended answer. Doc roots are suggested from a `.scratch/` folder and ignored top-level
 folders that hold Markdown (found by file name, without reading any file), each with a reason;
-a re-run keeps your saved `doc_roots`. After your yes it writes `.lumberjack.toml`, the post-merge hook,
+a re-run keeps your saved `doc_roots`. Setup then asks, root by root, whether each one is durable
+(its bundles are `reference`, saved as `doc_reference` `["*"]`) or working (its bundles may be
+trashed once their tickets land), because the same folder name is durable in one repository and
+working in another. After your yes it writes `.lumberjack.toml`, the post-merge hook,
 the `CLAUDE.md` (else `AGENTS.md`) block (creating `AGENTS.md` when neither exists),
 optional `.claude/settings.json` pinning and
 `.gitignore` lines for worktree roots inside the repository. It never commits; review
@@ -120,7 +123,7 @@ SessionStart prints the error and cleans nothing.
 | `primary_branch` | `"main"` | Branch the primary checkout stays on and work lands in |
 | `evidence_dir` | `""` | Directory inside a worktree whose contents block cleanup; empty protects nothing extra |
 | `doc_roots` | `[]` | Folders inside a worktree for work documents (handoffs, plans, research, run output); an untracked or ignored file under one blocks cleanup with `docs`. `evidence_dir` is one more such folder but keeps its own reason, `evidence` |
-| `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); a root not listed uses `["research", "prototype"]`. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
+| `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); `"*"` makes every bundle of the root `reference` (a durable root; setup asks root by root); a root not listed uses `["research", "prototype"]`; an empty word is a config error. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
 | `doc_strategy` | `{}` | How `/lumberjack:cleanup` trashes doc bundles, saved after it asks once (empty: nothing is removed). Keys, all required once set: `scope` (`markdown` or `bundle`), `trash_days` (whole days, at least 1) and `grace_days` (whole days, 0 or more: how long a bundle stays `linked` before session start trashes it; 0 trashes it at the first session start that sees it linked); optional `roots`, a table of doc root to `keep` whose bundles are always kept, so `roots = {"docs/handoffs" = "keep"}` keeps every handoff. The old keys `ephemeral`, `reference` and `tracker` are a config error; saving a new strategy replaces them. A table: `[doc_strategy]` then `scope = "bundle"`, `trash_days = 30` and `grace_days = 7` |
 | `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where worktrees live: `~` is home, `*` a glob, `{name}` the repo name |
 | `cleanup` | `"prune"` | `prune` removes landed worktrees, trashes linked ephemeral bundles and purges trash past `trash_days`; `report` lists them as `would remove`, `would trash` and `would purge` (with file counts) under a `sweep would:` line; `keep` does nothing |
@@ -131,8 +134,20 @@ owners = ["alice", "codex", "claude"]
 ticket_prefix = "eng-"
 primary_branch = "trunk"
 evidence_dir = ".evidence"
-doc_roots = ["docs/work"]
+doc_roots = ["docs/work", "docs/handoffs", "docs/lab"]
+
+[doc_reference]
+"docs/lab" = ["*"]
+
+[doc_strategy]
+scope = "bundle"
+trash_days = 30
+grace_days = 7
+roots = {"docs/handoffs" = "keep"}
 ```
+
+Leave `doc_strategy` out until `/lumberjack:cleanup` asks for it; once set, it needs `scope`,
+`trash_days` and `grace_days`.
 
 ## Cleanup rule
 
@@ -213,10 +228,11 @@ folder, below tracked subfolders too, in the primary checkout; tracked files and
 worktrees (or folders holding them) are never listed. Its tickets are the
 `ticket_prefix` ids in its folder name plus those on a `Ticket:` or `Tickets:` line in the head
 of its top file (the first Markdown file, else the first file); without a `ticket_prefix` no
-ticket is found. The class is `reference` when the name holds `research` or `prototype`
-(`doc_reference` changes the words per root), else `ephemeral`. A bundle is `live` when a
+ticket is found. The class is `reference` when its name holds `research` or `prototype`
+(`doc_reference` changes the words per root; `"*"` marks the whole root durable), else `ephemeral`. A bundle is `live` when a
 worktree's branch or folder name, or an unlanded local branch, carries one of its tickets
-(so a Codex worktree on a detached HEAD counts), or when its path (or its folder name, when that
+(so a Codex worktree on a detached HEAD counts; when its folder is named for the repository, as in
+`~/.codex/worktrees/<slug>/<repo>`, its parent folder's name counts instead), or when its path (or its folder name, when that
 carries a ticket) appears in a tracked file or in a commit message of an unlanded branch
 (only commits not yet in `origin/<primary_branch>`,
 the newest 1000), so a bundle that lists a ticket whose branch has landed stays live while
@@ -237,6 +253,11 @@ only when `.githooks/post-merge` holds the
 `# >>> lumberjack` marker and `core.hooksPath` is unset.
 When a hook manager is present and its config does not mention `lumberjack.script` yet,
 the last line is `hint: post-merge hook managed by <manager>; run /lumberjack:setup to add lumberjack`.
+When `.lumberjack.toml` was written by another version's setup (its first line,
+`# written by lumberjack setup <version>`), session start adds
+`hint: .lumberjack.toml was written by lumberjack setup <old>, the plugin is <new>; re-run /lumberjack:setup`,
+because a new version can bring settings only setup asks about (1.2.0: doc roots and which are durable).
+A hand-written config has no such line and gets no hint.
 
 Every plugin hook runs `--hook`, which reads the harness's hook input on stdin and acts
 on its `hook_event_name`. SessionStart fires on startup, resume, clear and

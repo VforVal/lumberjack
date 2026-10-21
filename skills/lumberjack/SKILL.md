@@ -59,7 +59,7 @@ When other branches are built on a landed branch, the sweep prints one line per 
 
 `sweep: cleaned N, landed N, dependents N, blocked N, unverified N, orphans N, docs N`, with
 `, origin stale` appended when the fetch failed, then one line per event: `cleaned`,
-`landed`, `blocked`, `dependent`, `orphan`, `cleared`, `purged`, `doc` or `hint` (report mode adds a `sweep would:` totals line after the summary). When nothing was swept the only
+`landed`, `blocked`, `dependent`, `orphan`, `cleared`, `purged`, `doc` or `hint` (relay a `hint` to the maintainer once; report mode adds a `sweep would:` totals line after the summary). When nothing was swept the only
 line says why: a config error, or `sweep: ...; skipped`. The exit code is always 0.
 Paths are relative to the primary's parent directory, or start with `~`.
 `doc <ephemeral|reference> <path>: tickets <ids>; <size>` is a linked `doc_roots` bundle (tickets, none kept live) the sweep leaves, including while it is inside `grace_days`.

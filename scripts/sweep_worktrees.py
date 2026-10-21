@@ -66,6 +66,7 @@ DOC_LOCK = "lumberjack-docs.lock"  # next to the trash: OS-locked while one run 
 DOC_WAIT = 10  # seconds --clear and --purge-trash wait for a held lock; session start never waits
 BUSY = "a sweep is trashing"
 TALLY = "lumberjack-tally.jsonl"  # next to the trash: one JSON line per session start, trashed bundle and purge
+SETUP_STAMP = "# written by lumberjack setup "  # first line of a setup-written .lumberjack.toml
 
 
 def reparse(st: os.stat_result) -> bool:
@@ -159,10 +160,10 @@ def parse_config(table: Config, source: str = "") -> Config:
     ):
         raise ConfigError("lumberjack: doc_roots must be relative paths inside the repo", source)
     if not all(
-        isinstance(words, list) and all(isinstance(w, str) for w in words)
+        isinstance(words, list) and all(isinstance(w, str) and w for w in words)
         for words in cfg["doc_reference"].values()
-    ):
-        raise ConfigError("lumberjack: doc_reference must map each root to a list of words", source)
+    ):  # an empty word is in every name, so it would make a whole root reference by accident
+        raise ConfigError("lumberjack: doc_reference must map each root to a list of non-empty words", source)
     strategy = cfg["doc_strategy"]
     roots = strategy.get("roots", {})  # optional: doc roots whose bundles are always kept
     if strategy.keys() & {"ephemeral", "reference", "tracker"}:
@@ -602,12 +603,27 @@ def bundle_action(strategy: Config, root: str, kind: str) -> str:
     return "keep" if root in strategy.get("roots", {}) else BUNDLE_ACTION[kind]
 
 
+def worktree_name(primary: Path, path: str) -> str:
+    """A worktree's folder name; its parent's in the Codex layout `<dir>/<ticket slug>/<repo name>`."""
+    leaf = Path(path)
+    return leaf.parent.name if leaf.name.casefold() == primary.name.casefold() else leaf.name
+
+
+def bundle_class(cfg: Config, root: str, name: str) -> str:
+    """`reference` when a doc_reference word is in the bundle's folder name, else `ephemeral`.
+
+    The word `*` matches every bundle, so a whole root can hold durable documents.
+    """
+    words = cfg["doc_reference"].get(root, DOC_REFERENCE)
+    return "reference" if any(w == "*" or w.lower() in name.lower() for w in words) else "ephemeral"
+
+
 def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verdict]) -> list[Row]:
     """Untracked doc-root bundles: class, tickets and live/linked/unlinked; size for linked."""
     # Any worktree counts, by branch or folder name, so a detached Codex worktree does too.
     # A branch without one counts until it lands: landed local branches are never deleted.
     unlanded = {tip for tip, (tier, _) in tiers.items() if tier not in VERIFIED}
-    names = [n for t in trees[1:] for n in (t["branch"], Path(t["path"]).name) if n]
+    names = [n for t in trees[1:] for n in (t["branch"], worktree_name(primary, t["path"])) if n]
     names += [n for _, n in unlanded if n]
     carried = {t for name in names for t in ticket_ids(cfg, name)}
     deadline = time.monotonic() + SIZE_SECONDS
@@ -626,10 +642,9 @@ def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verd
     for root, rel in bundles:
         name, path = posixpath.basename(rel), primary / rel
         tickets = list(dict.fromkeys(ticket_ids(cfg, name) + top_file_tickets(cfg, path)))
-        words = cfg["doc_reference"].get(root, DOC_REFERENCE)
         live = rel in named or name in named or carried & set(tickets)
         state = "live" if live else "linked" if tickets else "unlinked"
-        kind = "reference" if any(w.lower() in name.lower() for w in words) else "ephemeral"
+        kind = bundle_class(cfg, root, name)
         rows.append({
             "path": rel,
             "root": root,
@@ -1410,6 +1425,27 @@ def self_heal(primary: Path) -> list[str]:
     return []
 
 
+def plugin_version() -> str:
+    """This plugin's VERSION; "unknown" when the scripts run outside a plugin checkout."""
+    here = Path(__file__).resolve().parent
+    version = next((d / "VERSION" for d in (here, here.parent) if (d / "VERSION").is_file()), None)
+    return version.read_text(encoding="utf-8").strip() if version else "unknown"
+
+
+def setup_hint(primary: Path) -> list[str]:
+    """A hint to re-run setup when another version's setup wrote .lumberjack.toml: new settings need its questions."""
+    try:
+        with (primary / ".lumberjack.toml").open(encoding="utf-8") as file:
+            first = file.readline()
+    except (OSError, UnicodeDecodeError):
+        return []
+    written, current = first.removeprefix(SETUP_STAMP).strip(), plugin_version()
+    if not first.startswith(SETUP_STAMP) or written == current or current == "unknown":
+        return []  # a hand-written config has no stamp; nothing to compare
+    return [f"hint: .lumberjack.toml was written by lumberjack setup {written}, the plugin is {current};"
+            " re-run /lumberjack:setup"]
+
+
 def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
     """SessionStart mode: self-heal, then the cleanup rule. Never raises, never prompts."""
     try:
@@ -1420,7 +1456,7 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
     # git exports GIT_DIR to hooks: a merge inside a linked worktree must not clean up.
     if "GIT_DIR" in os.environ and not same_dir(here, primary):
         return ["sweep: not the primary checkout; skipped"]
-    notes = self_heal(primary)
+    notes = self_heal(primary) + setup_hint(primary)
     try:
         cfg = load_config(primary)
     except ConfigError as error:
