@@ -1,0 +1,25 @@
+name: release
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Tag and release VERSION
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=$(tr -d '[:space:]' < VERSION)
+          for f in .claude-plugin/plugin.json .codex-plugin/plugin.json; do
+            grep -q "\"version\": \"$v\"" "$f" || { echo "::error::$f does not say $v"; exit 1; }
+          done
+          grep -q "^version = \"$v\"" pyproject.toml || { echo "::error::pyproject.toml does not say $v"; exit 1; }
+          if gh release view "v$v" > /dev/null 2>&1; then echo "v$v already released"; exit 0; fi
+          awk -v h="## $v" '$0 == h {on = 1; next} /^## / {on = 0} on' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md" || { echo "::error::CHANGELOG.md has no ## $v section"; exit 1; }
+          gh release create "v$v" --target "$GITHUB_SHA" --title "lumberjack $v" --notes-file "$RUNNER_TEMP/notes.md"

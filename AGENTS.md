@@ -20,7 +20,9 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
   `--hook`, which reads the hook input on stdin and dispatches on `hook_event_name`.
 - `.claude-plugin/`, `.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json` -
   Claude Code and Codex manifests and marketplace listings.
-- `VERSION` - keep it equal to both `plugin.json` files and `pyproject.toml`.
+- `VERSION` - keep it equal to both `plugin.json` files and `pyproject.toml`. A push to main that
+  changes it runs `.github/workflows/release.yml`, which tags `v<VERSION>` and publishes the
+  GitHub release from its `CHANGELOG.md` section.
 - `README.md` - the stranger-facing guide; its config table, tier and reason names, summary
   line and setup output lines must match the scripts verbatim.
 - `CHANGELOG.md` - one section per released `VERSION`.
