@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/logo.svg" width="200" alt="An axe stuck in a tree stump"></p>
+![An axe stuck in a tree stump](assets/logo.svg)
 
 # lumberjack
 
@@ -43,8 +43,8 @@ flowchart LR
   A --> G[".gitignore entries"]
 ```
 
-The rest of this page is reference: requirements, install details, configuration, the
-cleanup rule, detection tiers, the summary line, hook placement and uninstall.
+The rest of this page is reference: requirements, what it runs and sends, install details,
+configuration, the cleanup rule, detection tiers, the summary line, hook placement and uninstall.
 
 ## Requirements
 
@@ -57,6 +57,21 @@ cleanup rule, detection tiers, the summary line, hook placement and uninstall.
   `lumberjack: Python 3.11+ required, found <version>` from an older Python.
 - Optional: `gh`, logged in, to detect squash-merged and rebase-merged pull requests.
   Without it the sweep decides from git alone and fewer branches count as landed.
+
+## What it runs and sends
+
+lumberjack runs its two bundled Python scripts, `git` and, when installed, `gh`. It downloads
+no code and installs nothing. The images in `assets/` are for this page and the plugin icon;
+no script or hook opens them.
+
+- **Network:** `git fetch --prune origin`, and with `gh` logged in, a read-only GitHub GraphQL
+  query that sends the repository's branch names to find merged pull requests (setup
+  also runs `gh auth status`). `gh` uses its own saved login; lumberjack never reads, stores or
+  sends a token. Nothing goes to any other server.
+- **Your files:** it removes landed worktrees with `git worktree remove` (never `--force`),
+  deletes orphan worktree folders that hold only `node_modules`, and moves landed doc bundles
+  to `.git/lumberjack-trash`, which it purges after `trash_days`. Setup writes only the files
+  listed under [Setup](#setup), after your yes.
 
 ## Install on Claude Code
 
