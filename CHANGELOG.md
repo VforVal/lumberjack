@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- README: new "What it runs and sends" section listing every command, network call and file
+  change, for the Claude plugin directory review. The logo uses Markdown image syntax.
+
 ## 1.2.1
 
 The first release after 1.1.1. Version 1.2.0 was set on main but never tagged; its changes ship
