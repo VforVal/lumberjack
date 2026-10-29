@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480" fill="none">
+  <title>Seven bare trees and three green pines</title>
+  <desc>A forest in the outlined style of the Lumberjack stump. Most trees are bare and brown. Three living pines have green foliage.</desc>
+  <defs>
+    <g id="bare" stroke="#30281f" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-13 0C-7-38-9-76-6-115L-7-222L2-238L9-221L8-144C9-97 8-46 17 0" fill="#977353"/>
+      <path d="M-5-111L-34-134L-46-161M-31-133L-56-138M-5-155L-24-177L-29-200M6-175L25-192L33-217M24-192L47-196M6-130L37-151L54-179M36-151L65-152M9-78L31-99L39-121"/>
+      <path d="M-2-20L0-93M0-172L0-211" stroke="#d0ab7d" stroke-width="2.5"/>
+      <path d="M-19 2Q-2-6 21 2" stroke="#30281f" stroke-width="4"/>
+    </g>
+    <g id="pine" stroke="#30281f" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-8 0L-6-94L7-95L12 0" fill="#805738"/>
+      <path d="M0-258Q-10-230-28-210L-15-211Q-28-181-52-163L-28-165Q-50-136-74-121L-42-123Q-56-99-78-85Q-37-77-12-91Q0-83 13-91Q41-78 77-85Q54-100 41-124L70-120Q44-139 30-164L51-160Q28-182 18-210L33-207Q13-230 0-258Z" fill="#546e43"/>
+      <path d="M-2-221L-14-196M-2-175L-28-148M11-143L28-123M-5-119L-24-102" stroke="#8a9b67" stroke-width="3.5"/>
+      <path d="M1-67L2-25" stroke="#c39a68" stroke-width="2.5"/>
+    </g>
+  </defs>
+  <path d="M41 391Q103 367 166 375Q245 363 315 378Q385 354 450 373Q527 360 600 391Q551 416 441 415L166 418Q82 414 41 391Z" fill="#d9ceb7"/>
+  <path d="M88 379Q180 356 270 373Q365 354 469 371Q527 365 566 381" stroke="#b7a58a" stroke-width="2"/>
+  <g opacity=".62">
+    <use href="#bare" transform="translate(117 362) scale(.7)"/>
+    <use href="#bare" transform="translate(245 347) scale(.72) rotate(5)"/>
+    <use href="#bare" transform="translate(434 350) scale(.72) rotate(-4)"/>
+    <use href="#pine" transform="translate(527 354) scale(.7)"/>
+  </g>
+  <use href="#bare" transform="translate(74 385) scale(.72) rotate(-5)"/>
+  <use href="#pine" transform="translate(183 382) scale(.96)"/>
+  <use href="#bare" transform="translate(306 391) scale(1.13) rotate(-2)"/>
+  <use href="#bare" transform="translate(390 390) scale(.83) rotate(5)"/>
+  <use href="#pine" transform="translate(476 400) scale(.9)"/>
+  <use href="#bare" transform="translate(574 391) scale(.82) rotate(-4)"/>
+  <path d="M44 394Q102 388 142 395M223 400L283 402M339 402Q390 392 425 400M514 405L599 396" stroke="#8e795b" stroke-width="3" stroke-linecap="round"/>
+  <path d="M106 396L100 386M110 396L116 381M258 408L251 398M261 408L268 394M540 400L546 389" stroke="#78835b" stroke-width="3" stroke-linecap="round"/>
+  <path d="M124 409L146 405L157 411M347 414L359 407L372 413M549 415L560 410L568 413" stroke="#a18a66" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
