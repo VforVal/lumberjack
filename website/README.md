@@ -1,7 +1,7 @@
 # Lumberjack website
 
 Static product site for the Lumberjack plugin. `dist/` contains the complete site:
-HTML, CSS, JavaScript, the repository's original SVG logo, a static forest illustration,
+HTML, CSS, JavaScript, the repository's original SVG logo, an inline forest illustration,
 PNG icons and the social preview image, and locally bundled Rokkitt and Special Elite
 fonts (WOFF2, subset to Latin) with their licenses. No build step, package installation,
 external font requests, analytics, or server runtime is needed to serve it.
@@ -41,8 +41,10 @@ The Settings button opens a nonmodal popover, dismissed with Done, Escape, the c
 button, or a click outside. Browsers without the Popover API get the same open and close
 from `script.js`. Without JavaScript the sweep shows a note instead of the board.
 
-`dist/assets/forest.svg` is a static illustration using the logo's outlined
-shapes and colors: seven bare trees and three green pines.
+The hero forest is inline SVG in the logo's outlined style: seven bare trees (finished
+work) and three pines (still growing). Over a bare tree the pointer becomes an axe; a click
+or Enter fells it, and a stump with the logo's axe appears once it has fallen. Pines
+shake and stay.
 
 ## Hosting
 

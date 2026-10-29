@@ -359,7 +359,7 @@ function treeHtml(t, changed, fellFrom) {
   if (t.kind === 'absent') return '<li class="tile plot" aria-hidden="true"><svg class="tile-art"><use href="#i-plot"/></svg></li>';
   const falling = fellFrom ? `<svg class="falling" aria-hidden="true"><use href="#i-${fellFrom}"/></svg>` : '';
   return `<li class="tile kind-${t.kind}${changed ? ' changed' : ''}"><button type="button" data-select="${t.key}" aria-pressed="${state.selected === t.key}">`
-    + `<span class="tile-art-wrap">${falling}<svg class="tile-art" aria-hidden="true"><use href="#i-${t.icon}"/></svg></span>`
+    + `<span class="tile-art-wrap${fellFrom ? ' felling' : ''}">${falling}<svg class="tile-art" aria-hidden="true"><use href="#i-${t.icon}"/></svg></span>`
     + `<span class="tile-name">${t.name}</span><span class="tile-size">${t.size}</span><span class="chip">${t.label}</span></button></li>`;
 }
 
@@ -632,3 +632,56 @@ if (!nativePopover) {
 }
 
 renderSimulation();
+
+// The hero forest: bare trees are finished work, and a click clears one. Pines are still growing.
+const forestTrees = [...document.querySelectorAll('.cut-tree')];
+function updateForest(message) {
+  const cleared = forestTrees.filter(tree => tree.classList.contains('felled')).length;
+  const left = forestTrees.length - cleared;
+  $('#forest-dead').textContent = left ? `${plural(left, 'finished task')}` : 'all finished work cleared';
+  const hint = $('#forest-hint');
+  hint.textContent = message;
+  if (!left) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'text-link';
+    button.textContent = 'Grow them back ↺';
+    button.addEventListener('click', regrowForest);
+    hint.append(' ', button);
+  }
+}
+function fellTree(tree, index) {
+  if (tree.classList.contains('felled')) return;
+  tree.classList.add('felled', index % 2 ? 'fall-left' : 'fall-right');
+  const hadFocus = document.activeElement === tree;
+  tree.setAttribute('aria-disabled', 'true');
+  tree.setAttribute('aria-label', `Finished task ${index + 1}, cleared`);
+  tree.tabIndex = -1;
+  const standing = forestTrees.filter(t => !t.classList.contains('felled'));
+  updateForest(standing.length ? `Cleared. Its branch is kept. ${plural(standing.length, 'bare tree')} to go.` : 'All landed work is cleared. The three pines are still growing, so they stay.');
+  if (hadFocus) (standing[0] || $('#forest-hint button')).focus();
+}
+function regrowForest() {
+  forestTrees.forEach((tree, index) => {
+    tree.classList.remove('felled', 'fall-left', 'fall-right');
+    tree.removeAttribute('aria-disabled');
+    tree.tabIndex = 0;
+    tree.setAttribute('aria-label', `Clear finished task ${index + 1}`);
+  });
+  updateForest('Bare trees are finished work. Click one to clear it.');
+  forestTrees[0].focus();
+}
+forestTrees.forEach((tree, index) => {
+  tree.addEventListener('click', () => fellTree(tree, index));
+  tree.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    fellTree(tree, index);
+  });
+});
+document.querySelectorAll('.growing').forEach(pine => pine.addEventListener('click', () => {
+  pine.classList.remove('shake');
+  pine.getBoundingClientRect();
+  pine.classList.add('shake');
+  $('#forest-hint').textContent = 'That pine is still growing. Lumberjack never cuts unfinished work.';
+}));
