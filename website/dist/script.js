@@ -673,18 +673,18 @@ function updateForest(message) {
     hint.append(' ', button);
   }
 }
-function fellTree(tree, index) {
+function fellTree(tree, index, fromKeyboard = false) {
   if (tree.classList.contains('felled')) return;
   tree.classList.add('felled', index % 2 ? 'fall-left' : 'fall-right');
-  const hadFocus = document.activeElement === tree;
   tree.setAttribute('aria-disabled', 'true');
   tree.setAttribute('aria-label', `Finished task ${index + 1}, cleared`);
   tree.tabIndex = -1;
   const standing = forestTrees.filter(t => !t.classList.contains('felled'));
   updateForest(standing.length ? `Cleared. Its branch is kept. ${plural(standing.length, 'bare tree')} to go.` : 'All landed work is cleared. The three pines are still growing, so they stay.');
-  if (hadFocus) (standing[0] || $('#forest-hint button')).focus();
+  // Keyboard users keep their place on the next standing tree; a mouse click moves no focus.
+  if (fromKeyboard) (standing[0] || $('#forest-hint button')).focus();
 }
-function regrowForest() {
+function regrowForest(event) {
   forestTrees.forEach((tree, index) => {
     tree.classList.remove('felled', 'fall-left', 'fall-right');
     tree.removeAttribute('aria-disabled');
@@ -692,14 +692,16 @@ function regrowForest() {
     tree.setAttribute('aria-label', `Clear finished task ${index + 1}`);
   });
   updateForest('Bare trees are finished work. Click one to clear it.');
-  forestTrees[0].focus();
+  if (event.detail === 0) forestTrees[0].focus(); // pressed from the keyboard, whose button is now gone
 }
 forestTrees.forEach((tree, index) => {
+  // No focus on mouse down, so a click never leaves a focus box on this or another tree.
+  tree.addEventListener('mousedown', event => event.preventDefault());
   tree.addEventListener('click', () => fellTree(tree, index));
   tree.addEventListener('keydown', event => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
-    fellTree(tree, index);
+    fellTree(tree, index, true);
   });
 });
 document.querySelectorAll('.growing').forEach(pine => pine.addEventListener('click', () => {
