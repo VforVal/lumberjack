@@ -1,149 +1,196 @@
-// These are deliberately illustrative repository states. No local files are read.
+// An illustrative repository. No local files are read; the output lines follow
+// scripts/sweep_worktrees.py so the example matches what the sweep prints.
 const $ = selector => document.querySelector(selector);
-const settings = { cleanup: 'prune', docs: true, scope: 'bundle', grace: 7, gate: true };
-const state = { scenario: 'merged', stage: 0 };
-const TRASH_STAMP = '20261105T090000Z';
+const DEFAULTS = { cleanup: 'prune', docs: true, scope: 'bundle', grace: 7 };
+const settings = { ...DEFAULTS };
+const state = { stage: 0 };
+const DAYS = [0, 1, 8, 38];
+const STAMPS = { 1: '20261030T090000Z', 2: '20261106T090000Z' };
+const NEXT_LABELS = ['Merge two branches, then sweep →', 'Wait out the grace period →', 'Wait out the trash retention →', 'Start over ↺'];
+const LOGIN = 'codex/eng-42-login ~/worktrees/app-login';
+const DEPENDENT = 'dependent codex/eng-45-ui of codex/eng-42-login: git rebase --onto main 3f9c2ab41d07 codex/eng-45-ui';
 
-function currentFlow(stage = state.stage) {
-  const landed = stage > 0 && state.scenario !== 'unverified';
-  const clean = state.scenario !== 'dirty';
-  const removed = landed && clean && settings.cleanup === 'prune';
-  const graceElapsed = stage >= 2 || (stage >= 1 && settings.grace === 0);
-  const docsMoved = removed && settings.docs && graceElapsed;
-  return { landed, clean, removed, docsMoved, purged: docsMoved && stage === 3, graceElapsed };
+// Worktree rows: kind drives the chip colour; chip and reason are what the reader sees.
+function worktrees(stage) {
+  const merged = stage >= 1;
+  const mode = settings.cleanup;
+  const row = (id, name, branch, kind, chip, reason) => ({ id, name, branch, kind, chip, reason });
+  const login = !merged ? row('login', 'app-login/', 'codex/eng-42-login', 'live', 'in progress', 'Not merged yet.')
+    : mode === 'prune' ? row('login', 'app-login/', 'codex/eng-42-login', 'gone', 'removed', stage === 1 ? 'Squash-merged, clean and pushed, so the sweep removed it. The branch stays.' : 'Removed on day 1. Its branch codex/eng-42-login is still there.')
+    : mode === 'report' ? row('login', 'app-login/', 'codex/eng-42-login', 'warn', 'would remove', 'Landed. Report mode lists it and leaves it on disk.')
+    : row('login', 'app-login/', 'codex/eng-42-login', 'kept', 'kept', 'Landed, but cleanup = "keep" leaves it.');
+  const billing = !merged ? row('billing', 'app-billing/', 'claude/eng-44-billing', 'live', 'in progress', 'Not merged yet. It has uncommitted files.')
+    : mode === 'keep' ? row('billing', 'app-billing/', 'claude/eng-44-billing', 'kept', 'kept', 'Landed, but cleanup = "keep" leaves it.')
+    : row('billing', 'app-billing/', 'claude/eng-44-billing', 'blocked', 'blocked: dirty', 'Merged, but its uncommitted files would be lost. It stays until they are committed or deleted.');
+  const ui = !merged || mode === 'keep' ? row('ui', 'app-ui/', 'codex/eng-45-ui', 'live', 'in progress', 'Built on top of codex/eng-42-login.')
+    : row('ui', 'app-ui/', 'codex/eng-45-ui', 'warn', 'rebase needed', 'Its base landed as a squash. The sweep prints the rebase to run before pushing.');
+  const docs = stage === 0 ? row('docs', 'app-docs/', 'claude/eng-46-docs', 'absent', 'not created yet', 'An agent opens this worktree on day 1.')
+    : stage === 1 ? (mode === 'keep' ? row('docs', 'app-docs/', 'claude/eng-46-docs', 'kept', 'kept', 'New from main two hours ago; cleanup = "keep" leaves it.')
+      : row('docs', 'app-docs/', 'claude/eng-46-docs', 'blocked', 'blocked: fresh', 'New from main two hours ago, so it looks landed. Worktrees under 24 hours old whose branch has not moved are kept.'))
+    : row('docs', 'app-docs/', 'claude/eng-46-docs', 'live', 'in progress', 'Has its own commits now. Not merged.');
+  return [
+    row('main', 'app/', 'main', 'kept', 'primary', 'The primary checkout. Never touched.'),
+    login,
+    row('search', 'app-search/', 'claude/eng-43-search', 'live', 'in progress', 'No pull request merged yet.'),
+    billing,
+    ui,
+    docs,
+    row('spike', 'app-spike/', 'prototype/cache-spike', 'kept', 'prototype', 'Prototype branches are never cleaned.'),
+  ];
 }
 
-function renderWorktree() {
-  const { landed, clean, removed, docsMoved, purged } = currentFlow();
-  const removable = landed && clean;
-  $('#target-row').classList.toggle('removed', removed);
-  $('#target-row').classList.toggle('blocked', state.stage > 0 && !removable);
-  $('#target-row').setAttribute('aria-hidden', String(removed));
-  $('#empty-slot').hidden = !removed;
-  $('#target-status').textContent = state.stage === 0 ? 'in progress' : !landed ? 'unverified' : clean ? 'merged · clean' : 'merged · dirty';
-  const evidence = [
-    [landed, landed ? 'Exact tip verified landed' : state.stage === 0 ? 'Work has not landed yet' : 'No proof this tip landed'],
-    [clean, clean ? 'No uncommitted files' : 'Uncommitted changes in this worktree'],
-    [true, 'Tip pushed; no untracked docs'],
+// When the eng-42 bundle moves to trash, or undefined when it never does.
+function trashStage() {
+  if (settings.cleanup !== 'prune' || !settings.docs) return undefined;
+  return settings.grace === 0 ? 1 : 2;
+}
+
+function loginFiles() {
+  return settings.scope === 'markdown' ? ['handoff.md', 'plan.md'] : ['handoff.md', 'plan.md', 'run.log'];
+}
+
+function docBundles(stage) {
+  const bundle = (id, name, files, kind, chip, reason) => ({ id, name, files, kind, chip, reason });
+  const trashed = trashStage();
+  const moved = loginFiles();
+  let login;
+  if (stage === 0) login = bundle('login', 'eng-42-login/', ['handoff.md', 'plan.md', 'run.log'], 'live', 'live', 'Its worktree app-login is open.');
+  else if (settings.cleanup !== 'prune') login = bundle('login', 'eng-42-login/', ['handoff.md', 'plan.md', 'run.log'], 'live', 'live', 'Its worktree is still on disk, so the docs stay live.');
+  else if (!settings.docs) login = bundle('login', 'eng-42-login/', ['handoff.md', 'plan.md', 'run.log'], 'kept', 'linked · kept', 'eng-42 landed, but no doc_strategy is saved, so nothing moves.');
+  else if (stage < trashed) login = bundle('login', 'eng-42-login/', ['handoff.md', 'plan.md', 'run.log'], 'warn', 'linked · grace', `eng-42 landed and no worktree carries it. Day 0 of ${settings.grace} days of grace.`);
+  else if (stage < 3) login = bundle('login', 'eng-42-login/', moved, 'trash', 'in trash', `Moved to .git/lumberjack-trash/${STAMPS[trashed]}/. Recoverable for 30 days.${moved.length < 3 ? ' run.log stays in docs/work.' : ''}`);
+  else login = bundle('login', 'eng-42-login/', moved, 'gone', 'purged', `Deleted from the trash after 30 days.${moved.length < 3 ? ' run.log is still in docs/work.' : ''}`);
+  const billing = stage === 0 ? bundle('billing', 'eng-44-billing/', ['plan.md'], 'live', 'live', 'Its worktree app-billing is open.')
+    : bundle('billing', 'eng-44-billing/', ['plan.md'], 'live', 'live', 'eng-44 landed, but its blocked worktree still carries the ticket.');
+  return [
+    login,
+    bundle('research', 'eng-42-research/', ['findings.md'], 'kept', 'reference', 'Research is reference material. It is never trashed.'),
+    bundle('search', 'eng-43-search/', ['handoff.md'], 'live', 'live', 'Worktree app-search carries eng-43.'),
+    billing,
+    bundle('ui', 'eng-45-ui/', ['handoff.md'], 'live', 'live', 'Worktree app-ui carries eng-45.'),
+    bundle('notes', 'scratch-notes/', ['ideas.md'], 'kept', 'unlinked', 'No ticket in its name or a Tickets: line, so nothing links it to landed work.'),
   ];
-  $('#evidence-list').innerHTML = evidence.map(([ok, text]) => `<li class="${ok ? '' : 'failed'}"><span aria-hidden="true">${ok ? '✓' : '×'}</span>${text}</li>`).join('');
-  let note = 'Work in progress. The worktree and its documents stay.';
-  let output = 'Waiting for the merge.';
-  if (state.stage > 0 && !removable) note = clean ? 'No landing proof. The worktree and its docs stay live.' : 'Merged, but dirty. The worktree and its docs stay live.';
-  if (settings.cleanup === 'report') note += ' Report mode: nothing is removed.';
-  if (settings.cleanup === 'keep') note = 'Cleanup is set to keep. Everything stays.';
-  if (state.stage > 0) {
-    const tag = 'codex/eng-42-login ~/worktrees/app-login';
-    const prunes = settings.cleanup !== 'keep';
-    const blocked = prunes && landed && !clean;
-    const trashedNow = docsMoved && !currentFlow(state.stage - 1).docsMoved;
-    const lines = [summaryLine({ cleaned: removed && state.stage === 1 ? 1 : 0, landed: landed ? 1 : 0, blocked: blocked ? 1 : 0, unverified: landed ? 0 : 1, docs: trashedNow ? 1 : 0 })];
-    if (settings.cleanup === 'report') lines.push(`sweep would: remove ${landed && clean ? 1 : 0} worktree${landed && clean ? '' : 's'}, delete 0 orphans, trash 0 bundles, purge 0 trash folders`);
-    if (blocked) lines.push(`blocked ${tag}: dirty`);
-    else if (prunes && landed && settings.cleanup === 'report') { lines.push(`landed ${tag}: would remove`); note = 'Report mode: the worktree stays on disk, keeping its docs live.'; }
-    else if (removed) {
-      if (state.stage === 1) lines.push(`cleaned ${tag} (local branch kept)`);
-      if (trashedNow) lines.push(`cleared docs/work/eng-42-login: trashed ${TRASH_STAMP}`);
-      if (purged) lines.push(`purged ${TRASH_STAMP}`);
-      note = 'The landed worktree is gone. Follow its docs in the next example.';
+}
+
+function sweepLines(stage) {
+  const mode = settings.cleanup;
+  const merged = stage >= 1;
+  const counts = { cleaned: 0, landed: 0, dependents: 0, blocked: 0, unverified: 0, docs: 0 };
+  const events = [];
+  if (!merged) counts.unverified = 4;
+  else {
+    counts.landed = stage === 1 ? 3 : 2;
+    counts.unverified = stage === 1 ? 2 : 3;
+    if (mode !== 'keep') {
+      counts.dependents = 1;
+      events.push(DEPENDENT);
+      if (mode === 'prune' && stage === 1) { counts.cleaned = 1; events.push(`cleaned ${LOGIN} (local branch kept)`); }
+      if (mode === 'report') events.push(`landed ${LOGIN}: would remove`);
+      events.push('blocked claude/eng-44-billing ~/worktrees/app-billing: dirty');
+      counts.blocked = 1;
+      if (stage === 1) { events.push('blocked claude/eng-46-docs ~/worktrees/app-docs: fresh'); counts.blocked = 2; }
     }
-    output = lines.join('\n');
   }
-  $('#worktree-note').textContent = note;
-  $('#worktree-output').textContent = output;
-  const steps = ['Merge & sweep →', 'Advance past grace →', 'Advance past retention →', 'Start over ↺'];
-  $('#run-worktree').textContent = steps[state.stage];
-  $('#worktree-announcement').textContent = state.stage > 0 ? `${note} ${output}` : '';
+  const trashed = trashStage();
+  if (merged && mode === 'prune') {
+    if (!settings.docs || stage < trashed) events.push('doc ephemeral docs/work/eng-42-login: tickets eng-42; 14.2 KB');
+    if (stage === trashed) { counts.docs = 1; events.push(`cleared docs/work/eng-42-login: trashed ${STAMPS[trashed]}`); }
+    if (trashed !== undefined && stage === 3) events.push(`purged ${STAMPS[trashed]}`);
+  }
+  const summary = `sweep: cleaned ${counts.cleaned}, landed ${counts.landed}, dependents ${counts.dependents}, blocked ${counts.blocked}, unverified ${counts.unverified}, orphans 0, docs ${counts.docs}`;
+  const would = mode === 'report' ? [`sweep would: remove ${merged ? '1 worktree' : '0 worktrees'}, delete 0 orphans, trash 0 bundles, purge 0 trash folders`] : [];
+  return [summary, ...would, ...events];
 }
 
-function summaryLine({ cleaned, landed, blocked, unverified, docs }) {
-  return `sweep: cleaned ${cleaned}, landed ${landed}, dependents 0, blocked ${blocked}, unverified ${unverified}, orphans 0, docs ${docs}`;
+function story(stage) {
+  const mode = settings.cleanup;
+  if (stage === 0) return 'Day 0. Six worktrees are open. Nothing has merged, so the sweep removes nothing.';
+  if (mode === 'keep') return `Day ${DAYS[stage]}. cleanup = "keep": the sweep counts what landed and changes nothing.`;
+  if (mode === 'report') return `Day ${DAYS[stage]}. cleanup = "report": the sweep prints what it would remove and leaves everything on disk. The eng-42 docs stay live because their worktree is still there.`;
+  const trashed = trashStage();
+  if (stage === 1) {
+    const docs = trashed === 1 ? 'With 0 days of grace, its docs go straight to the trash.' : settings.docs ? `Its docs start ${settings.grace} days of grace.` : 'No doc_strategy is saved, so its docs stay.';
+    return `Day 1. eng-42 was squash-merged and eng-44 merged. The sweep removes app-login and keeps its branch. app-billing is dirty and app-docs is brand new, so both stay. ${docs}`;
+  }
+  if (stage === 2) return trashed === 2 ? 'Day 8. Grace is over: the eng-42 docs move to the recoverable trash inside .git/.' : trashed === 1 ? 'Day 8. The eng-42 docs have been in the trash since day 1. app-docs now has its own commits.' : 'Day 8. No doc_strategy is saved, so the eng-42 docs are still listed and still in place.';
+  return trashed !== undefined ? 'Day 38. The trash is older than 30 days, so the sweep purges it. Everything else is unchanged.' : 'Day 38. Nothing new to clean: unfinished work, research and unlinked notes stay.';
 }
 
-function bundle(title, tag, files, extra = '') {
-  return `<div class="file-bundle ${extra}"><strong>${title}/</strong><small>${tag}</small>${files.length ? `<span class="file-list">${files.join('<br>')}</span>` : ''}</div>`;
+function changedIds(now, before) {
+  if (!before) return new Set();
+  const old = new Map(before.map(item => [item.id, item.chip + item.files]));
+  return new Set(now.filter(item => old.get(item.id) !== item.chip + item.files).map(item => item.id));
 }
 
-function renderDocs() {
-  const { landed, removed, graceElapsed, docsMoved: moved, purged } = currentFlow();
-  const markdownOnly = settings.scope === 'markdown';
-  const candidateFiles = markdownOnly ? ['handoff.md', 'plan.md'] : ['handoff.md', 'plan.md', 'run.log'];
-  let working = '';
-  if (!moved) working += bundle('eng-42-login', !removed ? 'live · worktree still present' : !settings.docs ? 'kept · no strategy' : `linked · inside ${settings.grace}-day grace`, ['handoff.md', 'plan.md', 'run.log']);
-  else if (markdownOnly) working += bundle('eng-42-login', 'non-Markdown file stays', ['run.log']);
-  working += bundle('eng-42-research', 'reference · kept', ['findings.md'], 'reference-bundle');
-  working += bundle('eng-43-search', 'live · another ticket still open', ['handoff.md'], 'reference-bundle');
-  $('#working-files').innerHTML = working;
-  $('#trash-files').innerHTML = moved && !purged ? bundle('eng-42-login', 'trashed · retained for 30 days', candidateFiles) : '<p class="empty-files">Nothing here.</p>';
-  $('#purged-files').innerHTML = purged ? bundle('eng-42-login', 'permanently deleted from trash', candidateFiles) : '<p class="empty-files">Nothing past retention.</p>';
-  let description;
-  if (settings.cleanup === 'keep') description = 'Cleanup is set to keep. Documents stay where they are; the sweep neither trashes nor purges them.';
-  else if (!settings.docs) description = 'No document strategy is saved. Nothing is trashed or purged, even after the ticket lands.';
-  else if (!removed) description = state.stage === 0 ? 'eng-42 is still in progress. Its worktree and work documents stay. Research and the open eng-43 handoff stay, too.' : settings.cleanup === 'report' ? 'Report mode would remove the landed worktree but leaves it on disk. That worktree still carries eng-42, so its documents stay live and are not offered for trash.' : !landed ? 'The worktree has no verified landing. Its eng-42 documents stay live with it, even as time passes.' : 'The dirty worktree still carries eng-42. Its documents stay live until that worktree can be removed; grace has not started.';
-  else if (!graceElapsed) description = `The sweep first sees eng-42 linked with no live work. Its ${settings.grace}-day grace period starts here. Nothing moves yet.`;
-  else if (purged) description = `After more than 30 days in trash, the next sweep purges ${candidateFiles.length} files. ${markdownOnly ? 'run.log stays in the doc root. ' : ''}Research and the live handoff are still kept.`;
-  else description = `${candidateFiles.length} files move to .git/lumberjack-trash after the grace period. ${markdownOnly ? 'Markdown scope leaves run.log in place. ' : 'Bundle scope includes run.log. '}They can be recovered until a later sweep purges trash past the 30-day retention.`;
-  $('#docs-stage-description').textContent = description;
-  $('#docs-scenario').textContent = ({ merged: 'Clean worktree', dirty: 'Dirty worktree', unverified: 'No landing proof' })[state.scenario];
+function rowHtml(item, changed, detail) {
+  return `<li class="sim-row kind-${item.kind}${changed ? ' changed' : ''}"><div class="row-main"><code class="row-name">${item.name}</code><span class="chip">${item.chip}</span>${changed ? '<span class="changed-mark">changed</span>' : ''}</div><div class="row-detail">${detail}</div><p class="row-reason">${item.reason}</p></li>`;
 }
 
-function renderConfig() {
-  const lines = [
-    '# Example repository settings',
-    'owners = ["claude", "codex"]',
-    'ticket_prefix = "eng-"',
-    'primary_branch = "main"',
-    'doc_roots = ["docs/work"]',
-    `cleanup = "${settings.cleanup}"`,
-    `stop_gate = ${settings.gate}`,
-  ];
-  if (settings.docs) lines.push('', '[doc_strategy]', `scope = "${settings.scope}"`, `grace_days = ${settings.grace}`, 'trash_days = 30');
-  else lines.push('', '# No doc_strategy saved: keep docs');
-  $('#config-code').textContent = lines.join('\n');
-  const mode = settings.cleanup === 'prune' ? 'Eligible worktrees are removed; eligible work documents move to trash.' : settings.cleanup === 'report' ? 'The sweep prints what it would do. Nothing is removed, trashed, or purged.' : 'Automatic cleanup keeps worktrees and documents in place.';
-  const docs = !settings.docs ? 'No saved document strategy: no doc trashing or purging.' : `${settings.scope === 'markdown' ? 'Only .md files move; run.log stays.' : 'Whole bundles move, including run.log.'} Grace: ${settings.grace} days. Trash retention: 30 days.`;
-  const gate = settings.gate ? 'Stop gate: a misnamed branch or off-branch primary checkout blocks the agent’s first Stop attempt.' : 'Stop gate is off. It does not block the agent’s Stop attempt.';
-  $('#config-effects').innerHTML = `<p>${mode}</p><p>${docs}</p><p>${gate}</p>`;
+function renderSimulation() {
+  const stage = state.stage;
+  const trees = worktrees(stage);
+  const docs = docBundles(stage);
+  const treeChanges = changedIds(trees, stage ? worktrees(stage - 1) : undefined);
+  const docChanges = changedIds(docs, stage ? docBundles(stage - 1) : undefined);
+  $('#tree-rows').innerHTML = trees.map(t => rowHtml(t, treeChanges.has(t.id), `<code>${t.branch}</code>`)).join('');
+  $('#doc-rows').innerHTML = docs.map(d => rowHtml(d, docChanges.has(d.id), `<code>${d.files.join('  ')}</code>`)).join('');
+  $('#trees-changed').textContent = treeChanges.size ? `· ${treeChanges.size} changed` : '';
+  $('#docs-changed').textContent = docChanges.size ? `· ${docChanges.size} changed` : '';
+  const lines = sweepLines(stage);
+  $('#sweep-log').innerHTML = lines.map(line => `<span class="log-${line.split(/[ :]/)[0]}">${line}</span>`).join('\n');
+  $('#log-title').textContent = `SESSION START, DAY ${DAYS[stage]}`;
+  $('#sim-story').textContent = story(stage);
+  $('#next-sweep').textContent = NEXT_LABELS[stage];
+  document.querySelectorAll('[data-stage]').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.stage) === stage)));
+  $('#settings-summary').textContent = `${settings.cleanup}${settings.docs ? ` · ${settings.grace}-day grace${settings.scope === 'markdown' ? ' · .md only' : ''}` : ' · no doc strategy'}`;
   $('#doc-scope').disabled = !settings.docs;
   $('#grace-days').disabled = !settings.docs;
-  const { removed, docsMoved, purged } = currentFlow();
-  let impact = 'Worktree and documents stay: the task is still in progress.';
-  if (state.stage > 0) {
-    if (!removed) impact = 'Worktree stays. Its documents stay live, so their grace period has not started.';
-    else if (!settings.docs) impact = 'Worktree removed. Documents stay because no document strategy is saved.';
-    else if (purged) impact = 'Worktree removed. Work documents purged after trash retention. Research stays.';
-    else if (docsMoved) impact = `Worktree removed. ${settings.scope === 'markdown' ? 'Two Markdown files move to trash; run.log stays.' : 'Three files move to trash.'} Research stays.`;
-    else impact = `Worktree removed. Work documents wait through their ${settings.grace}-day grace period.`;
-  }
-  $('#settings-impact').textContent = impact;
-  document.querySelectorAll('[data-open-settings]').forEach(button => { button.title = `Shared settings: ${settings.cleanup}; ${settings.docs ? settings.scope + ', ' + settings.grace + '-day grace' : 'no document strategy'}`; });
 }
 
-function render() {
-  const captions = ['Work in progress', 'First sweep after landing', `After ${settings.grace}-day grace`, 'Trash older than 30 days'];
-  document.querySelectorAll('[data-lifecycle]').forEach(slider => { slider.value = state.stage; slider.setAttribute('aria-valuetext', captions[state.stage]); });
-  document.querySelectorAll('[data-stage-caption]').forEach(caption => { caption.textContent = captions[state.stage]; });
-  renderWorktree(); renderDocs(); renderConfig();
+function showStage(stage) {
+  state.stage = stage;
+  renderSimulation();
+  $('#sim-announcement').textContent = story(stage);
 }
-$('#run-worktree').addEventListener('click', () => { state.stage = (state.stage + 1) % 4; render(); });
-document.querySelectorAll('[data-lifecycle]').forEach(slider => slider.addEventListener('input', event => { state.stage = Number(event.target.value); render(); }));
-const controls = { 'cleanup-mode': 'cleanup', 'docs-enabled': 'docs', 'doc-scope': 'scope', 'grace-days': 'grace', 'stop-gate-toggle': 'gate' };
+
+$('#next-sweep').addEventListener('click', () => showStage((state.stage + 1) % 4));
+document.querySelectorAll('[data-stage]').forEach(button => button.addEventListener('click', () => showStage(Number(button.dataset.stage))));
+
+const controls = { 'cleanup-mode': 'cleanup', 'docs-enabled': 'docs', 'doc-scope': 'scope', 'grace-days': 'grace' };
+const readControl = { cleanup: v => v, docs: v => v === 'yes', scope: v => v, grace: Number };
 Object.entries(controls).forEach(([id, key]) => {
-  $(`#${id}`).addEventListener('change', event => {
-    settings[key] = key === 'docs' ? event.target.value === 'yes' : key === 'grace' ? Number(event.target.value) : key === 'gate' ? event.target.checked : event.target.value;
-    render();
-  });
+  $(`#${id}`).addEventListener('change', event => { settings[key] = readControl[key](event.target.value); renderSimulation(); });
 });
 $('#reset-settings').addEventListener('click', () => {
-  Object.assign(settings, { cleanup: 'prune', docs: true, scope: 'bundle', grace: 7, gate: true });
-  $('#cleanup-mode').value = 'prune'; $('#docs-enabled').value = 'yes'; $('#doc-scope').value = 'bundle'; $('#grace-days').value = '7'; $('#stop-gate-toggle').checked = true;
-  render();
+  Object.assign(settings, DEFAULTS);
+  $('#cleanup-mode').value = 'prune'; $('#docs-enabled').value = 'yes'; $('#doc-scope').value = 'bundle'; $('#grace-days').value = '7';
+  renderSimulation();
 });
+$('#settings-form').addEventListener('submit', event => event.preventDefault());
 
-function wireTabs(selector, activate) {
+// The Stop gate example: the reasons are the gate's own lines for owners = ["claude", "codex"].
+const GATE_REASONS = {
+  named: [],
+  misnamed: ['gate: branch fix-login violates the lumberjack skill naming; rename it: git branch -m <owner>/eng-<n>-<slug>'],
+  primary: ['gate: the primary checkout is on codex/eng-42-login; move the work to a worktree and return the primary to main'],
+};
+const gate = { where: 'named' };
+function renderGate() {
+  const reasons = $('#gate-enabled').checked ? GATE_REASONS[gate.where] : [];
+  const text = reasons.length
+    ? `Stop attempt 1: blocked\n${reasons.join('\n')}\n\nStop attempt 2: allowed. The gate blocks once per turn, so the agent fixes it or tells you.`
+    : $('#gate-enabled').checked ? 'Stop attempt 1: allowed. The branch is well named and the work is in a worktree.'
+      : 'Stop attempt 1: allowed. stop_gate = false turns the gate off.';
+  $('#gate-output').textContent = text;
+  $('#gate-announcement').textContent = text.split('\n')[0];
+  document.querySelector('.gate-toggle code').textContent = `stop_gate = ${$('#gate-enabled').checked}`;
+}
+$('#gate-enabled').addEventListener('change', renderGate);
+
+function wireTabs(selector, activate, selectedAttribute = 'aria-selected') {
   const tabs = [...document.querySelectorAll(selector)];
   function select(tab, focus = false) {
-    tabs.forEach(item => { const active = item === tab; item.setAttribute('aria-selected', String(active)); item.tabIndex = active ? 0 : -1; });
+    tabs.forEach(item => { const active = item === tab; item.setAttribute(selectedAttribute, String(active)); item.tabIndex = active ? 0 : -1; });
     activate(tab);
     if (focus) tab.focus();
   }
@@ -151,18 +198,17 @@ function wireTabs(selector, activate) {
     tab.addEventListener('click', () => select(tab));
     tab.addEventListener('keydown', event => {
       let next;
-      if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
-      if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (index + 1) % tabs.length;
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (index - 1 + tabs.length) % tabs.length;
       if (event.key === 'Home') next = 0;
       if (event.key === 'End') next = tabs.length - 1;
       if (next !== undefined) { event.preventDefault(); select(tabs[next], true); }
     });
   });
 }
-wireTabs('[data-scenario]', tab => {
-  state.scenario = tab.dataset.scenario;
-  $('#worktree-example').setAttribute('aria-labelledby', tab.id);
-  render();
+wireTabs('[data-gate]', tab => { gate.where = tab.dataset.gate; renderGate(); }, 'aria-checked');
+wireTabs('.view-switch [role="tab"]', selected => {
+  document.querySelector('.sim-board').dataset.show = selected.id === 'show-docs' ? 'docs' : 'trees';
 });
 wireTabs('.install-tabs [role="tab"]', selected => {
   document.querySelectorAll('.install-tabs [role="tab"]').forEach(tab => { document.getElementById(tab.getAttribute('aria-controls')).hidden = tab !== selected; });
@@ -185,17 +231,15 @@ document.querySelectorAll('.copy-button').forEach(button => {
     window.setTimeout(() => { button.textContent = label; }, 2000);
   });
 });
-$('#settings-form').addEventListener('submit', event => event.preventDefault());
 
 const popover = $('#example-settings');
 const nativePopover = Object.hasOwn(HTMLElement.prototype, 'popover');
-let settingsTrigger;
 function settingsOpen() {
   return nativePopover ? popover.matches(':popover-open') : !popover.hidden;
 }
 function positionSettings() {
-  if (!settingsTrigger || !settingsOpen()) return;
-  const anchor = settingsTrigger.getBoundingClientRect();
+  if (!settingsOpen()) return;
+  const anchor = $('#open-settings').getBoundingClientRect();
   const viewportWidth = document.documentElement.clientWidth;
   popover.style.maxWidth = `${viewportWidth - 24}px`;
   const width = popover.offsetWidth;
@@ -203,11 +247,9 @@ function positionSettings() {
   popover.style.left = `${Math.max(12, Math.min(anchor.right - width, viewportWidth - width - 12))}px`;
   popover.style.top = `${Math.max(12, Math.min(anchor.bottom + 8, window.innerHeight - height - 12))}px`;
 }
-document.querySelectorAll('[data-open-settings]').forEach(button => button.addEventListener('click', () => {
-  settingsTrigger = button;
-  $('#settings-context').textContent = button.dataset.openSettings === 'documents' ? 'DOCUMENTS + WORKTREES' : 'WORKTREES + DOCUMENTS';
-}));
 popover.addEventListener('toggle', event => { if (event.newState === 'open') positionSettings(); });
+window.addEventListener('resize', positionSettings);
+new ResizeObserver(positionSettings).observe(popover);
 // Browsers without the Popover API (Safari before 17, Firefox before 125) get the same open and close.
 if (!nativePopover) {
   popover.hidden = true;
@@ -217,6 +259,6 @@ if (!nativePopover) {
   }));
   document.addEventListener('keydown', event => { if (event.key === 'Escape') popover.hidden = true; });
 }
-window.addEventListener('resize', positionSettings);
-new ResizeObserver(positionSettings).observe(popover);
-render();
+
+renderSimulation();
+renderGate();

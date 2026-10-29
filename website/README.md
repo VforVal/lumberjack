@@ -14,30 +14,24 @@ From this directory:
 python -m http.server 8765 --directory dist --bind 127.0.0.1
 ```
 
-Open http://127.0.0.1:8765. The worktree scenarios, document lifecycle, and setup
-controls are illustrative simulations. They do not access or change the
-visitor's repository. Cleanup mode, a saved document strategy, scope, and grace
-days update the worktree and document examples. The Stop gate toggle updates
-the configuration and its explanation. No settings persist between reloads.
+Open http://127.0.0.1:8765. The examples are illustrative simulations. They do not
+access or change the visitor's repository, and no settings persist between reloads.
 
-## Shared examples
+## The examples
 
-The worktree and document diagrams share one lifecycle and task (`eng-42`).
-Moving either slider updates both examples. After landing, an eligible worktree
-is removed; its work documents wait through grace, move to trash, and are
-purged after retention. Dirty and unverified worktrees keep their docs live.
-Report and keep modes also leave the worktree present and its docs live.
+**The sweep** is one simulated repository: six worktrees and six doc bundles, stepped
+through four session starts (day 0, 1, 8 and 38). `script.js` builds each day's rows and
+log from the settings (`cleanup`, `doc_strategy`, `scope`, `grace_days`), marks every row
+whose state changed since the previous day, and prints the sweep's real line formats
+(`sweep: cleaned …`, `dependent …`, `cleaned …`, `blocked …: dirty`, `blocked …: fresh`,
+`landed …: would remove`, `doc …`, `cleared …`, `purged …`). On phones a switch shows
+worktrees or documents. **The Stop gate** example quotes the gate's two reasons. Keep
+both in step with `scripts/sweep_worktrees.py`; the setup panel quotes
+`scripts/setup_lumberjack.py`.
 
-The worktree example prints the sweep's real line formats (`sweep: cleaned …`,
-`cleaned …`, `blocked …: dirty`, `landed …: would remove`, `cleared …`, `purged …`)
-and the Stop gate section quotes the gate's two reasons. Keep both in step with
-`scripts/sweep_worktrees.py`.
-
-The Example settings buttons open the same nonmodal popover beside either
-example. Settings take effect immediately without changing the timeline. The
-popover can be dismissed with Done, Escape, the close button, or a click outside.
-Browsers without the Popover API get the same open and close from `script.js`.
-The config block is a view of the same shared settings.
+The Settings button opens a nonmodal popover, dismissed with Done, Escape, the close
+button, or a click outside. Browsers without the Popover API get the same open and close
+from `script.js`. Without JavaScript the sweep shows a note instead of rows.
 
 `dist/assets/forest.svg` is a static illustration using the logo's outlined
 shapes and colors: seven bare trees and three green pines.
@@ -57,8 +51,8 @@ effect at a domain root, so it matters once a custom domain is used.
 
 All local asset links are relative so the site works under `/lumberjack/`.
 The `.nojekyll` file also supports hosts serving these files without Jekyll.
-The page sets a Content-Security-Policy meta tag (same-origin scripts, styles, fonts
-and images only): keep JavaScript and CSS in their files, never inline.
+The page sets no Content-Security-Policy: a strict one stopped the examples in previews
+that serve or inject scripts from another origin.
 
 `.openai/hosting.json` binds this source to the Codex Sites preview project
 (https://lumberjack-plugin.rainylarch14.chatgpt.site/). Keep its project ID for
@@ -79,9 +73,7 @@ gate change. The version appears twice in `index.html` (hero footnote and footer
 bump it with `VERSION`.
 
 Validate with `node --check dist/script.js` and check desktop and mobile layouts;
-merged, dirty, and unverified worktree scenarios; report and keep modes; all
-document lifecycle stages; Markdown-only scope; zero grace; an unsaved document
-strategy; the Stop gate toggle; installation tabs and each copy button; settings
-popover opening, dismissal, keyboard behavior, and synchronization from both
-examples; the page with JavaScript off (it shows the first stage); and an axe run
-with no violations. Keep text at 12 px or larger.
+all four days under prune, report and keep; Markdown-only scope; zero grace; an
+unsaved document strategy; the phone switch; each Stop gate case and the toggle;
+installation tabs and each copy button; settings popover opening, dismissal and
+keyboard behavior; and an axe run with no violations. Keep text at 12 px or larger.
