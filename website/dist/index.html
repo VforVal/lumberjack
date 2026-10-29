@@ -210,7 +210,7 @@ trash_days = 30</code></pre></li>
   </main>
   <div id="example-settings" class="settings-popover" popover="auto" role="dialog" aria-labelledby="settings-title" aria-describedby="settings-help">
     <div class="settings-popover-header"><div><p class="eyebrow">EXAMPLE REPOSITORY</p><h2 id="settings-title">Settings</h2></div><button type="button" class="close-settings" popovertarget="example-settings" popovertargetaction="hide" aria-label="Close settings">×</button></div>
-    <p id="settings-help">These are keys in <code>.lumberjack.toml</code>. Changes replay the whole run; you stay on the day you are viewing.</p>
+    <p id="settings-help">These are keys in <code>.lumberjack.toml</code>. Changes replay all seven weeks. The board marks what changed on the day you are viewing.</p>
     <form class="settings-form" id="settings-form">
       <div class="setting-row"><label for="cleanup-mode"><code>cleanup</code><small>What session start does with landed work.</small></label><select id="cleanup-mode"><option value="prune">prune — clean up</option><option value="report">report — only list it</option><option value="keep">keep — do nothing</option></select></div>
       <div class="setting-row"><label for="docs-enabled"><code>doc_strategy</code><small>Without one, docs never move.</small></label><select id="docs-enabled"><option value="yes">saved</option><option value="no">not saved</option></select></div>
@@ -218,6 +218,7 @@ trash_days = 30</code></pre></li>
       <div class="setting-row"><label for="grace-days"><code>grace_days</code><small>Days a landed ticket's docs wait.</small></label><select id="grace-days"><option value="7">7</option><option value="3">3</option><option value="0">0</option></select></div>
       <button type="button" class="text-link" id="reset-settings">Reset settings ↺</button>
     </form>
+    <div class="settings-impact" aria-live="polite"><p class="impact-title">BY DAY 47 WITH THESE SETTINGS</p><dl id="impact"></dl></div>
     <button type="button" class="button button-green settings-done" popovertarget="example-settings" popovertargetaction="hide">Done</button>
   </div>
 

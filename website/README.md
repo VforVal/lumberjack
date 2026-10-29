@@ -37,7 +37,9 @@ motion. On phones a switch shows worktrees or documents. Keep it in step with
 landing, block reasons, undo, preview, configuration) and the Stop gate in one note; keep
 their claims in step with the README's cleanup rule and configuration table.
 
-The Settings button opens a nonmodal popover, dismissed with Done, Escape, the close
+The Settings button opens a nonmodal popover that also summarizes day 47 under the current
+settings, striking through the old values after a change; the board marks the tiles that
+change on the day in view. The popover is dismissed with Done, Escape, the close
 button, or a click outside. Browsers without the Popover API get the same open and close
 from `script.js`. Without JavaScript the sweep shows a note instead of the board.
 

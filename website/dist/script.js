@@ -369,15 +369,16 @@ function docHtml(d, changed) {
     + `<svg class="doc-art" aria-hidden="true"><use href="#i-doc"/></svg><span class="doc-name">${d.name}</span><span class="chip">${d.label}</span></button></li>`;
 }
 
-function renderBoard(animate) {
+// compared: the frame to mark changes against; the previous day, or this day under the old settings.
+function renderBoard(animate, compared) {
   const frame = frames[state.frame];
-  const previous = frames[state.frame - 1];
+  const previous = compared;
   const treeChanges = changedKeys(frame.trees, previous && previous.trees);
   const docs = flatDocs(frame.docs);
   const docChanges = changedKeys(docs, previous && flatDocs(previous.docs));
   // A tree felled this sweep falls as whatever it looked like before: bare if merged earlier, a pine if it merged since.
-  const looked = new Map((previous ? previous.trees : []).map(t => [t.key, ['pine', 'bare', 'sapling'].includes(t.icon) ? t.icon : 'bare']));
-  $('#tree-rows').innerHTML = frame.trees.map(t => treeHtml(t, treeChanges.has(t.key), animate && t.icon === 'felled' && motion() && (looked.get(t.key) || 'bare'))).join('');
+  const looked = new Map((previous ? previous.trees : []).filter(t => ['pine', 'bare', 'sapling'].includes(t.icon)).map(t => [t.key, t.icon]));
+  $('#tree-rows').innerHTML = frame.trees.map(t => treeHtml(t, treeChanges.has(t.key), animate && t.icon === 'felled' && motion() && looked.get(t.key))).join('');
   const lanes = $('#docs-column');
   const before = new Map([...lanes.querySelectorAll('[data-key]')].map(el => [el.dataset.key, el.getBoundingClientRect()]));
   $('#lane-work').innerHTML = frame.docs.work.map(d => docHtml(d, docChanges.has(d.key))).join('');
@@ -413,9 +414,9 @@ const COUNTERS = [
   ['docs', s => s.docs, s => s.docsWithout, String],
 ];
 
-function renderCounters(animate) {
+function renderCounters(animate, compared) {
   const now = frames[state.frame].stats;
-  const prev = state.frame ? frames[state.frame - 1].stats : now;
+  const prev = compared ? compared.stats : now;
   for (const [name, value, without, format] of COUNTERS) {
     const change = value(now) - value(prev);
     tween($(`#stat-${name}`), value(prev), value(now), format, animate);
@@ -467,6 +468,25 @@ function renderChart() {
   svg.setAttribute('aria-label', `Disk used by worktrees ${i ? `on day ${frames[i].day}` : 'before Lumberjack'}: ${withGb[i].toFixed(1)} GB with Lumberjack, ${withoutGb[i].toFixed(1)} GB without.`);
 }
 
+// The settings popover's own summary of day 47, so a change shows while the board is covered.
+const IMPACT = [
+  ['Worktrees on disk', f => f.stats.trees, f => f.stats.treesWithout, String],
+  ['Disk space', f => f.stats.mb / 1024, f => f.stats.mbWithout / 1024, v => `${v.toFixed(1)} GB`],
+  ['Bundles in docs/work', f => f.stats.docs, f => f.stats.docsWithout, String],
+  ['In the trash', f => f.docs.trash.reduce((sum, t) => sum + t.tiles.length, 0), undefined, String],
+  ['Purged', f => f.docs.purged.length, undefined, String],
+];
+
+function renderImpact(old) {
+  const last = frames.at(-1);
+  $('#impact').innerHTML = IMPACT.map(([label, value, without, format]) => {
+    const now = format(value(last));
+    const was = old && format(value(old));
+    const changed = was !== undefined && was !== now;
+    return `<div${changed ? ' class="changed-row"' : ''}><dt>${label}</dt><dd>${changed ? `<s>${was}</s> ` : ''}<b>${now}</b>${without ? `<small>without: ${format(without(last))}</small>` : ''}</dd></div>`;
+  }).join('');
+}
+
 function renderDetail() {
   const frame = frames[state.frame];
   const docs = flatDocs(frame.docs);
@@ -478,11 +498,12 @@ function renderDetail() {
   box.innerHTML = `<b>${item.name}</b> <span class="chip-inline">${item.label}</span> ${extra}. ${item.detail}`;
 }
 
-function renderSimulation(animate = false) {
+function renderSimulation(animate = false, compared = frames[state.frame - 1]) {
   const frame = frames[state.frame];
   const last = frames.length - 1;
-  renderBoard(animate);
-  renderCounters(animate);
+  renderBoard(animate, compared);
+  renderCounters(animate, compared);
+  renderImpact();
   renderChart();
   renderDetail();
   $('#sweep-log').innerHTML = frame.lines.map(line => `<span class="log-${line.startsWith('$') ? 'cmd' : line.split(/[ :]/)[0]}">${line}</span>`).join('\n');
@@ -545,8 +566,10 @@ new IntersectionObserver((entries, observer) => {
 const controls = { 'cleanup-mode': 'cleanup', 'docs-enabled': 'docs', 'doc-scope': 'scope', 'grace-days': 'grace' };
 const readControl = { cleanup: v => v, docs: v => v === 'yes', scope: v => v, grace: Number };
 function applySettings() {
+  const before = frames;
   frames = simulate();
-  renderSimulation();
+  renderSimulation(true, before[state.frame]);
+  renderImpact(before.at(-1));
 }
 Object.entries(controls).forEach(([id, key]) => {
   $(`#${id}`).addEventListener('change', event => { settings[key] = readControl[key](event.target.value); applySettings(); });
