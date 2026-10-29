@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Website: the product site now lives in `website/` and deploys to GitHub Pages
+  (https://vforval.github.io/lumberjack/) through `.github/workflows/site.yml`.
 - README: new "What it runs and sends" section listing every command, network call and file
   change, for the Claude plugin directory review. The logo uses Markdown image syntax.
 

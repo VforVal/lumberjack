@@ -20,7 +20,8 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
   `--hook`, which reads the hook input on stdin and dispatches on `hook_event_name`.
 - `.claude-plugin/`, `.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json` -
   Claude Code and Codex manifests and marketplace listings.
-- `VERSION` - keep it equal to both `plugin.json` files and `pyproject.toml`.
+- `VERSION` - keep it equal to both `plugin.json` files, `pyproject.toml` and the two
+  version mentions in `website/dist/index.html`.
 - `README.md` - the stranger-facing guide; its config table, tier and reason names, summary
   line and setup output lines must match the scripts verbatim.
 - `CHANGELOG.md` - one section per released `VERSION`.
@@ -28,6 +29,9 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
   other version files match, then tags `v<VERSION>` and publishes a GitHub release whose notes
   are the `## <VERSION>` section of `CHANGELOG.md`. A release PR only bumps the files and
   renames `## Unreleased`; never tag by hand.
+- `website/` - the static product site (`website/dist`, no build step), deployed to GitHub Pages
+  by `.github/workflows/site.yml`; see `website/README.md`. Its demo quotes the sweep's and
+  gate's output lines and the install commands verbatim, and shows the version twice.
 - `GLOSSARY.md` - the sweep's vocabulary (integrated, landed, probable, unverified, dependent, fresh, locked, cleanup).
 - `SECURITY.md` - private vulnerability reporting and what counts as a security issue.
 - `tests/` - pytest suite, one module per area: `test_sweep_worktrees.py`, `test_config.py`,
