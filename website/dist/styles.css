@@ -203,14 +203,19 @@ noscript .sim-story { display: block; padding: 16px 20px; }
 .log-cleared, .log-purged { color: #ecc79e; }
 .log-doc { color: #cdd5bd; }
 .log-cmd { color: #c6c9ab; }
-.gate-demo { min-width: 0; background: var(--brown); color: var(--paper); padding: 24px 26px; }
-.gate-demo .panel-caption { color: #d7c5a6; border-bottom: 1px solid #806a53; padding-bottom: 14px; }
-.gate-cases { display: grid; gap: 8px; margin: 16px 0 12px; }
-.gate-cases button { text-align: left; padding: 10px 12px; border: 1px solid #8a735a; background: #4b382b; color: var(--paper); font-size: 14px; }
-.gate-cases button[aria-checked='true'] { background: var(--paper); color: var(--ink); border-color: var(--paper); }
-.gate-toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
-.gate-demo pre { margin-top: 14px; padding-top: 14px; border-top: 1px solid #806a53; font-size: 13px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
-.gate-demo, .sweep-log { --focus: var(--focus-on-dark); }
+.sweep-log { --focus: var(--focus-on-dark); }
+.features { border-bottom: 1px solid var(--line); }
+.feature-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.feature { min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 22px 22px 20px; background: var(--light-paper); border: 1px solid #c9b89a; border-top: 4px solid var(--green); }
+.feature:nth-child(3n+2) { border-top-color: var(--rust); }
+.feature:nth-child(3n) { border-top-color: var(--brown); }
+.feature-label { font: 12px/1.5 'Special Elite', var(--mono); letter-spacing: 1px; color: var(--muted); }
+.feature h3 { font-size: 26px; }
+.feature p:not(.feature-label) { font-size: 15px; color: var(--muted); line-height: 1.65; }
+.feature pre { margin-top: auto; padding: 10px 12px; background: #22342a; color: #e1dec2; font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.feature p code, .feature-note code { white-space: nowrap; }
+.feature-note { margin-top: 24px; max-width: 850px; font-size: 15px; color: var(--muted); line-height: 1.7; }
+.feature-note b { color: var(--ink); }
 .setting-row { display: flex; justify-content: space-between; align-items: center; gap: 25px; padding: 21px 0; border-bottom: 1px solid #c5b69b; }
 .setting-row label { font-size: 15px; font-weight: 600; }
 .setting-row small { display: block; font-size: 13px; line-height: 1.6; color: #7b6b51; font-weight: 400; margin-top: 5px; max-width: 230px; }
@@ -218,20 +223,8 @@ noscript .sim-story { display: block; padding: 16px 20px; }
 .setting-row select:disabled { opacity: .5; cursor: default; }
 input[type='checkbox'] { accent-color: var(--green); width: 18px; height: 18px; margin-right: 5px; }
 .settings-form>.text-link { margin-top: 18px; font-size: 13px; }
-.code-panel { min-width: 0; background: var(--brown); color: var(--paper); padding: 26px 30px; }
-.code-panel .panel-caption { color: #d7c5a6; border-bottom: 1px solid #806a53; padding-bottom: 16px; }
-.code-panel pre { padding: 22px 0 4px; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.plain-list { margin: 16px 0 20px; padding-left: 20px; max-width: 420px; color: var(--muted); }
-.plain-list li + li { margin-top: 6px; }
-.split>div>p:not(.eyebrow) + p { margin-top: 16px; }
-.stop-gate { border-bottom: 1px solid var(--line); }
-.split .text-link { margin-top: 16px; }
-.split p code, .plain-list code, .reference code { white-space: nowrap; }
 .settings-button { display: inline-flex; align-items: center; justify-content: center; gap: 13px; padding: 9px 13px; border: 1px solid #a29172; background: #f2eadb; color: #5c4c35; font-size: 14px; white-space: nowrap; }
 .settings-button:hover { background: #e4d6bf; }
-.split { display: grid; grid-template-columns: 1fr 1fr; gap: 8vw; align-items: start; }
-.split h2 { margin-bottom: 25px; }
-.split>div>p:not(.eyebrow) { max-width: 380px; font-size: 16px; color: var(--muted); }
 .settings-popover { position: fixed; margin: 0; inset: auto; width: min(385px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; overscroll-behavior: contain; padding: 20px; border: 1px solid #917e60; background: var(--light-paper); color: var(--ink); box-shadow: 0 8px 35px #30281f30; }
 .settings-popover-header { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
 .settings-popover-header h2 { font-size: 31px; letter-spacing: -.8px; line-height: 1.1; }
@@ -295,9 +288,8 @@ input[type='checkbox'] { accent-color: var(--green); width: 18px; height: 18px; 
   .section-heading>p { max-width: 300px; font-size: 15px; }
   .setting-row { gap: 17px; }
   .setting-row select { width: 145px; font-size: 13px; }
-  .code-panel { padding: 25px 22px; }
-  .code-panel pre { font-size: 13px; }
   .install { gap: 5vw; }
+  .feature-grid { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 760px) {
   .view-switch { display: flex; border-bottom: 1px solid var(--line); }
@@ -318,7 +310,6 @@ input[type='checkbox'] { accent-color: var(--green); width: 18px; height: 18px; 
   .plot { display: none; }
   .lane + .lane { border-left: 0; border-top: 1px solid #e3d9c6; }
   .doc-list, .trash-folder ul, .lane-trash .doc-list, .lane-purged .doc-list { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
-  .gate-demo { padding: 20px 16px; }
   .header { padding: 15px 22px; }
   .wordmark { font-size: 31px; gap: 7px; }
   .header .wordmark img { width: 39px; height: 39px; }
@@ -344,14 +335,13 @@ input[type='checkbox'] { accent-color: var(--green); width: 18px; height: 18px; 
   .section-heading>p { max-width: 500px; margin-top: 20px; font-size: 15px; }
   .panel-caption { font-size: 12px; }
   .under-note { font-size: 13px; }
-  .split { grid-template-columns: 1fr; gap: 28px; }
   .settings-button { padding: 8px 10px; font-size: 13px; gap: 8px; }
   .setting-row { padding: 19px 0; gap: 16px; }
   .setting-row label { font-size: 14px; }
   .setting-row small { font-size: 12px; }
   .setting-row select { max-width: 48%; width: 146px; font-size: 13px; padding: 8px; }
-  .code-panel { padding: 24px 20px; }
-        .install { grid-template-columns: 1fr; gap: 28px; }
+  .feature-grid { grid-template-columns: 1fr; }
+  .install { grid-template-columns: 1fr; gap: 28px; }
   .install h2 { font-size: 48px; }
   .install-copy>p:not(.eyebrow) { font-size: 15px; }
   .requirements { margin: 21px 0 17px; }

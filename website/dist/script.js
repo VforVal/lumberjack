@@ -559,29 +559,10 @@ $('#reset-settings').addEventListener('click', () => {
 $('#settings-form').addEventListener('submit', event => event.preventDefault());
 
 
-// The Stop gate example: the reasons are the gate's own lines for owners = ["claude", "codex"].
-const GATE_REASONS = {
-  named: [],
-  misnamed: ['gate: branch fix-login violates the lumberjack skill naming; rename it: git branch -m <owner>/eng-<n>-<slug>'],
-  primary: ['gate: the primary checkout is on codex/eng-42-login; move the work to a worktree and return the primary to main'],
-};
-const gate = { where: 'named' };
-function renderGate() {
-  const reasons = $('#gate-enabled').checked ? GATE_REASONS[gate.where] : [];
-  const text = reasons.length
-    ? `Stop attempt 1: blocked\n${reasons.join('\n')}\n\nStop attempt 2: allowed. The gate blocks once per turn, so the agent fixes it or tells you.`
-    : $('#gate-enabled').checked ? 'Stop attempt 1: allowed. The branch is well named and the work is in a worktree.'
-      : 'Stop attempt 1: allowed. stop_gate = false turns the gate off.';
-  $('#gate-output').textContent = text;
-  $('#gate-announcement').textContent = text.split('\n')[0];
-  document.querySelector('.gate-toggle code').textContent = `stop_gate = ${$('#gate-enabled').checked}`;
-}
-$('#gate-enabled').addEventListener('change', renderGate);
-
-function wireTabs(selector, activate, selectedAttribute = 'aria-selected') {
+function wireTabs(selector, activate) {
   const tabs = [...document.querySelectorAll(selector)];
   function select(tab, focus = false) {
-    tabs.forEach(item => { const active = item === tab; item.setAttribute(selectedAttribute, String(active)); item.tabIndex = active ? 0 : -1; });
+    tabs.forEach(item => { const active = item === tab; item.setAttribute('aria-selected', String(active)); item.tabIndex = active ? 0 : -1; });
     activate(tab);
     if (focus) tab.focus();
   }
@@ -597,7 +578,6 @@ function wireTabs(selector, activate, selectedAttribute = 'aria-selected') {
     });
   });
 }
-wireTabs('[data-gate]', tab => { gate.where = tab.dataset.gate; renderGate(); }, 'aria-checked');
 wireTabs('.view-switch [role="tab"]', selected => {
   document.querySelector('.sim-board').dataset.show = selected.id === 'show-docs' ? 'docs' : 'trees';
 });
@@ -652,4 +632,3 @@ if (!nativePopover) {
 }
 
 renderSimulation();
-renderGate();

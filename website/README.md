@@ -32,9 +32,10 @@ prints the sweep's real line formats (`sweep: …`, `sweep would: …`, `depende
 three lanes (docs/work, trash, purged), counters and a disk chart against "without
 Lumberjack". Play advances one sweep every 2.6 seconds and starts once when the example
 first scrolls into view; felling, lane moves and counter tweens are off under reduced
-motion. On phones a switch shows worktrees or documents. **The Stop gate** example quotes
-the gate's two reasons. Keep both in step with `scripts/sweep_worktrees.py`; the setup
-panel quotes `scripts/setup_lumberjack.py`.
+motion. On phones a switch shows worktrees or documents. Keep it in step with
+`scripts/sweep_worktrees.py`. **Leave it on** lists six features (automatic runs, proof of
+landing, block reasons, undo, preview, configuration) and the Stop gate in one note; keep
+their claims in step with the README's cleanup rule and configuration table.
 
 The Settings button opens a nonmodal popover, dismissed with Done, Escape, the close
 button, or a click outside. Browsers without the Popover API get the same open and close
@@ -81,6 +82,6 @@ bump it with `VERSION`.
 
 Validate with `node --check dist/script.js` and check desktop and mobile layouts;
 every frame under prune, report and keep; Markdown-only scope; 7, 3 and 0 days of
-grace; an unsaved document strategy; Play, the slider and tile details; the phone switch; each Stop gate case and the toggle;
+grace; an unsaved document strategy; Play, the slider and tile details; the phone switch;
 installation tabs and each copy button; settings popover opening, dismissal and
 keyboard behavior; and an axe run with no violations. Keep text at 12 px or larger.
