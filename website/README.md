@@ -19,19 +19,26 @@ access or change the visitor's repository, and no settings persist between reloa
 
 ## The examples
 
-**The sweep** is one simulated repository: six worktrees and six doc bundles, stepped
-through four session starts (day 0, 1, 8 and 38). `script.js` builds each day's rows and
-log from the settings (`cleanup`, `doc_strategy`, `scope`, `grace_days`), marks every row
-whose state changed since the previous day, and prints the sweep's real line formats
-(`sweep: cleaned …`, `dependent …`, `cleaned …`, `blocked …: dirty`, `blocked …: fresh`,
-`landed …: would remove`, `doc …`, `cleared …`, `purged …`). On phones a switch shows
-worktrees or documents. **The Stop gate** example quotes the gate's two reasons. Keep
-both in step with `scripts/sweep_worktrees.py`; the setup panel quotes
-`scripts/setup_lumberjack.py`.
+**The sweep** is one simulated, squash-merging repository over seven weeks: 17 worktrees
+(11 already merged, one dirty, one prototype), 3 leftover `node_modules` folders and 22 doc
+bundles on install day, with a new worktree and new merges between session starts (day 0,
+2, 5, 9, 16, 30 and 47). `script.js` replays the whole run from the settings (`cleanup`,
+`doc_strategy`, `scope`, `grace_days`) with the sweep's rules: fresh and dirty blocks,
+kept branches counted as landed, docs staying live until the sweep after their worktree
+goes, grace counted from the first sweep that sees them linked, and a 30-day purge. It
+prints the sweep's real line formats (`sweep: …`, `sweep would: …`, `dependent …`,
+`cleaned …`, `cleaned orphan …`, `blocked …`, `landed …: would remove`, `orphan …`,
+`doc …`, `cleared …`, `purged …`). The board shows the worktrees as a forest, the docs in
+three lanes (docs/work, trash, purged), counters and a disk chart against "without
+Lumberjack". Play advances one sweep every 2.6 seconds and starts once when the example
+first scrolls into view; felling, lane moves and counter tweens are off under reduced
+motion. On phones a switch shows worktrees or documents. **The Stop gate** example quotes
+the gate's two reasons. Keep both in step with `scripts/sweep_worktrees.py`; the setup
+panel quotes `scripts/setup_lumberjack.py`.
 
 The Settings button opens a nonmodal popover, dismissed with Done, Escape, the close
 button, or a click outside. Browsers without the Popover API get the same open and close
-from `script.js`. Without JavaScript the sweep shows a note instead of rows.
+from `script.js`. Without JavaScript the sweep shows a note instead of the board.
 
 `dist/assets/forest.svg` is a static illustration using the logo's outlined
 shapes and colors: seven bare trees and three green pines.
@@ -73,7 +80,7 @@ gate change. The version appears twice in `index.html` (hero footnote and footer
 bump it with `VERSION`.
 
 Validate with `node --check dist/script.js` and check desktop and mobile layouts;
-all four days under prune, report and keep; Markdown-only scope; zero grace; an
-unsaved document strategy; the phone switch; each Stop gate case and the toggle;
+every frame under prune, report and keep; Markdown-only scope; 7, 3 and 0 days of
+grace; an unsaved document strategy; Play, the slider and tile details; the phone switch; each Stop gate case and the toggle;
 installation tabs and each copy button; settings popover opening, dismissal and
 keyboard behavior; and an axe run with no violations. Keep text at 12 px or larger.

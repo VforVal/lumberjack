@@ -26,6 +26,18 @@
   <script src="./script.js" defer></script>
 </head>
 <body>
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-pine" viewBox="0 0 64 64"><path d="M29 48h6v12h-6z" fill="#805738" stroke="#30281f" stroke-width="2" stroke-linejoin="round"/><path d="M32 4L43 20H37L49 35H41L53 50H11L23 35H15L27 20H21Z" fill="#546e43" stroke="#30281f" stroke-width="2.2" stroke-linejoin="round"/><path d="M31 15l-4 6M34 28l6 7M29 37l-6 8" stroke="#8a9b67" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-bare" viewBox="0 0 64 64"><g stroke="#30281f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M27 60C29 46 29 30 30 11L32 6L34 11C35 30 35 46 38 60Z" fill="#977353"/><path d="M30 35L19 27L15 18M20 28L11 26M30 25L23 16M34 21L42 12L45 5M34 31L45 23L51 14M45 23L54 23M34 44L42 37" fill="none"/></g></symbol>
+    <symbol id="i-stump" viewBox="0 0 64 64"><g stroke="#30281f" stroke-width="2.2" stroke-linejoin="round"><path d="M21 60L23 47H41L43 60Z" fill="#977353"/><ellipse cx="32" cy="47" rx="9" ry="3.2" fill="#d0ab7d"/></g><ellipse cx="32" cy="47" rx="4.5" ry="1.5" fill="none" stroke="#a5825c" stroke-width="1.2"/></symbol>
+    <symbol id="i-felled" viewBox="0 0 64 64"><g stroke="#30281f" stroke-width="2.2" stroke-linejoin="round"><path d="M21 60L23 47H41L43 60Z" fill="#977353"/><ellipse cx="32" cy="47" rx="9" ry="3.2" fill="#d0ab7d"/><path d="M34 46L47 27" stroke="#5a4435" stroke-width="3.2" stroke-linecap="round"/><path d="M43 24L51 19L55 26L47 30Z" fill="#c4c8c9"/></g><path d="M12 58l-4-3M52 58l5-3M14 52l-5-1" stroke="#95593f" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-sapling" viewBox="0 0 64 64"><path d="M32 60V41" stroke="#5a4435" stroke-width="2.6" stroke-linecap="round"/><path d="M32 46C24 46 20 40 20 33C27 33 32 38 32 46ZM32 41C40 41 44 35 44 27C36 28 32 33 32 41Z" fill="#7f9a5a" stroke="#30281f" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-cabin" viewBox="0 0 64 64"><g stroke="#30281f" stroke-width="2.2" stroke-linejoin="round"><path d="M14 60V37H50V60Z" fill="#977353"/><path d="M9 39L32 20L55 39Z" fill="#95593f"/><path d="M28 60V47H36V60" fill="#5a4435"/><path d="M40 43h6v6h-6z" fill="#e7c97a"/></g><path d="M15 45H27M15 53H27M37 54H49" stroke="#6e5340" stroke-width="1.4"/></symbol>
+    <symbol id="i-debris" viewBox="0 0 64 64"><g stroke="#30281f" stroke-width="2" stroke-linejoin="round"><path d="M10 60L17 50L27 54L36 45L47 51L54 60Z" fill="#b39a74"/><circle cx="21" cy="50" r="4" fill="#977353"/><circle cx="45" cy="49" r="3.5" fill="#977353"/></g><path d="M16 57L33 52M30 58L49 54" stroke="#6e5340" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-cleared" viewBox="0 0 64 64"><path d="M10 60Q32 54 54 60" fill="none" stroke="#a99880" stroke-width="2" stroke-dasharray="3 4"/><path d="M26 59l-2-5M31 58l1-6M37 59l3-5" stroke="#78835b" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-plot" viewBox="0 0 64 64"><path d="M18 60Q32 56 46 60" fill="none" stroke="#cfc3ab" stroke-width="2" stroke-dasharray="2 4"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M5 2H15L20 7V22H5Z" fill="#fbf6ec" stroke="#30281f" stroke-width="1.6" stroke-linejoin="round"/><path d="M15 2V7H20" fill="none" stroke="#30281f" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 12H17M8 15H17M8 18H14" stroke="#8e795b" stroke-width="1.4"/></symbol>
+  </svg>
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="header">
     <a href="#" class="wordmark" aria-label="Lumberjack home"><img src="./assets/logo.svg" alt="" width="46" height="46">lumberjack</a>
@@ -50,34 +62,62 @@
     <div class="section-divider"><span>CHECK THE EVIDENCE. KEEP THE BRANCH.</span><span>SCROLL TO TRY IT ↓</span></div>
 
     <section class="sweep section-wrap" id="sweep" aria-labelledby="sweep-title">
-      <div class="section-heading"><div><p class="eyebrow">01 / THE SWEEP</p><h2 id="sweep-title">Landed work goes.<br>Unfinished work stays.</h2></div><p>One repository, six worktrees and their work documents, over five weeks. Step through the sweeps: every row that changes is marked, and the log shows the sweep's real output.</p></div>
+      <div class="section-heading"><div><p class="eyebrow">01 / THE SWEEP</p><h2 id="sweep-title">Seven weeks.<br>One clean forest.</h2></div><p>One busy repository: 17 worktrees, 3 leftover folders and 22 doc bundles on install day, with new work every week. Press play, or step through each session start. Select any tree or document to see why it stays or goes.</p></div>
       <div class="sim">
         <div class="sim-toolbar">
-          <ol class="day-steps" aria-label="Sweeps">
-            <li><button type="button" data-stage="0" aria-pressed="true"><b>Day 0</b><span>Work in progress</span></button></li>
-            <li><button type="button" data-stage="1" aria-pressed="false"><b>Day 1</b><span>After two merges</span></button></li>
-            <li><button type="button" data-stage="2" aria-pressed="false"><b>Day 8</b><span>Grace is over</span></button></li>
-            <li><button type="button" data-stage="3" aria-pressed="false"><b>Day 38</b><span>Retention is over</span></button></li>
-          </ol>
-          <div class="sim-actions"><button type="button" class="button button-green" id="next-sweep">Merge two branches, then sweep →</button><button type="button" class="settings-button" id="open-settings" popovertarget="example-settings">Settings <span aria-hidden="true">⚙</span><span class="settings-summary" id="settings-summary">prune · 7-day grace</span></button></div>
+          <button type="button" class="play-button" id="play" aria-pressed="false"><span id="play-icon" aria-hidden="true">▶</span> <span id="play-label">Play</span></button>
+          <div class="timeline">
+            <label class="sr-only" for="frame">Session start</label>
+            <input type="range" id="frame" min="0" max="7" step="1" value="0">
+            <div class="ticks" aria-hidden="true"><span><b class="tick-long">Before</b><b class="tick-short">pre</b></span><span><b class="tick-long">Day 0</b><b class="tick-short">0</b></span><span>2</span><span>5</span><span>9</span><span>16</span><span>30</span><span>47</span></div>
+          </div>
+          <div class="sim-actions"><button type="button" class="button button-green" id="next-sweep">Run the first sweep →</button><button type="button" class="settings-button" id="open-settings" popovertarget="example-settings">Settings <span aria-hidden="true">⚙</span><span class="settings-summary" id="settings-summary">prune · 7-day grace</span></button></div>
         </div>
-        <noscript><p class="sim-story">Turn on JavaScript to step through this example.</p></noscript>
-        <p class="sim-story" id="sim-story">Day 0. Six worktrees are open. Nothing has merged, so the sweep removes nothing.</p>
+        <noscript><p class="sim-story">Turn on JavaScript to play this example.</p></noscript>
+        <div class="sim-head">
+          <p class="sim-day"><b id="day-title">Before Lumberjack</b><span id="day-date">Installed today</span></p>
+          <p class="sim-story" id="sim-story"></p>
+        </div>
+        <div class="sim-stats">
+          <dl class="counters">
+            <div class="counter"><dt>Worktrees on disk</dt><dd><b id="stat-trees">17</b><span class="delta" id="delta-trees"></span></dd><dd class="without">Without Lumberjack: <span id="without-trees">17</span></dd></div>
+            <div class="counter"><dt>Disk space</dt><dd><b id="stat-disk">19.7 GB</b><span class="delta" id="delta-disk"></span></dd><dd class="without">Without Lumberjack: <span id="without-disk">19.7 GB</span></dd></div>
+            <div class="counter"><dt>Bundles in docs/work</dt><dd><b id="stat-docs">22</b><span class="delta" id="delta-docs"></span></dd><dd class="without">Without Lumberjack: <span id="without-docs">22</span></dd></div>
+            <div class="counter"><dt>Branches deleted</dt><dd><b>0</b></dd><dd class="without">All <span id="stat-branches">11</span> landed branches kept</dd></div>
+          </dl>
+          <figure class="disk-chart">
+            <figcaption><span>DISK USED BY WORKTREES</span><span class="chart-key"><i class="key-without" aria-hidden="true"></i>Without Lumberjack <i class="key-with" aria-hidden="true"></i>With Lumberjack</span></figcaption>
+            <svg id="disk-chart" role="img" aria-label="Disk used by worktrees" width="100%" height="176"></svg>
+          </figure>
+        </div>
         <div class="view-switch" role="tablist" aria-label="Show"><button type="button" role="tab" id="show-trees" aria-controls="trees-column" aria-selected="true">Worktrees <span id="trees-changed"></span></button><button type="button" role="tab" id="show-docs" aria-controls="docs-column" aria-selected="false" tabindex="-1">Documents <span id="docs-changed"></span></button></div>
         <div class="sim-board">
           <div class="sim-column" id="trees-column" role="region" aria-labelledby="trees-title">
             <div class="column-head"><h3 id="trees-title">Worktrees</h3><code>~/worktrees/</code></div>
-            <ul class="sim-rows" id="tree-rows"></ul>
+            <ul class="forest" id="tree-rows"></ul>
+            <ul class="legend" aria-label="Legend">
+              <li><svg aria-hidden="true"><use href="#i-pine"/></svg>In progress</li>
+              <li><svg aria-hidden="true"><use href="#i-sapling"/></svg>New today</li>
+              <li><svg aria-hidden="true"><use href="#i-bare"/></svg>Merged, still on disk</li>
+              <li><svg aria-hidden="true"><use href="#i-felled"/></svg>Removed this sweep</li>
+              <li><svg aria-hidden="true"><use href="#i-stump"/></svg>Removed earlier</li>
+              <li><svg aria-hidden="true"><use href="#i-debris"/></svg>Leftover folder</li>
+            </ul>
           </div>
           <div class="sim-column" id="docs-column" role="region" aria-labelledby="docs-title">
-            <div class="column-head"><h3 id="docs-title">Work documents</h3><code>docs/work/</code></div>
-            <ul class="sim-rows" id="doc-rows"></ul>
+            <div class="column-head"><h3 id="docs-title">Work documents</h3><code>docs/work/ → trash → purged</code></div>
+            <div class="lanes">
+              <section class="lane" aria-labelledby="lane-work-title"><h4 id="lane-work-title"><code>docs/work/</code><span id="count-work"></span></h4><ul class="doc-list" id="lane-work"></ul></section>
+              <section class="lane lane-trash" aria-labelledby="lane-trash-title"><h4 id="lane-trash-title"><code>.git/lumberjack-trash/</code><span id="count-trash"></span></h4><div id="lane-trash"></div></section>
+              <section class="lane lane-purged" aria-labelledby="lane-purged-title"><h4 id="lane-purged-title">Purged after 30 days<span id="count-purged"></span></h4><ul class="doc-list" id="lane-purged"></ul></section>
+            </div>
           </div>
         </div>
-        <div class="sweep-log"><div class="panel-caption"><span id="log-title">SESSION START, DAY 0</span><span>WHAT THE SWEEP PRINTS</span></div><pre><code id="sweep-log"></code></pre></div>
+        <p class="tile-detail" id="tile-detail" aria-live="polite">Select any tree or document to see why it is there.</p>
+        <div class="sweep-log"><div class="panel-caption"><span id="log-title">BEFORE INSTALL</span><span>WHAT THE SWEEP PRINTS</span></div><pre tabindex="0" aria-labelledby="log-title"><code id="sweep-log"></code></pre></div>
         <p class="sr-only" id="sim-announcement" role="status" aria-live="polite"></p>
       </div>
-      <p class="under-note">The examples simulate a repository; nothing on your machine is read. Squash or rebase merge? The sweep proves it from git when the merged content matches, or from the exact tip of a merged PR with a logged-in <code>gh</code>. Patch similarity alone never removes anything.</p>
+      <p class="under-note">The example simulates a repository; nothing on your machine is read. Squash or rebase merge? The sweep proves it from git when the merged content matches, or from the exact tip of a merged PR with a logged-in <code>gh</code>. Patch similarity alone never removes anything.</p>
     </section>
 
     <section class="stop-gate section-wrap" id="stop-gate" aria-labelledby="gate-title">
@@ -154,12 +194,12 @@ printed, not run: claude plugin install lumberjack@lumberjack</code></pre></div>
   </main>
   <div id="example-settings" class="settings-popover" popover="auto" role="dialog" aria-labelledby="settings-title" aria-describedby="settings-help">
     <div class="settings-popover-header"><div><p class="eyebrow">EXAMPLE REPOSITORY</p><h2 id="settings-title">Settings</h2></div><button type="button" class="close-settings" popovertarget="example-settings" popovertargetaction="hide" aria-label="Close settings">×</button></div>
-    <p id="settings-help">These are keys in <code>.lumberjack.toml</code>. Changes apply at once, on the day you are viewing.</p>
+    <p id="settings-help">These are keys in <code>.lumberjack.toml</code>. Changes replay the whole run; you stay on the day you are viewing.</p>
     <form class="settings-form" id="settings-form">
       <div class="setting-row"><label for="cleanup-mode"><code>cleanup</code><small>What session start does with landed work.</small></label><select id="cleanup-mode"><option value="prune">prune — clean up</option><option value="report">report — only list it</option><option value="keep">keep — do nothing</option></select></div>
       <div class="setting-row"><label for="docs-enabled"><code>doc_strategy</code><small>Without one, docs never move.</small></label><select id="docs-enabled"><option value="yes">saved</option><option value="no">not saved</option></select></div>
       <div class="setting-row"><label for="doc-scope"><code>scope</code><small>Move the whole bundle, or only .md files.</small></label><select id="doc-scope"><option value="bundle">bundle</option><option value="markdown">markdown</option></select></div>
-      <div class="setting-row"><label for="grace-days"><code>grace_days</code><small>Days a landed ticket's docs wait.</small></label><select id="grace-days"><option value="7">7</option><option value="0">0</option></select></div>
+      <div class="setting-row"><label for="grace-days"><code>grace_days</code><small>Days a landed ticket's docs wait.</small></label><select id="grace-days"><option value="7">7</option><option value="3">3</option><option value="0">0</option></select></div>
       <button type="button" class="text-link" id="reset-settings">Reset settings ↺</button>
     </form>
     <button type="button" class="button button-green settings-done" popovertarget="example-settings" popovertargetaction="hide">Done</button>
