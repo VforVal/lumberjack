@@ -79,11 +79,12 @@ pre { overflow: auto; line-height: 1.9; margin: 0; }
 .play-button:hover { filter: brightness(1.1); }
 .play-button[aria-pressed='true'] { background: var(--light-paper); color: var(--rust); }
 #play-icon { font-size: 12px; letter-spacing: -2px; }
-.timeline { flex: 1 1 320px; min-width: 0; }
+.timeline { flex: 1 1 320px; min-width: 0; container-type: inline-size; }
 .timeline input { width: 100%; margin: 0; accent-color: var(--rust); height: 26px; }
 .ticks { display: flex; justify-content: space-between; padding: 0 8px; font: 12px/1.4 var(--mono); color: var(--muted); }
 .ticks b { font-weight: 400; }
 .tick-short { display: none; }
+@container (max-width: 600px) { .tick-long { display: none; } .tick-short { display: inline; } }
 .ticks > span { width: 0; display: flex; justify-content: center; white-space: nowrap; }
 .ticks > span:first-child { justify-content: flex-start; }
 .ticks > span:last-child { justify-content: flex-end; }
@@ -315,8 +316,6 @@ input[type='checkbox'] { accent-color: var(--green); width: 18px; height: 18px; 
   .tile-art-wrap, .tile-art, .falling, .plot .tile-art { width: 48px; height: 48px; }
   .lanes { grid-template-columns: 1fr; }
   .plot { display: none; }
-  .tick-long { display: none; }
-  .tick-short { display: inline; }
   .lane + .lane { border-left: 0; border-top: 1px solid #e3d9c6; }
   .doc-list, .trash-folder ul, .lane-trash .doc-list, .lane-purged .doc-list { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
   .gate-demo { padding: 20px 16px; }
