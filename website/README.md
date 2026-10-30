@@ -21,7 +21,7 @@ access or change the visitor's repository, and no settings persist between reloa
 
 **The sweep** is one simulated, squash-merging repository over seven weeks: 17 worktrees
 (11 already merged, one dirty, one prototype), 3 leftover `node_modules` folders and 22 doc
-bundles on install day, with a new worktree and new merges between session starts (day 0,
+bundles on install day (the page calls a bundle a "doc folder" and defines it once), with a new worktree and new merges between session starts (day 0,
 2, 5, 9, 16, 30 and 47). `script.js` replays the whole run from the settings (`cleanup`,
 `doc_strategy`, `scope`, `grace_days`) with the sweep's rules: fresh and dirty blocks,
 kept branches counted as landed, docs staying live until the sweep after their worktree
@@ -38,7 +38,8 @@ landing, block reasons, undo, preview, configuration) and the Stop gate in one n
 their claims in step with the README's cleanup rule and configuration table.
 
 The Settings button opens a nonmodal popover that also summarizes day 47 under the current
-settings, striking through the old values after a change; the board marks the tiles that
+settings, striking through the old values after a change. Its doc rows split the same
+written folders into docs/work, trash and purged, so a strategy never looks like it adds docs; the board marks the tiles that
 change on the day in view. The popover is dismissed with Done, Escape, the close
 button, or a click outside. Browsers without the Popover API get the same open and close
 from `script.js`. Without JavaScript the sweep shows a note instead of the board.

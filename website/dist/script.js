@@ -305,7 +305,7 @@ function story(frames, index) {
   const s = frame.stats;
   if (frame.day === undefined) {
     const landed = frame.trees.filter(t => t.label === 'merged').length;
-    return `Before Lumberjack: ${s.trees} worktrees and ${ORPHANS.length} leftover folders fill ${gb(s.mb)}. ${landed} of those worktrees merged days or weeks ago. docs/work holds ${s.docs} bundles.`;
+    return `Before Lumberjack: ${s.trees} worktrees and ${ORPHANS.length} leftover folders fill ${gb(s.mb)}. ${landed} of those worktrees merged days or weeks ago. docs/work holds ${s.docs} doc folders.`;
   }
   const previous = frames[index - 1];
   const prevDay = previous.day ?? -Infinity;
@@ -324,8 +324,8 @@ function story(frames, index) {
   const trashed = frame.counts.docs;
   const purged = frame.lines.filter(line => line.startsWith('purged')).length;
   const graceStarts = frame.docs.work.filter(d => d.label === `grace 0/${settings.grace}`).length;
-  if (trashed) parts.push(`${plural(trashed, 'doc bundle')} moved to the recoverable trash.`);
-  if (graceStarts && settings.grace) parts.push(`${plural(graceStarts, 'landed bundle')} ${graceStarts === 1 ? 'starts' : 'start'} ${settings.grace} days of grace.`);
+  if (trashed) parts.push(`${plural(trashed, 'doc folder')} moved to the recoverable trash.`);
+  if (graceStarts && settings.grace) parts.push(`${plural(graceStarts, 'landed doc folder')} ${graceStarts === 1 ? 'starts' : 'start'} ${settings.grace} days of grace.`);
   if (purged) parts.push(`${plural(purged, 'trash folder')} passed ${TRASH_DAYS} days and ${purged === 1 ? 'was' : 'were'} deleted.`);
   if (!parts.length) parts.push('Nothing new landed, so nothing changes.');
   return parts.join(' ');
@@ -394,7 +394,7 @@ function renderBoard(animate, compared) {
   $('#docs-changed').textContent = docChanges.size ? `· ${docChanges.size} changed` : '';
 }
 
-// FLIP: a bundle that changed lanes slides from where it was to where it is now.
+// FLIP: a doc folder that changed lanes slides from where it was to where it is now.
 function flyDocs(container, before) {
   container.querySelectorAll('[data-key]').forEach(el => {
     const from = before.get(el.dataset.key);
@@ -469,22 +469,35 @@ function renderChart() {
 }
 
 // The settings popover's own summary of day 47, so a change shows while the board is covered.
-const IMPACT = [
+// The doc rows split the same written folders by where they end up, so a strategy never
+// looks like it adds docs.
+const IMPACT_DISK = [
   ['Worktrees on disk', f => f.stats.trees, f => f.stats.treesWithout, String],
   ['Disk space', f => f.stats.mb / 1024, f => f.stats.mbWithout / 1024, v => `${v.toFixed(1)} GB`],
-  ['Bundles in docs/work', f => f.stats.docs, f => f.stats.docsWithout, String],
-  ['In the trash', f => f.docs.trash.reduce((sum, t) => sum + t.tiles.length, 0), undefined, String],
-  ['Purged', f => f.docs.purged.length, undefined, String],
+];
+const IMPACT_DOCS = [
+  ['Still in docs/work', f => f.stats.docs, f => f.stats.docsWithout, String],
+  ['In the trash, restorable', f => f.docs.trash.reduce((sum, t) => sum + t.tiles.length, 0), undefined, String],
+  ['Deleted after 30 days in the trash', f => f.docs.purged.length, undefined, String],
 ];
 
 function renderImpact(old) {
+  const written = frames.at(-1).stats.docsWithout;
+  const split = settings.scope === 'markdown' && settings.docs
+    ? 'With markdown scope, a folder\'s .md files go to the trash and its other files stay, so one folder can count twice.'
+    : 'The rows split the same folders. A doc strategy only moves finished ones out of docs/work.';
+  $('#impact').innerHTML = impactRows(IMPACT_DISK, old)
+    + `<p class="impact-group">${written} doc folders written</p>${impactRows(IMPACT_DOCS, old)}<p class="impact-note">${split}</p>`;
+}
+
+function impactRows(rows, old) {
   const last = frames.at(-1);
-  $('#impact').innerHTML = IMPACT.map(([label, value, without, format]) => {
+  return `<dl>${rows.map(([label, value, without, format]) => {
     const now = format(value(last));
     const was = old && format(value(old));
     const changed = was !== undefined && was !== now;
     return `<div${changed ? ' class="changed-row"' : ''}><dt>${label}</dt><dd>${changed ? `<s>${was}</s> ` : ''}<b>${now}</b>${without ? `<small>without: ${format(without(last))}</small>` : ''}</dd></div>`;
-  }).join('');
+  }).join('')}</dl>`;
 }
 
 function renderDetail() {

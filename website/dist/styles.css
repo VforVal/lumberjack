@@ -255,8 +255,10 @@ input[type='checkbox'] { accent-color: var(--green); width: 18px; height: 18px; 
 .settings-popover .settings-form>.text-link { margin-top: 13px; }
 .settings-impact { margin-top: 14px; padding: 12px 14px; background: #ece2cf; border: 1px solid #d3c4a8; }
 .impact-title { font: 12px/1.5 'Special Elite', var(--mono); letter-spacing: .8px; color: var(--muted); margin-bottom: 6px; }
-#impact { margin: 0; display: grid; gap: 2px; }
-#impact > div { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 2px 4px; font-size: 13px; }
+#impact dl { margin: 0; display: grid; gap: 2px; }
+.impact-group { margin: 10px 0 2px; padding: 6px 4px 0; border-top: 1px solid #d3c4a8; font: 700 13px var(--mono); color: var(--ink); }
+.impact-note { margin: 4px 4px 0; font-size: 12px; line-height: 1.45; color: var(--muted); }
+#impact dl > div { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 2px 4px; font-size: 13px; }
 #impact dt { color: var(--muted); }
 #impact dd { margin: 0; text-align: right; }
 #impact b { font: 700 15px var(--mono); color: var(--ink); }

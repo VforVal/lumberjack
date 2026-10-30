@@ -105,7 +105,7 @@
     <div class="section-divider"><span>CHECK THE EVIDENCE. KEEP THE BRANCH.</span><span>SCROLL TO TRY IT ↓</span></div>
 
     <section class="sweep section-wrap" id="sweep" aria-labelledby="sweep-title">
-      <div class="section-heading"><div><p class="eyebrow">01 / THE SWEEP</p><h2 id="sweep-title">Seven weeks.<br>One clean forest.</h2></div><p>One busy repository: 17 worktrees, 3 leftover folders and 22 doc bundles on install day, with new work every week. Press play, or step through each session start. Select any tree or document to see why it stays or goes.</p></div>
+      <div class="section-heading"><div><p class="eyebrow">01 / THE SWEEP</p><h2 id="sweep-title">Seven weeks.<br>One clean forest.</h2></div><p>One busy repository: 17 worktrees, 3 leftover folders and 22 doc folders on install day, with new work every week. A doc folder holds the plans and handoffs an agent wrote for one ticket, like <code>docs/work/eng-207-search/</code>. Press play, or step through each session start. Select any tree or document to see why it stays or goes.</p></div>
       <div class="sim">
         <div class="sim-toolbar">
           <button type="button" class="play-button" id="play" aria-pressed="false"><span id="play-icon" aria-hidden="true">▶</span> <span id="play-label">Play</span></button>
@@ -125,7 +125,7 @@
           <dl class="counters">
             <div class="counter"><dt>Worktrees on disk</dt><dd><b id="stat-trees">17</b><span class="delta" id="delta-trees"></span></dd><dd class="without">Without Lumberjack: <span id="without-trees">17</span></dd></div>
             <div class="counter"><dt>Disk space</dt><dd><b id="stat-disk">19.7 GB</b><span class="delta" id="delta-disk"></span></dd><dd class="without">Without Lumberjack: <span id="without-disk">19.7 GB</span></dd></div>
-            <div class="counter"><dt>Bundles in docs/work</dt><dd><b id="stat-docs">22</b><span class="delta" id="delta-docs"></span></dd><dd class="without">Without Lumberjack: <span id="without-docs">22</span></dd></div>
+            <div class="counter"><dt>Doc folders in docs/work</dt><dd><b id="stat-docs">22</b><span class="delta" id="delta-docs"></span></dd><dd class="without">Without Lumberjack: <span id="without-docs">22</span></dd></div>
             <div class="counter"><dt>Branches deleted</dt><dd><b>0</b></dd><dd class="without">All <span id="stat-branches">11</span> landed branches kept</dd></div>
           </dl>
           <figure class="disk-chart">
@@ -212,12 +212,12 @@ trash_days = 30</code></pre></li>
     <p id="settings-help">These are keys in <code>.lumberjack.toml</code>. Changes replay all seven weeks. The board marks what changed on the day you are viewing.</p>
     <form class="settings-form" id="settings-form">
       <div class="setting-row"><label for="cleanup-mode"><code>cleanup</code><small>What session start does with landed work.</small></label><select id="cleanup-mode"><option value="prune">prune — clean up</option><option value="report">report — only list it</option><option value="keep">keep — do nothing</option></select></div>
-      <div class="setting-row"><label for="docs-enabled"><code>doc_strategy</code><small>Without one, docs never move.</small></label><select id="docs-enabled"><option value="yes">saved</option><option value="no">not saved</option></select></div>
-      <div class="setting-row"><label for="doc-scope"><code>scope</code><small>Move the whole bundle, or only .md files.</small></label><select id="doc-scope"><option value="bundle">bundle</option><option value="markdown">markdown</option></select></div>
-      <div class="setting-row"><label for="grace-days"><code>grace_days</code><small>Days a landed ticket's docs wait.</small></label><select id="grace-days"><option value="7">7</option><option value="3">3</option><option value="0">0</option></select></div>
+      <div class="setting-row"><label for="docs-enabled"><code>doc_strategy</code><small>Setup asks once if finished doc folders may go to the trash. Until then, they stay.</small></label><select id="docs-enabled"><option value="yes">set</option><option value="no">not set</option></select></div>
+      <div class="setting-row"><label for="doc-scope"><code>scope</code><small>bundle trashes the whole doc folder; markdown trashes only its .md files.</small></label><select id="doc-scope"><option value="bundle">bundle</option><option value="markdown">markdown</option></select></div>
+      <div class="setting-row"><label for="grace-days"><code>grace_days</code><small>Days a landed ticket's doc folder waits before the trash.</small></label><select id="grace-days"><option value="7">7</option><option value="3">3</option><option value="0">0</option></select></div>
       <button type="button" class="text-link" id="reset-settings">Reset settings ↺</button>
     </form>
-    <div class="settings-impact" aria-live="polite"><p class="impact-title">BY DAY 47 WITH THESE SETTINGS</p><dl id="impact"></dl></div>
+    <div class="settings-impact" aria-live="polite"><p class="impact-title">BY DAY 47 WITH THESE SETTINGS</p><div id="impact"></div></div>
     <button type="button" class="button button-green settings-done" popovertarget="example-settings" popovertargetaction="hide">Done</button>
   </div>
 
