@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta name="theme-color" content="#293c2f">
+  <title>Lumberjack — Clean up after the merge</title>
+  <meta name="description" content="Lumberjack removes verified landed worktrees, keeps their branches, trashes finished work documents after a grace period, and keeps everything recoverable. A plugin for Claude Code and Codex.">
+  <link rel="canonical" href="https://vforval.github.io/lumberjack/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Lumberjack">
+  <meta property="og:url" content="https://vforval.github.io/lumberjack/">
+  <meta property="og:title" content="Lumberjack — Clean up after the merge">
+  <meta property="og:description" content="Worktrees, handoffs, plans. Keep what's in progress. Clear what's landed.">
+  <meta property="og:image" content="https://vforval.github.io/lumberjack/assets/social-preview.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="640">
+  <meta property="og:image:alt" content="The Lumberjack logo, an axe in a tree stump, beside the words: lumberjack, one clone, no dead wood.">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" type="image/svg+xml" href="./assets/logo.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32.png">
+  <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png">
+  <link rel="preload" href="./assets/fonts/rokkitt.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./script.js" defer></script>
+</head>
+<body>
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-pine" viewBox="0 0 64 64"><path d="M29 48h6v12h-6z" fill="#805738" stroke="#30281f" stroke-width="2" stroke-linejoin="round"/><path d="M32 4L43 20H37L49 35H41L53 50H11L23 35H15L27 20H21Z" fill="#546e43" stroke="#30281f" stroke-width="2.2" stroke-linejoin="round"/><path d="M31 15l-4 6M34 28l6 7M29 37l-6 8" stroke="#8a9b67" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-bare" viewBox="0 0 64 64"><g stroke="#30281f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M27 60C29 46 29 30 30 11L32 6L34 11C35 30 35 46 38 60Z" fill="#977353"/><path d="M30 35L19 27L15 18M20 28L11 26M30 25L23 16M34 21L42 12L45 5M34 31L45 23L51 14M45 23L54 23M34 44L42 37" fill="none"/></g></symbol>
+    <symbol id="i-stump" viewBox="0 0 64 64"><g transform="translate(6.4 12) scale(.8)"><path d="M6 31C6 42 6 50 3 56Q13 59 22 57Q32 60 42 57Q52 59 61 56C58 50 58 42 58 31Z" fill="#6b4430" stroke="#221c18" stroke-width="2.4" stroke-linejoin="round"/><ellipse cx="32" cy="31" rx="26" ry="7" fill="#f0d6a8" stroke="#221c18" stroke-width="2.4"/><g fill="none" stroke="#cfa879" stroke-width="1.3"><ellipse cx="32" cy="31" rx="18" ry="4.6"/><ellipse cx="32" cy="31" rx="10" ry="2.6"/></g><path d="M14 41V51M24 43V54M40 43V53M50 41V50" stroke="#221c18" stroke-width="1.6" stroke-linecap="round"/></g></symbol>
+    <symbol id="i-felled" viewBox="0 0 64 64"><g transform="translate(6.4 12) scale(.8)"><path d="M6 31C6 42 6 50 3 56Q13 59 22 57Q32 60 42 57Q52 59 61 56C58 50 58 42 58 31Z" fill="#6b4430" stroke="#221c18" stroke-width="2.4" stroke-linejoin="round"/><ellipse cx="32" cy="31" rx="26" ry="7" fill="#f0d6a8" stroke="#221c18" stroke-width="2.4"/><g fill="none" stroke="#cfa879" stroke-width="1.3"><ellipse cx="32" cy="31" rx="18" ry="4.6"/><ellipse cx="32" cy="31" rx="10" ry="2.6"/></g><path d="M14 41V51M24 43V54M40 43V53M50 41V50" stroke="#221c18" stroke-width="1.6" stroke-linecap="round"/><path d="M29 20L58 7" stroke="#221c18" stroke-width="5.4" stroke-linecap="round"/><path d="M29 20L58 7" stroke="#f2b347" stroke-width="2.8" stroke-linecap="round"/><path d="M21.6 15.9L28.1 13.8L31.8 23L26.5 25Z" fill="#c8372d" stroke="#221c18" stroke-width="2" stroke-linejoin="round"/><path d="M26 24.6L31.8 22.6Q38 25 41 30Q33 31.6 25.5 29.8Z" fill="#c9d1d8" stroke="#221c18" stroke-width="2" stroke-linejoin="round"/></g></symbol>
+    <symbol id="i-sapling" viewBox="0 0 64 64"><path d="M32 60V41" stroke="#5a4435" stroke-width="2.6" stroke-linecap="round"/><path d="M32 46C24 46 20 40 20 33C27 33 32 38 32 46ZM32 41C40 41 44 35 44 27C36 28 32 33 32 41Z" fill="#7f9a5a" stroke="#30281f" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-cabin" viewBox="0 0 64 64"><g stroke="#30281f" stroke-width="2.2" stroke-linejoin="round"><path d="M14 60V37H50V60Z" fill="#977353"/><path d="M9 39L32 20L55 39Z" fill="#95593f"/><path d="M28 60V47H36V60" fill="#5a4435"/><path d="M40 43h6v6h-6z" fill="#e7c97a"/></g><path d="M15 45H27M15 53H27M37 54H49" stroke="#6e5340" stroke-width="1.4"/></symbol>
+    <symbol id="i-debris" viewBox="0 0 64 64"><g stroke="#30281f" stroke-width="2" stroke-linejoin="round"><path d="M10 60L17 50L27 54L36 45L47 51L54 60Z" fill="#b39a74"/><circle cx="21" cy="50" r="4" fill="#977353"/><circle cx="45" cy="49" r="3.5" fill="#977353"/></g><path d="M16 57L33 52M30 58L49 54" stroke="#6e5340" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-cleared" viewBox="0 0 64 64"><path d="M10 60Q32 54 54 60" fill="none" stroke="#a99880" stroke-width="2" stroke-dasharray="3 4"/><path d="M26 59l-2-5M31 58l1-6M37 59l3-5" stroke="#78835b" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-plot" viewBox="0 0 64 64"><path d="M18 60Q32 56 46 60" fill="none" stroke="#cfc3ab" stroke-width="2" stroke-dasharray="2 4"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M5 2H15L20 7V22H5Z" fill="#fbf6ec" stroke="#30281f" stroke-width="1.6" stroke-linejoin="round"/><path d="M15 2V7H20" fill="none" stroke="#30281f" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 12H17M8 15H17M8 18H14" stroke="#8e795b" stroke-width="1.4"/></symbol>
+  </svg>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="header">
+    <a href="#" class="wordmark" aria-label="Lumberjack home"><img src="./assets/logo.svg" alt="" width="46" height="46">lumberjack</a>
+    <nav aria-label="Main navigation"><a href="#sweep">The sweep</a><a href="#features">Why it is safe</a><a href="https://github.com/VforVal/lumberjack">GitHub ↗</a></nav>
+    <a href="#install" class="header-install">Install ↓</a>
+  </header>
+  <main id="main">
+    <section class="hero section-wrap" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow">FOR CLAUDE CODE &amp; CODEX</p>
+        <h1 id="hero-title">The work merged.<br><span>Clear the forest.</span></h1>
+        <p class="hero-description">Ten worktrees. Seven merged last week.<br>And a folder full of handoffs nobody reads.</p>
+        <p class="hero-explanation">Lumberjack proves what landed, removes those worktrees on its own, and keeps every branch. Finished work documents wait in a trash before they go; research and unfinished work stay.</p>
+        <div class="hero-actions"><a class="button button-rust" href="#install">Install Lumberjack <span aria-hidden="true">↓</span></a><a class="text-link" href="#sweep">Try a sweep <span aria-hidden="true">↘</span></a></div>
+        <p class="hero-footnote"><a href="https://github.com/VforVal/lumberjack/blob/main/CHANGELOG.md">v1.2.1</a> <span>·</span> MIT licensed <span>·</span> Git + Python 3.11+ <span>·</span> No runtime packages</p>
+      </div>
+      <figure class="forest-figure">
+        <svg class="forest-art" viewBox="0 0 640 480" fill="none" role="group" aria-labelledby="forest-caption">
+  <defs>
+    <g id="bare" stroke="#30281f" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-13 0C-7-38-9-76-6-115L-7-222L2-238L9-221L8-144C9-97 8-46 17 0" fill="#977353"/>
+      <path d="M-5-111L-34-134L-46-161M-31-133L-56-138M-5-155L-24-177L-29-200M6-175L25-192L33-217M24-192L47-196M6-130L37-151L54-179M36-151L65-152M9-78L31-99L39-121"/>
+      <path d="M-2-20L0-93M0-172L0-211" stroke="#d0ab7d" stroke-width="2.5"/>
+      <path d="M-19 2Q-2-6 21 2" stroke="#30281f" stroke-width="4"/>
+    </g>
+    <g id="pine" stroke="#30281f" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-8 0L-6-94L7-95L12 0" fill="#805738"/>
+      <path d="M0-258Q-10-230-28-210L-15-211Q-28-181-52-163L-28-165Q-50-136-74-121L-42-123Q-56-99-78-85Q-37-77-12-91Q0-83 13-91Q41-78 77-85Q54-100 41-124L70-120Q44-139 30-164L51-160Q28-182 18-210L33-207Q13-230 0-258Z" fill="#546e43"/>
+      <path d="M-2-221L-14-196M-2-175L-28-148M11-143L28-123M-5-119L-24-102" stroke="#8a9b67" stroke-width="3.5"/>
+      <path d="M1-67L2-25" stroke="#c39a68" stroke-width="2.5"/>
+    </g>
+  
+    <g id="f-stump" transform="translate(-30 -60) scale(.94)">
+      <path d="M6 31C6 42 6 50 3 56Q13 59 22 57Q32 60 42 57Q52 59 61 56C58 50 58 42 58 31Z" fill="#6b4430" stroke="#30281f" stroke-width="4.5" stroke-linejoin="round"/>
+      <ellipse cx="32" cy="31" rx="26" ry="7" fill="#f0d6a8" stroke="#30281f" stroke-width="4.5"/>
+      <ellipse cx="32" cy="31" rx="16" ry="4" fill="none" stroke="#cfa879" stroke-width="2.2"/>
+      <path d="M15 41V50M27 43V54M41 43V53" stroke="#30281f" stroke-width="2.6" stroke-linecap="round"/>
+      <path d="M29 20L57 6" stroke="#30281f" stroke-width="8" stroke-linecap="round"/><path d="M29 20L57 6" stroke="#f2b347" stroke-width="4" stroke-linecap="round"/>
+      <path d="M21.6 15.9L28.1 13.8L31.8 23L26.5 25Z" fill="#c8372d" stroke="#30281f" stroke-width="3.4" stroke-linejoin="round"/>
+      <path d="M26 24.6L31.8 22.6Q38 25 41 30Q33 31.6 25.5 29.8Z" fill="#c9d1d8" stroke="#30281f" stroke-width="3.4" stroke-linejoin="round"/>
+    </g>
+  </defs>
+  <path d="M41 391Q103 367 166 375Q245 363 315 378Q385 354 450 373Q527 360 600 391Q551 416 441 415L166 418Q82 414 41 391Z" fill="#d9ceb7"/>
+  <path d="M88 379Q180 356 270 373Q365 354 469 371Q527 365 566 381" stroke="#b7a58a" stroke-width="2"/>
+  <g opacity=".62">
+    <g class="cut-tree" transform="translate(117 362) scale(.7)" role="button" tabindex="0" aria-label="Clear finished task 1"><title>Finished task: click to clear it</title><g class="trunk"><use href="#bare"/></g><use class="stump" href="#f-stump"/></g>
+    <g class="cut-tree" transform="translate(245 347) scale(.72) rotate(5)" role="button" tabindex="0" aria-label="Clear finished task 2"><title>Finished task: click to clear it</title><g class="trunk"><use href="#bare"/></g><use class="stump" href="#f-stump"/></g>
+    <g class="cut-tree" transform="translate(434 350) scale(.72) rotate(-4)" role="button" tabindex="0" aria-label="Clear finished task 3"><title>Finished task: click to clear it</title><g class="trunk"><use href="#bare"/></g><use class="stump" href="#f-stump"/></g>
+    <g class="growing" transform="translate(527 354) scale(.7)"><title>Still growing: unfinished work stays</title><use href="#pine"/></g>
+  </g>
+  <g class="cut-tree" transform="translate(74 385) scale(.72) rotate(-5)" role="button" tabindex="0" aria-label="Clear finished task 4"><title>Finished task: click to clear it</title><g class="trunk"><use href="#bare"/></g><use class="stump" href="#f-stump"/></g>
+  <g class="growing" transform="translate(183 382) scale(.96)"><title>Still growing: unfinished work stays</title><use href="#pine"/></g>
+  <g class="cut-tree" transform="translate(306 391) scale(1.13) rotate(-2)" role="button" tabindex="0" aria-label="Clear finished task 5"><title>Finished task: click to clear it</title><g class="trunk"><use href="#bare"/></g><use class="stump" href="#f-stump"/></g>
+  <g class="cut-tree" transform="translate(390 390) scale(.83) rotate(5)" role="button" tabindex="0" aria-label="Clear finished task 6"><title>Finished task: click to clear it</title><g class="trunk"><use href="#bare"/></g><use class="stump" href="#f-stump"/></g>
+  <g class="growing" transform="translate(476 400) scale(.9)"><title>Still growing: unfinished work stays</title><use href="#pine"/></g>
+  <g class="cut-tree" transform="translate(574 391) scale(.82) rotate(-4)" role="button" tabindex="0" aria-label="Clear finished task 7"><title>Finished task: click to clear it</title><g class="trunk"><use href="#bare"/></g><use class="stump" href="#f-stump"/></g>
+  <path d="M44 394Q102 388 142 395M223 400L283 402M339 402Q390 392 425 400M514 405L599 396" stroke="#8e795b" stroke-width="3" stroke-linecap="round"/>
+  <path d="M106 396L100 386M110 396L116 381M258 408L251 398M261 408L268 394M540 400L546 389" stroke="#78835b" stroke-width="3" stroke-linecap="round"/>
+  <path d="M124 409L146 405L157 411M347 414L359 407L372 413M549 415L560 410L568 413" stroke="#a18a66" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+        <figcaption id="forest-caption"><span class="forest-key"><i class="dead-key" aria-hidden="true"></i><span id="forest-dead">7 finished tasks</span></span><span class="forest-key"><i class="green-key" aria-hidden="true"></i>3 still growing</span></figcaption>
+        <p class="forest-hint" id="forest-hint" aria-live="polite">Bare trees are finished work. Click one to clear it.</p>
+      </figure>
+    </section>
+    <div class="section-divider"><span>CHECK THE EVIDENCE. KEEP THE BRANCH.</span><span>SCROLL TO TRY IT ↓</span></div>
+
+    <section class="sweep section-wrap" id="sweep" aria-labelledby="sweep-title">
+      <div class="section-heading"><div><p class="eyebrow">01 / THE SWEEP</p><h2 id="sweep-title">Seven weeks.<br>One clean forest.</h2></div><p>One busy repository: 17 worktrees, 3 leftover folders and 22 doc folders on install day, with new work every week. A doc folder holds the plans and handoffs an agent wrote for one ticket, like <code>docs/work/eng-207-search/</code>. Press play, or step through each session start. Select any tree or document to see why it stays or goes.</p></div>
+      <div class="sim">
+        <div class="sim-toolbar">
+          <button type="button" class="play-button" id="play" aria-pressed="false"><span id="play-icon" aria-hidden="true">▶</span> <span id="play-label">Play</span></button>
+          <div class="timeline">
+            <label class="sr-only" for="frame">Session start</label>
+            <input type="range" id="frame" min="0" max="7" step="1" value="0">
+            <div class="ticks" aria-hidden="true"><span><b class="tick-long">Before</b><b class="tick-short">pre</b></span><span><b class="tick-long">Day 0</b><b class="tick-short">0</b></span><span>2</span><span>5</span><span>9</span><span>16</span><span>30</span><span>47</span></div>
+          </div>
+          <div class="sim-actions"><button type="button" class="button button-green" id="next-sweep">Run the first sweep →</button><button type="button" class="settings-button" id="open-settings" popovertarget="example-settings">Settings <span aria-hidden="true">⚙</span><span class="settings-summary" id="settings-summary">prune · 7-day grace</span></button></div>
+        </div>
+        <noscript><p class="sim-story">Turn on JavaScript to play this example.</p></noscript>
+        <div class="sim-head">
+          <p class="sim-day"><b id="day-title">Before Lumberjack</b><span id="day-date">Installed today</span></p>
+          <p class="sim-story" id="sim-story"></p>
+        </div>
+        <div class="sim-stats">
+          <dl class="counters">
+            <div class="counter"><dt>Worktrees on disk</dt><dd><b id="stat-trees">17</b><span class="delta" id="delta-trees"></span></dd><dd class="without">Without Lumberjack: <span id="without-trees">17</span></dd></div>
+            <div class="counter"><dt>Disk space</dt><dd><b id="stat-disk">19.7 GB</b><span class="delta" id="delta-disk"></span></dd><dd class="without">Without Lumberjack: <span id="without-disk">19.7 GB</span></dd></div>
+            <div class="counter"><dt>Doc folders in docs/work</dt><dd><b id="stat-docs">22</b><span class="delta" id="delta-docs"></span></dd><dd class="without">Without Lumberjack: <span id="without-docs">22</span></dd></div>
+            <div class="counter"><dt>Branches deleted</dt><dd><b>0</b></dd><dd class="without">All <span id="stat-branches">11</span> landed branches kept</dd></div>
+          </dl>
+          <figure class="disk-chart">
+            <figcaption><span>DISK USED BY WORKTREES</span><span class="chart-key"><i class="key-without" aria-hidden="true"></i>Without Lumberjack <i class="key-with" aria-hidden="true"></i>With Lumberjack</span></figcaption>
+            <svg id="disk-chart" role="img" aria-label="Disk used by worktrees" width="100%" height="176"></svg>
+          </figure>
+        </div>
+        <div class="view-switch" role="tablist" aria-label="Show"><button type="button" role="tab" id="show-trees" aria-controls="trees-column" aria-selected="true">Worktrees <span id="trees-changed"></span></button><button type="button" role="tab" id="show-docs" aria-controls="docs-column" aria-selected="false" tabindex="-1">Documents <span id="docs-changed"></span></button></div>
+        <div class="sim-board">
+          <div class="sim-column" id="trees-column" role="region" aria-labelledby="trees-title">
+            <div class="column-head"><h3 id="trees-title">Worktrees</h3><code>~/worktrees/</code></div>
+            <ul class="forest" id="tree-rows"></ul>
+            <ul class="legend" aria-label="Legend">
+              <li><svg aria-hidden="true"><use href="#i-pine"/></svg>In progress</li>
+              <li><svg aria-hidden="true"><use href="#i-sapling"/></svg>New today</li>
+              <li><svg aria-hidden="true"><use href="#i-bare"/></svg>Merged, still on disk</li>
+              <li><svg aria-hidden="true"><use href="#i-felled"/></svg>Removed this sweep</li>
+              <li><svg aria-hidden="true"><use href="#i-stump"/></svg>Removed earlier</li>
+              <li><svg aria-hidden="true"><use href="#i-debris"/></svg>Leftover folder</li>
+            </ul>
+          </div>
+          <div class="sim-column" id="docs-column" role="region" aria-labelledby="docs-title">
+            <div class="column-head"><h3 id="docs-title">Work documents</h3><code>docs/work/ → trash → purged</code></div>
+            <div class="lanes">
+              <section class="lane" aria-labelledby="lane-work-title"><h4 id="lane-work-title"><code>docs/work/</code><span id="count-work"></span></h4><ul class="doc-list" id="lane-work"></ul></section>
+              <section class="lane lane-trash" aria-labelledby="lane-trash-title"><h4 id="lane-trash-title"><code>.git/lumberjack-trash/</code><span id="count-trash"></span></h4><div id="lane-trash"></div></section>
+              <section class="lane lane-purged" aria-labelledby="lane-purged-title"><h4 id="lane-purged-title">Purged after 30 days<span id="count-purged"></span></h4><ul class="doc-list" id="lane-purged"></ul></section>
+            </div>
+          </div>
+        </div>
+        <p class="tile-detail" id="tile-detail" aria-live="polite">Select any tree or document to see why it is there.</p>
+        <div class="sweep-log"><div class="panel-caption"><span id="log-title">BEFORE INSTALL</span><span>WHAT THE SWEEP PRINTS</span></div><pre tabindex="0" aria-labelledby="log-title"><code id="sweep-log"></code></pre></div>
+        <p class="sr-only" id="sim-announcement" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <section class="features section-wrap" id="features" aria-labelledby="features-title">
+      <div class="section-heading"><div><p class="eyebrow">02 / LEAVE IT ON</p><h2 id="features-title">Automatic. Careful.<br>Undoable.</h2></div><p>Lumberjack is built to run unattended in a repository full of agent work. It acts only on proof, keeps anything that could still matter, and leaves a way back.</p></div>
+      <ul class="feature-grid">
+        <li class="feature"><p class="feature-label">RUNS ITSELF</p><h3>No command to remember.</h3><p>The sweep runs at every session start in Claude Code and Codex, and after each merge through a git post-merge hook.</p><pre><code>session start  → sweep
+git merge      → sweep</code></pre></li>
+        <li class="feature"><p class="feature-label">PROVES IT LANDED</p><h3>Merged means merged.</h3><p>A worktree goes only when its tip is in <code>origin/main</code>, its content already is (squash merges), or a merged pull request had exactly that tip. Similar-looking patches never count.</p></li>
+        <li class="feature"><p class="feature-label">NEVER LOSES WORK</p><h3>Eight reasons to stay.</h3><p>Uncommitted files, unpushed commits, a locked or brand-new worktree, evidence, or untracked docs keep a worktree in place. The sweep names the reason.</p><pre><code>blocked claude/eng-203-search: dirty</code></pre></li>
+        <li class="feature"><p class="feature-label">UNDO ANYTHING</p><h3>Branches stay. Docs wait in a trash.</h3><p>Removing a worktree deletes no commits; one command brings it back. Work documents move to a trash inside <code>.git/</code> and stay there for 30 days before the purge.</p><pre><code>git worktree add ../app-eng-205 claude/eng-205-ui</code></pre></li>
+        <li class="feature"><p class="feature-label">SEE IT FIRST</p><h3>Preview, or only report.</h3><p><code>--preview</code> prints what the next session start would remove, trash and purge, with file counts, and changes nothing. <code>cleanup = "report"</code> keeps it that way; <code>--tally</code> shows what was done.</p></li>
+        <li class="feature"><p class="feature-label">YOURS TO TUNE</p><h3>One small TOML file.</h3><p>Setup reads the repository, asks a few questions with recommended answers, and writes <code>.lumberjack.toml</code>. It never commits; you review the diff.</p><pre><code>cleanup = "prune"
+doc_roots = ["docs/work"]
+[doc_strategy]
+scope = "bundle"
+grace_days = 7
+trash_days = 30</code></pre></li>
+      </ul>
+      <p class="feature-note"><b>Also included:</b> agents keep to your branch names and work in worktrees. If one tries to finish its turn on a branch named outside your pattern, or after switching the main checkout away from main, it is stopped once with the fix. <code>stop_gate = false</code> turns this off.</p>
+    </section>
+
+    <section class="install section-wrap" id="install" aria-labelledby="install-title">
+      <div class="install-copy"><p class="eyebrow">INSTALL</p><h2 id="install-title">Put it to work.</h2><p>Install for your agent, run setup in the repository, then review and commit the changes. The next session start runs the sweep.</p><div class="requirements"><span>REQUIREMENTS</span><p>Git + Python 3.11 or newer.<br><code>gh</code> is optional, for pull-request evidence.</p></div><a class="text-link" href="https://github.com/VforVal/lumberjack#quickstart">Full installation guide ↗</a></div>
+      <div class="install-panel">
+        <div class="install-tabs" role="tablist" aria-label="Choose your coding agent"><button type="button" role="tab" id="tab-claude" aria-controls="panel-claude" aria-selected="true" tabindex="0">Claude Code</button><button type="button" role="tab" id="tab-codex" aria-controls="panel-codex" aria-selected="false" tabindex="-1">Codex</button></div>
+        <div id="panel-claude" class="tab-panel" role="tabpanel" aria-labelledby="tab-claude" tabindex="0">
+          <div class="code-label"><span>IN CLAUDE CODE, ONE AT A TIME</span></div>
+          <ol class="command-list">
+            <li><code>/plugin marketplace add VforVal/lumberjack</code><button class="copy-button" type="button" aria-label="Copy the marketplace command">Copy</button></li>
+            <li><code>/plugin install lumberjack@lumberjack</code><button class="copy-button" type="button" aria-label="Copy the install command">Copy</button></li>
+          </ol>
+          <div class="setup-step"><span>THEN, IN YOUR REPOSITORY</span><p>Restart Claude Code, then run:</p><code>/lumberjack:setup</code><p>Answer the setup questions. Review <code>git diff</code> and commit the generated configuration.</p></div>
+        </div>
+        <div id="panel-codex" class="tab-panel" role="tabpanel" aria-labelledby="tab-codex" tabindex="0" hidden>
+          <div class="code-label"><span>IN YOUR TERMINAL</span></div>
+          <ol class="command-list">
+            <li><code>codex plugin marketplace add VforVal/lumberjack</code><button class="copy-button" type="button" aria-label="Copy the marketplace command">Copy</button></li>
+            <li><code>codex plugin add lumberjack@lumberjack</code><button class="copy-button" type="button" aria-label="Copy the install command">Copy</button></li>
+          </ol>
+          <div class="setup-step"><span>THEN, IN CODEX</span><p>Restart Codex. Run <code>/hooks</code> once to review and trust the plugin hooks, then choose <code>lumberjack:setup</code> from the skill picker. Review <code>git diff</code> and commit.</p></div>
+        </div>
+        <div class="install-note">Updating? Re-run setup after each plugin update, so it can ask about new settings. Standard-library Python; no runtime packages to install.</div>
+        <p id="copy-status" class="sr-only" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+    <section class="reference section-wrap" aria-label="Further details"><p>Before enabling cleanup, see the plan with <code>sweep_worktrees.py --preview</code>.</p><a href="https://github.com/VforVal/lumberjack#cleanup-rule">Cleanup rules ↗</a><a href="https://github.com/VforVal/lumberjack#what-it-runs-and-sends">What runs and sends ↗</a></section>
+  </main>
+  <div id="example-settings" class="settings-popover" popover="auto" role="dialog" aria-labelledby="settings-title" aria-describedby="settings-help">
+    <div class="settings-popover-header"><div><p class="eyebrow">EXAMPLE REPOSITORY</p><h2 id="settings-title">Settings</h2></div><button type="button" class="close-settings" popovertarget="example-settings" popovertargetaction="hide" aria-label="Close settings">×</button></div>
+    <p id="settings-help">These are keys in <code>.lumberjack.toml</code>. Changes replay all seven weeks. The board marks what changed on the day you are viewing.</p>
+    <form class="settings-form" id="settings-form">
+      <div class="setting-row"><label for="cleanup-mode"><code>cleanup</code><small>What session start does with landed work.</small></label><select id="cleanup-mode"><option value="prune">prune — clean up</option><option value="report">report — only list it</option><option value="keep">keep — do nothing</option></select></div>
+      <div class="setting-row"><label for="docs-enabled"><code>doc_strategy</code><small>Setup asks once if finished doc folders may go to the trash. Until then, they stay.</small></label><select id="docs-enabled"><option value="yes">set</option><option value="no">not set</option></select></div>
+      <div class="setting-row"><label for="doc-scope"><code>scope</code><small>bundle trashes the whole doc folder; markdown trashes only its .md files.</small></label><select id="doc-scope"><option value="bundle">bundle</option><option value="markdown">markdown</option></select></div>
+      <div class="setting-row"><label for="grace-days"><code>grace_days</code><small>Days a landed ticket's doc folder waits before the trash.</small></label><select id="grace-days"><option value="7">7</option><option value="3">3</option><option value="0">0</option></select></div>
+      <button type="button" class="text-link" id="reset-settings">Reset settings ↺</button>
+    </form>
+    <div class="settings-impact" aria-live="polite"><p class="impact-title">BY DAY 47 WITH THESE SETTINGS</p><div id="impact"></div></div>
+    <button type="button" class="button button-green settings-done" popovertarget="example-settings" popovertargetaction="hide">Done</button>
+  </div>
+
+  <footer class="footer"><a class="wordmark" href="#"><img src="./assets/logo.svg" alt="" width="34" height="34">lumberjack</a><span>Git worktrees. Kept in order.</span><div><a href="https://github.com/VforVal/lumberjack">GitHub ↗</a><a href="https://github.com/VforVal/lumberjack/blob/main/CHANGELOG.md">v1.2.1 changelog ↗</a><a href="https://github.com/VforVal/lumberjack/blob/main/LICENSE">MIT license ↗</a><a href="https://github.com/VforVal/lumberjack/issues">Issues ↗</a></div></footer>
+</body>
+</html>
