@@ -6,7 +6,7 @@
   <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta name="theme-color" content="#293c2f">
   <title>Lumberjack — Clean up after the merge</title>
-  <meta name="description" content="Lumberjack removes verified landed worktrees, keeps their branches, trashes finished work documents after a grace period, and keeps everything recoverable. A plugin for Claude Code and Codex.">
+  <meta name="description" content="Lumberjack removes verified landed worktrees, preserves their branches, and keeps finished work documents in recoverable trash until the configured retention expires. A plugin for Claude Code and Codex.">
   <link rel="canonical" href="https://vforval.github.io/lumberjack/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Lumberjack">
@@ -69,7 +69,7 @@
       <path d="M-2-221L-14-196M-2-175L-28-148M11-143L28-123M-5-119L-24-102" stroke="#8a9b67" stroke-width="3.5"/>
       <path d="M1-67L2-25" stroke="#c39a68" stroke-width="2.5"/>
     </g>
-  
+
     <g id="f-stump" transform="translate(-30 -60) scale(.94)">
       <path d="M6 31C6 42 6 50 3 56Q13 59 22 57Q32 60 42 57Q52 59 61 56C58 50 58 42 58 31Z" fill="#6b4430" stroke="#30281f" stroke-width="4.5" stroke-linejoin="round"/>
       <ellipse cx="32" cy="31" rx="26" ry="7" fill="#f0d6a8" stroke="#30281f" stroke-width="4.5"/>
@@ -163,13 +163,13 @@
     </section>
 
     <section class="features section-wrap" id="features" aria-labelledby="features-title">
-      <div class="section-heading"><div><p class="eyebrow">02 / LEAVE IT ON</p><h2 id="features-title">Automatic. Careful.<br>Undoable.</h2></div><p>Lumberjack is built to run unattended in a repository full of agent work. It acts only on proof, keeps anything that could still matter, and leaves a way back.</p></div>
+      <div class="section-heading"><div><p class="eyebrow">02 / LEAVE IT ON</p><h2 id="features-title">Automatic cleanup.<br>Branches kept.</h2></div><p>Lumberjack is built to run unattended in a repository full of agent work. It acts only on proof, protects unfinished work, keeps branches, and gives working documents a grace period and trash retention.</p></div>
       <ul class="feature-grid">
         <li class="feature"><p class="feature-label">RUNS ITSELF</p><h3>No command to remember.</h3><p>The sweep runs at every session start in Claude Code and Codex, and after each merge through a git post-merge hook.</p><pre><code>session start  → sweep
 git merge      → sweep</code></pre></li>
         <li class="feature"><p class="feature-label">PROVES IT LANDED</p><h3>Merged means merged.</h3><p>A worktree goes only when its tip is in <code>origin/main</code>, its content already is (squash merges), or a merged pull request had exactly that tip. Similar-looking patches never count.</p></li>
-        <li class="feature"><p class="feature-label">NEVER LOSES WORK</p><h3>Eight reasons to stay.</h3><p>Uncommitted files, unpushed commits, a locked or brand-new worktree, evidence, or untracked docs keep a worktree in place. The sweep names the reason.</p><pre><code>blocked claude/eng-203-search: dirty</code></pre></li>
-        <li class="feature"><p class="feature-label">UNDO ANYTHING</p><h3>Branches stay. Docs wait in a trash.</h3><p>Removing a worktree deletes no commits; one command brings it back. Work documents move to a trash inside <code>.git/</code> and stay there for 30 days before the purge.</p><pre><code>git worktree add ../app-eng-205 claude/eng-205-ui</code></pre></li>
+        <li class="feature"><p class="feature-label">PROTECTS UNFINISHED WORK</p><h3>Eight reasons to stay.</h3><p>Uncommitted files, unpushed commits, a locked or brand-new worktree, evidence, or untracked docs keep a worktree in place. The sweep names the reason.</p><pre><code>blocked claude/eng-203-search: dirty</code></pre></li>
+        <li class="feature"><p class="feature-label">RECOVER BEFORE PURGE</p><h3>Branches stay. Docs wait in a trash.</h3><p>Removing a worktree deletes no commits; one command brings it back. Working documents stay recoverable in <code>.git/</code> trash until your configured retention expires. Purging permanently deletes them.</p><pre><code>git worktree add ../app-eng-205 claude/eng-205-ui</code></pre></li>
         <li class="feature"><p class="feature-label">SEE IT FIRST</p><h3>Preview, or only report.</h3><p><code>--preview</code> prints what the next session start would remove, trash and purge, with file counts, and changes nothing. <code>cleanup = "report"</code> keeps it that way; <code>--tally</code> shows what was done.</p></li>
         <li class="feature"><p class="feature-label">YOURS TO TUNE</p><h3>One small TOML file.</h3><p>Setup reads the repository, asks a few questions with recommended answers, and writes <code>.lumberjack.toml</code>. It never commits; you review the diff.</p><pre><code>cleanup = "prune"
 doc_roots = ["docs/work"]
