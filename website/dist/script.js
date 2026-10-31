@@ -250,7 +250,7 @@ function treeTile(run, t, day) {
 function orphanTile(run, o, day) {
   const base = { key: o.id, name: o.id, size: gb(o.mb) };
   const cleanedOn = run.orphansCleaned.get(o.id);
-  if (cleanedOn === day) return { ...base, icon: 'cleared', kind: 'removed', label: 'cleaned', detail: `${o.path}: its worktree entry was gone and only node_modules was left, so prune deleted it.` };
+  if (cleanedOn !== undefined && cleanedOn === day) return { ...base, icon: 'cleared', kind: 'removed', label: 'cleaned', detail: `${o.path}: its worktree entry was gone and only node_modules was left, so prune deleted it.` };
   if (cleanedOn !== undefined) return { ...base, icon: 'cleared', kind: 'gone', label: `cleaned day ${cleanedOn}`, detail: `${o.path} was deleted on day ${cleanedOn}.` };
   const why = day === undefined ? 'Nothing removes it.' : settings.cleanup === 'report' ? 'Report mode lists it; prune would delete it.' : 'cleanup = "keep" leaves it.';
   return { ...base, icon: 'debris', kind: 'warn', label: 'orphan', detail: `${o.path}: a leftover folder holding only node_modules. Its worktree entry is gone. ${why}` };
@@ -579,6 +579,7 @@ new IntersectionObserver((entries, observer) => {
 const controls = { 'cleanup-mode': 'cleanup', 'docs-enabled': 'docs', 'doc-scope': 'scope', 'grace-days': 'grace' };
 const readControl = { cleanup: v => v, docs: v => v === 'yes', scope: v => v, grace: Number };
 function applySettings() {
+  setPlaying(false);
   const before = frames;
   frames = simulate();
   renderSimulation(true, before[state.frame]);
@@ -639,6 +640,7 @@ document.querySelectorAll('.copy-button').forEach(button => {
   });
 });
 
+$('#open-settings').addEventListener('click', () => setPlaying(false));
 const popover = $('#example-settings');
 const nativePopover = Object.hasOwn(HTMLElement.prototype, 'popover');
 function settingsOpen() {

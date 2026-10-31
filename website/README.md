@@ -30,8 +30,8 @@ prints the sweep's real line formats (`sweep: …`, `sweep would: …`, `depende
 `cleaned …`, `cleaned orphan …`, `blocked …`, `landed …: would remove`, `orphan …`,
 `doc …`, `cleared …`, `purged …`). The board shows the worktrees as a forest, the docs in
 three lanes (docs/work, trash, purged), counters and a disk chart against "without
-Lumberjack". Play advances one sweep every 2.6 seconds and starts once when the example
-first scrolls into view; felling, lane moves and counter tweens are off under reduced
+Lumberjack". Opening Settings or changing its values pauses playback. Play advances
+one sweep every 2.6 seconds and starts once when the example first scrolls into view; felling, lane moves and counter tweens are off under reduced
 motion. On phones a switch shows worktrees or documents. Keep it in step with
 `scripts/sweep_worktrees.py`. **Leave it on** lists six features (automatic runs, proof of
 landing, block reasons, undo, preview, configuration) and the Stop gate in one note; keep
@@ -58,7 +58,8 @@ shake and stay.
 then run the **Deploy website to GitHub Pages** workflow.
 
 The page's canonical link, `og:url`, `og:image` and `sitemap.xml` point to
-https://vforval.github.io/lumberjack/, and `404.html` links back to `/lumberjack/`.
+https://vforval.github.io/lumberjack/, and `404.html` links back to the canonical
+GitHub Pages URL from either host.
 Change them together if the site moves to a custom domain. `robots.txt` only takes
 effect at a domain root, so it matters once a custom domain is used.
 
