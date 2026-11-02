@@ -252,10 +252,26 @@ def lines(result: subprocess.CompletedProcess[str]) -> list[str]:
 
 
 def find_primary(start: Path) -> Path:
+    """The primary (main) checkout of start's repository, from any of its worktrees."""
     result = git(start, "rev-parse", "--git-common-dir")
     if result.returncode:
         raise SystemExit(f"sweep: not a git repository: {start}")
-    return (start / result.stdout.strip()).resolve().parent
+    common = (start / result.stdout.strip()).resolve()
+    if common.name == ".git":
+        return common.parent  # the usual layout
+    return unusual_primary(start, common)
+
+
+def unusual_primary(start: Path, common: Path) -> Path:
+    """The primary checkout when the git dir lives elsewhere: a submodule, --separate-git-dir or bare."""
+    if worktree := git(common, "config", "core.worktree").stdout.strip():
+        return (common / worktree).resolve()  # a submodule records its checkout
+    here = git(start, "rev-parse", "--absolute-git-dir").stdout.strip()
+    if same_dir(here, common):  # start is the main checkout of a --separate-git-dir repository
+        return Path(git(start, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
+    if git(common, "rev-parse", "--is-bare-repository").stdout.strip() == "true":
+        raise SystemExit(f"sweep: {common} is a bare repository; lumberjack needs a primary checkout")
+    raise SystemExit(f"sweep: run from the primary checkout; its git dir is {common}")
 
 
 def registered(primary: Path) -> list[Row]:
@@ -1475,16 +1491,17 @@ def plugin_version() -> str:
 
 def setup_hint(primary: Path) -> list[str]:
     """A hint to re-run setup when another version's setup wrote .lumberjack.toml: new settings need its questions."""
-    stamped = (path for path, _, section in config_files(primary) if not section and path.is_file())
+    stamped = ((path, name) for path, name, section in config_files(primary) if not section and path.is_file())
+    path, name = next(stamped, (primary / ".lumberjack.toml", ".lumberjack.toml"))
     try:
-        with next(stamped, primary / ".lumberjack.toml").open(encoding="utf-8") as file:
+        with path.open(encoding="utf-8") as file:
             first = file.readline()
     except (OSError, UnicodeDecodeError):
         return []
     written, current = first.removeprefix(SETUP_STAMP).strip(), plugin_version()
     if not first.startswith(SETUP_STAMP) or written == current or current == "unknown":
         return []  # a hand-written config has no stamp; nothing to compare
-    return [f"hint: .lumberjack.toml was written by lumberjack setup {written}, the plugin is {current};"
+    return [f"hint: {name} was written by lumberjack setup {written}, the plugin is {current};"
             " re-run /lumberjack:setup"]
 
 

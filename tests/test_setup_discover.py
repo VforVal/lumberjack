@@ -68,6 +68,16 @@ def test_discover_from_a_worktree_reports_the_primary_checkout(
     assert discover(capsys, repo)["started_in"] is None
 
 
+def test_discover_in_a_worktree_of_a_bare_repository_refuses(
+    cloned: Path, tmp_path: Path
+) -> None:
+    git(tmp_path, "clone", "-q", "--bare", str(cloned), "bare.git")
+    git(tmp_path / "bare.git", "worktree", "add", "-q", str(tmp_path / "bw"))
+    with pytest.raises(SystemExit, match="is a bare repository"):
+        setup_lumberjack.main(["discover", "--repo", str(tmp_path / "bw")])
+    assert not (tmp_path / "AGENTS.md").exists()
+
+
 def test_instructions_target_finds_the_claude_folder_file_before_agents_md(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -160,11 +170,13 @@ def test_worktree_parents(
     git(cloned, "worktree", "add", "-q", "-b", "b", str(tmp_path / "home" / "wt" / "b"))
     git(cloned, "worktree", "add", "-q", "-b", "c", str(cloned / ".claude" / "worktrees" / "c"))
     git(cloned, "worktree", "add", "-q", "-b", "d", str(tmp_path / "next-to-primary"))
+    git(cloned, "worktree", "add", "-q", "-b", "e", str(tmp_path / "primary-feat"))
     assert discover(capsys, cloned)["worktree_parents"] == [
         ".claude/worktrees",
         (tmp_path / "wts").as_posix(),
+        tmp_path.as_posix() + "/{name}-*",
         "~/wt",
-    ]  # tmp_path holds the primary itself, so it is no root
+    ]  # tmp_path holds the primary itself: only siblings named after it make a root
 
 
 def test_tracker_doc(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:

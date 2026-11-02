@@ -96,10 +96,16 @@ def by_count(counter: Counter[str]) -> list[str]:
 def worktree_parents(repo: Path) -> list[str]:
     """Folders holding linked worktrees: relative inside the repo, ~-based under home.
 
-    A folder that holds the repo itself (home, ~/Documents) is left out: as a root it would
-    match every project next to this one."""
-    parents = {Path(tree["path"]).parent for tree in registered(repo)[1:]}
-    return sorted(root_text(repo, p) for p in parents if not repo.is_relative_to(p))
+    A folder that holds the repo itself (home, ~/Documents) would match every project next to
+    this one: it is offered only as `<folder>/{name}-*`, for worktrees named after the repo."""
+    roots = set()
+    for tree in registered(repo)[1:]:
+        path = Path(tree["path"])
+        if not repo.is_relative_to(path.parent):
+            roots.add(root_text(repo, path.parent))
+        elif path.name.startswith(f"{repo.name}-"):  # a sibling such as ~/code/repo-feat
+            roots.add(root_text(repo, path.parent) + "/{name}-*")
+    return sorted(roots)
 
 
 def root_text(repo: Path, parent: Path) -> str:
@@ -541,7 +547,7 @@ def instructions(answers: Facts) -> str:
     return f"""{MD_MARKERS[0]}
 ## Lumberjack
 
-Worktree rules live in the `lumberjack` skill; config in `.lumberjack.toml`.
+Worktree rules live in the `lumberjack` skill; config in `{LOCAL_CONFIG if answers["scope"] == "local" else ".lumberjack.toml"}`.
 {SESSION_START[answers["cleanup"]]}; {STOP_HOOK[answers["stop_gate"]]}.
 Re-run the `lumberjack:setup` skill after conventions change.
 {MD_MARKERS[1]}
@@ -555,10 +561,24 @@ def instructions_target(answers: Facts, repo: Path) -> str:
     path = repo / target
     if Path(target).is_absolute() or ".." in Path(target).parts:
         raise abort(f"instructions must be a path inside the repository: {target}")
-    if path.is_symlink():
+    if path.resolve() != repo.resolve() / target:  # the file, or a folder on its way, is a link
         linked = os.path.relpath(path.resolve(), repo)
         raise abort(f"{target} is a symbolic link to {linked}; set instructions to another file")
     return target
+
+
+def check_local_scope(repo: Path, hook: str, target: str) -> None:
+    """Refuse a local setup that would change a tracked file or be overridden by a committed config."""
+    try:
+        source = config_table(repo)[0]
+    except ConfigError as error:
+        raise abort(str(error)) from error
+    if source and source != LOCAL_CONFIG:
+        raise abort(f"{source} already configures lumberjack and wins over {LOCAL_CONFIG}; use scope team")
+    if hook == "plain" and git_out(repo, "config", "core.hooksPath"):
+        raise abort("scope local writes the hook to .git/hooks, which core.hooksPath bypasses; use hook none")
+    if git(repo, "ls-files", "--error-unmatch", target).returncode == 0:
+        raise abort(f"scope local cannot edit {target}: git tracks it; set instructions to an untracked file")
 
 
 def write_instructions(repo: Path, target: str, block: str) -> None:
@@ -599,17 +619,16 @@ def apply(answers: Facts, repo: Path) -> None:
         settings = read_json(repo, ".claude/settings.json") or {}
     if hook == "simple-git-hooks" and read_json(repo, "package.json") is None:
         raise abort("simple-git-hooks needs a package.json")
-    if local and hook == "plain" and git_out(repo, "config", "core.hooksPath"):
-        raise abort("scope local cannot write a hook under core.hooksPath (it is committed); use hook none")
     target = instructions_target(answers, repo)
+    if local:
+        check_local_scope(repo, hook, target)
     ignores = worktree_ignores(answers["worktree_roots"])
     git_dir = local_config(repo).parent
     write_file(repo, local_rel(repo, git_dir / "lumberjack.toml") if local else ".lumberjack.toml", config)
     if hook != "none":
         write_hook(repo, local_plain_hook if local and hook == "plain" else HOOK_WRITERS[hook])
     if local:
-        untracked = [target] if git(repo, "ls-files", "--error-unmatch", target).returncode else []
-        write_ignores(repo, local_rel(repo, git_dir / "info" / "exclude"), [*ignores, *untracked])
+        write_ignores(repo, local_rel(repo, git_dir / "info" / "exclude"), [*ignores, target])
     else:
         write_ignores(repo, ".gitignore", ignores)
     if settings is not None:

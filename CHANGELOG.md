@@ -16,6 +16,8 @@
   where the hooks read config, and says so (#48).
 - Setup finds `.claude/CLAUDE.md`, and never writes through a symbolic link: an `AGENTS.md`
   linked to shared guidelines is left alone and another file is asked for (#48).
+- Setup and the hooks find the primary checkout of a submodule or a `--separate-git-dir`
+  repository, and refuse a bare repository with worktrees instead of writing beside it (#48).
 - Discover lists worktree folders inside the repository relative to it, and leaves out folders
   that hold the repository itself, such as the home directory (#48).
 - Website: the product site now lives in `website/` and deploys to GitHub Pages

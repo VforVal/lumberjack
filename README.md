@@ -122,7 +122,10 @@ depends on the scope:
 
 Setup never writes through a symbolic link: if the instructions file is one (an `AGENTS.md`
 linked to shared guidelines), it names the target and asks for another file. A committed
-`.lumberjack.toml` or `[tool.lumberjack]` wins over `.git/lumberjack.toml`.
+`.lumberjack.toml` or `[tool.lumberjack]` wins over `.git/lumberjack.toml`, so a `local` setup is
+refused while one exists, and also when its instructions file is tracked. Submodules and
+`--separate-git-dir` checkouts work; a bare repository with worktrees has no primary checkout,
+so setup and the hooks refuse it.
 
 If git or Python 3.11+ is missing, install the requirement before setup. The PATH that
 matters is the one the harness and Git hooks inherit; an interactive shell alias is not
