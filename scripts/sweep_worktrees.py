@@ -116,6 +116,7 @@ class ConfigError(Exception):
 
 
 CONFIG_FILES = ((".lumberjack.toml", ()), ("pyproject.toml", ("tool", "lumberjack")))
+NOT_SET_UP = "lumberjack: not set up in this repository; run /lumberjack:setup"
 
 
 def config_table(primary: Path) -> tuple[str, Config]:
@@ -139,7 +140,18 @@ def config_table(primary: Path) -> tuple[str, Config]:
 
 def load_config(primary: Path) -> Config:
     source, table = config_table(primary)
-    return parse_config(table, source)
+    return parse_config({"primary_branch": origin_default_branch(primary), **table}, source)
+
+
+def is_set_up(primary: Path) -> bool:
+    """Whether a config file exists; the hooks act only on a repository that setup has seen."""
+    return bool(config_table(primary)[0])
+
+
+def origin_default_branch(primary: Path) -> str:
+    """The branch origin/HEAD names, else the built-in primary_branch default."""
+    ref = git(primary, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD").stdout.strip()
+    return ref.removeprefix("origin/") or DEFAULTS["primary_branch"]
 
 
 def parse_config(table: Config, source: str = "") -> Config:
@@ -1458,6 +1470,8 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
         return ["sweep: not the primary checkout; skipped"]
     notes = self_heal(primary) + setup_hint(primary)
     try:
+        if not is_set_up(primary):
+            return [NOT_SET_UP, *notes]
         cfg = load_config(primary)
     except ConfigError as error:
         return [str(error), *notes]
@@ -1474,9 +1488,8 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
 
 
 def fetch_trunk(primary: Path, trunk: str) -> tuple[bool, str]:
-    """Fetch origin when the primary checkout is on trunk; (origin stale, why the sweep skips or empty)."""
-    if git(primary, "branch", "--show-current").stdout.strip() != trunk:
-        return False, f"sweep: primary checkout is not on {trunk}; skipped"
+    """Fetch origin; (origin stale, why the sweep skips or empty). Whatever the primary has checked out,
+    tips are judged against origin/<trunk>, and the Stop gate reports an off-trunk primary."""
     stale = fetch(primary)
     if git(primary, "rev-parse", "--verify", "-q", f"origin/{trunk}").returncode:
         return stale, f"sweep: origin/{trunk} is missing; skipped"
@@ -1584,6 +1597,8 @@ def mark_session(start: Path, session_id: str) -> None:
 def gate(start: Path) -> list[str]:
     """Debt in the checkout a session runs in; the Stop hook reports it once."""
     primary = find_primary(start)
+    if not is_set_up(primary):
+        return []
     cfg = load_config(primary)
     if not cfg["stop_gate"]:
         return []

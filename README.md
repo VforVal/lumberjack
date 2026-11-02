@@ -27,6 +27,9 @@ ships as a plugin for Claude Code and Codex.
    skill picker) and answer its questions.
 3. Review `git diff` and commit. Done: the next session start sweeps, and the Stop gate is on.
 
+Until setup has written a config, the plugin changes nothing: session start prints
+`lumberjack: not set up in this repository; run /lumberjack:setup` and the Stop gate is off.
+
 Not sure yet? `sweep_worktrees.py --preview` (in the plugin's `scripts/` folder) lists what the
 next session start would remove, trash and purge, with file counts, and changes nothing;
 `--tally` later counts what it trashed and purged. See [Preview and tally](#preview-and-tally).
@@ -135,7 +138,7 @@ SessionStart prints the error and cleans nothing.
 | `owners` | `[]` | Allowed branch prefixes `<owner>/...`; empty accepts any lowercase owner |
 | `ticket_prefix` | `""` | Issue slug prefix in branches and directories; empty makes the ticket segment optional |
 | `prototype_prefix` | `"prototype/"` | Prototype capture branch prefix; such branches are never cleaned |
-| `primary_branch` | `"main"` | Branch the primary checkout stays on and work lands in |
+| `primary_branch` | origin's default branch (`origin/HEAD`), else `"main"` | Branch the primary checkout stays on and work lands in |
 | `evidence_dir` | `""` | Directory inside a worktree whose contents block cleanup; empty protects nothing extra |
 | `doc_roots` | `[]` | Folders inside a worktree for work documents (handoffs, plans, research, run output); an untracked or ignored file under one blocks cleanup with `docs`. `evidence_dir` is one more such folder but keeps its own reason, `evidence` |
 | `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); `"*"` makes every bundle of the root `reference` (a durable root; setup asks root by root); a root not listed uses `["research", "prototype"]`; an empty word is a config error. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
@@ -187,11 +190,15 @@ If git itself refuses the removal, git's message is the reason. Removal deletes 
 the branch is kept. Bring the work back with `git worktree add <path> <branch>`.
 Uncommitted files are not recoverable, which is why `dirty` blocks.
 
-The whole cleanup is skipped, with one line and exit 0, when the primary checkout is not
-on `primary_branch` (`sweep: primary checkout is not on <primary_branch>; skipped`),
-when `origin/<primary_branch>` is absent (`sweep: origin/<primary_branch> is missing; skipped`),
-or when the post-merge hook fires in a worktree other than the primary
-(`sweep: not the primary checkout; skipped`). A landed branch without a worktree is
+The whole cleanup is skipped, with one line and exit 0, in these cases:
+
+| Line | Why | Fix |
+| --- | --- | --- |
+| `lumberjack: not set up in this repository; run /lumberjack:setup` | No `.lumberjack.toml` or `[tool.lumberjack]` | Run `/lumberjack:setup` |
+| `sweep: origin/<primary_branch> is missing; skipped` | `primary_branch` names a branch origin does not have | Set `primary_branch` to origin's default branch |
+| `sweep: not the primary checkout; skipped` | The post-merge hook fired in a linked worktree | Nothing: the next session start sweeps |
+
+A primary checkout on another branch is still swept; the Stop gate reports it. A landed branch without a worktree is
 counted as `landed` and still gets `dependent` lines; nothing is deleted for it.
 
 ## Detection tiers and reasons
