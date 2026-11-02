@@ -172,6 +172,9 @@ repo = {
     f"b{i}": {"nodes": fixture["prs"].get(name, [])}
     for i, name in re.findall(r'b(\d+): pullRequests\(headRefName: "([^"]*)"', query)
 }
+for i, sha in re.findall(r'c(\d+): object\(oid: "([0-9a-f]+)"\)', query):
+    nodes = [{"state": "MERGED", **n} for n in fixture.get("commits", {}).get(sha, [])]
+    repo[f"c{i}"] = {"associatedPullRequests": {"nodes": nodes}}
 print(json.dumps({"data": {"repository": repo}}))
 """
 
@@ -253,6 +256,18 @@ def test_tier_integrated_and_gh_missing(
     assert found["feature/x"] == ("unverified", "gh missing")
 
 
+def test_detached_tip_of_a_merged_pull_request_is_landed_pr(
+    primary: Path, gh: Gh, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tip = conflicted_branch(primary, "eng-12-detached")
+    path = primary.parent / "wt" / "eng-12-detached"
+    git(path, "checkout", "-q", "--detach")
+    git(primary, "branch", "-q", "-D", "claude/eng-12-detached")
+    gh.set(commits={tip: [pr(tip)]})
+    row = next(w for w in report(capsys)["worktrees"] if w["head"] == tip)  # type: ignore[attr-defined]
+    assert (row["tier"], row["state"]) == ("landed-pr", "integrated")
+
+
 def test_tier_content_integrated(
     primary: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -326,6 +341,18 @@ def test_landed_probable_by_cherry_and_by_patch_id(
     found = tiers(capsys)
     assert found["claude/eng-10-cherry"] == ("landed-probable", "gh missing")
     assert found["claude/eng-11-squash"] == ("landed-probable", "gh missing")
+
+
+def test_probable_guesses_yield_to_the_time_budget(
+    primary: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    add_worktree(primary, primary.parent / "wt", "claude/eng-10-cherry", merge=False)
+    land(primary, "unrelated.txt", "u\n")
+    git(primary, "cherry-pick", "claude/eng-10-cherry")
+    land(primary, "eng-10-cherry.txt", "x\nmore\n")  # a later change hides the merge
+    assert tiers(capsys)["claude/eng-10-cherry"][0] == "landed-probable"
+    monkeypatch.setattr(sweep_worktrees, "PROBABLE_SECONDS", -1)
+    assert tiers(capsys)["claude/eng-10-cherry"] == ("unverified", "gh missing; time budget")
 
 
 def test_one_gh_call_per_sweep(
@@ -985,10 +1012,12 @@ def test_remove_refuses_a_blocked_worktree_with_its_reason(primary: Path) -> Non
     )
     assert remove(primary, primary) == (1, ["blocked main primary: primary checkout"])
     assert remove(primary, wt / "nowhere") == (1, [f"blocked {wt / 'nowhere'}: not a worktree"])
-    (primary / ".git" / "info" / "exclude").write_text(".env\n")
-    (open_ / ".env").write_text("SECRET=1\n")
+    (primary / ".git" / "info" / "exclude").write_text(".env\n*.ckpt\n.venv/\n")
+    for name in (".env", "a.ckpt", "b.ckpt", "c.ckpt", ".venv/bin"):
+        (open_ / name).parent.mkdir(parents=True, exist_ok=True)
+        (open_ / name).write_text("x\n")
     assert remove(primary, open_) == (
-        1, ["blocked claude/eng-3-open wt/eng-3-open: ignored files"]
+        1, ["blocked claude/eng-3-open wt/eng-3-open: ignored files (.env, a.ckpt, b.ckpt and 1 more)"]
     )
     proto = wt / "proto"
     git(primary, "worktree", "add", "-q", str(proto), "prototype/eng-65-demo")

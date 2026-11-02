@@ -16,6 +16,15 @@
   where the hooks read config, and says so (#48).
 - Setup finds `.claude/CLAUDE.md`, and never writes through a symbolic link: an `AGENTS.md`
   linked to shared guidelines is left alone and another file is asked for (#48).
+- New `branch_shapes` key: allowed branch names built from `<owner>`, `<ticket>` and `<slug>`,
+  such as `["<ticket>-<slug>", "chore/<slug>"]`, for repositories without owner prefixes. Setup
+  proposes the shapes the remote branches use; `owners_guess` no longer lists change types
+  (`chore`, `fix`), bots (`dependabot`) or `revert-*` branches (#49).
+- An `ignored files` block names the first three ignored entries, for example
+  `ignored files (.env, data/ and 2 more)` (#49).
+- A detached worktree whose tip is the head of a merged pull request is now `landed-pr` (#49).
+- Session start is faster with many worktrees: 400 worktrees took 24 s and now take about 11 s.
+  `landed-probable` guesses stop after 5 seconds, and the rest get `; time budget` (#49).
 - Discover lists worktree folders inside the repository relative to it, and leaves out folders
   that hold the repository itself, such as the home directory (#48).
 - Website: the product site now lives in `website/` and deploys to GitHub Pages
