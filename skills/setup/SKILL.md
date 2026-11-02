@@ -6,8 +6,7 @@ disable-model-invocation: true
 
 # lumberjack setup
 
-Interview the maintainer, then write the config once. The helper script does all
-writing; you only gather answers. Never commit anything.
+Interview the maintainer, then write the config once. The helper does all writing; never commit.
 
 ## 1. Discover
 
@@ -32,14 +31,15 @@ recommend the values already in `config` instead of the guesses below.
 
 **0. Scope** (`scope`). Ask first: `local` (just me: config in `.git/lumberjack.toml`, block
 in `CLAUDE.local.md`, nothing to commit, hook `plain` or `none`) or `team` (committed files).
-Recommend `local` when `owners_guess` has more than one name or on a first try; `team` once agreed.
+Recommend `local` when `owners_guess` has more than one name or on a first try (not when
+`config.source` is a committed file, which would win), `team` once agreed.
 
 **A. Harnesses** (`harnesses`). Recommend `claude` when `harness.claude_md` or
 `harness.claude_settings` is true, `codex` when `harness.codex_dir` is true, both when
 unsure. With claude and `team`, also ask `pin_claude_settings` (default true): it writes the
 plugin into `.claude/settings.json` so teammates are prompted to install it. `local`: always false.
-`instructions` (team): `instructions.target`; when `instructions.symlink` is true, name
-`links_to`, never write it, and offer `CLAUDE.md` or `.claude/CLAUDE.md` instead.
+`instructions` (team): `instructions.target`; if `instructions.symlink`, name `links_to`, never
+write it, and offer another of `CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md` that is no link.
 
 **B. Branch shape.**
 - `ticket_prefix`: `tracker.prefix`, else `ticket_prefix_guess`, else `""`.

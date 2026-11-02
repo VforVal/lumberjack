@@ -186,13 +186,29 @@ def load_config(primary: Path) -> Config:
 
 def is_set_up(primary: Path) -> bool:
     """Whether a config file exists; the hooks act only on a repository that setup has seen."""
-    return bool(config_table(primary)[0])
+    try:
+        return bool(config_table(primary)[0])
+    except ConfigError:
+        return True  # a broken config is still a config: its error must reach the maintainer
+
+
+def unconfigured(start: Path) -> bool:
+    """start is inside a git repository that has no lumberjack config."""
+    try:
+        return not is_set_up(find_primary(start))
+    except SystemExit:
+        return False  # not a repository: the hook paths report that themselves
 
 
 def origin_default_branch(primary: Path) -> str:
-    """The branch origin/HEAD names, else the built-in primary_branch default."""
+    """The branch origin/HEAD names, else origin's main or master, else the built-in default."""
     ref = git(primary, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD").stdout.strip()
-    return ref.removeprefix("origin/") or DEFAULTS["primary_branch"]
+    if ref.startswith("origin/"):
+        return ref.removeprefix("origin/")
+    for name in ("main", "master"):
+        if git(primary, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{name}").returncode == 0:
+            return name
+    return DEFAULTS["primary_branch"]
 
 
 def parse_config(table: Config, source: str = "") -> Config:
@@ -266,10 +282,26 @@ def lines(result: subprocess.CompletedProcess[str]) -> list[str]:
 
 
 def find_primary(start: Path) -> Path:
+    """The primary (main) checkout of start's repository, from any of its worktrees."""
     result = git(start, "rev-parse", "--git-common-dir")
     if result.returncode:
         raise SystemExit(f"sweep: not a git repository: {start}")
-    return (start / result.stdout.strip()).resolve().parent
+    common = (start / result.stdout.strip()).resolve()
+    if common.name == ".git":
+        return common.parent  # the usual layout
+    return unusual_primary(start, common)
+
+
+def unusual_primary(start: Path, common: Path) -> Path:
+    """The primary checkout when the git dir lives elsewhere: a submodule, --separate-git-dir or bare."""
+    if worktree := git(common, "config", "core.worktree").stdout.strip():
+        return (common / worktree).resolve()  # a submodule records its checkout
+    here = git(start, "rev-parse", "--absolute-git-dir").stdout.strip()
+    if same_dir(here, common):  # start is the main checkout of a --separate-git-dir repository
+        return Path(git(start, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
+    if git(common, "rev-parse", "--is-bare-repository").stdout.strip() == "true":
+        raise SystemExit(f"sweep: {common} is a bare repository; lumberjack needs a primary checkout")
+    raise SystemExit(f"sweep: run from the primary checkout; its git dir is {common}")
 
 
 def registered(primary: Path) -> list[Row]:
@@ -1515,16 +1547,17 @@ def plugin_version() -> str:
 
 def setup_hint(primary: Path) -> list[str]:
     """A hint to re-run setup when another version's setup wrote .lumberjack.toml: new settings need its questions."""
-    stamped = (path for path, _, section in config_files(primary) if not section and path.is_file())
+    stamped = ((path, name) for path, name, section in config_files(primary) if not section and path.is_file())
+    path, name = next(stamped, (primary / ".lumberjack.toml", ".lumberjack.toml"))
     try:
-        with next(stamped, primary / ".lumberjack.toml").open(encoding="utf-8") as file:
+        with path.open(encoding="utf-8") as file:
             first = file.readline()
     except (OSError, UnicodeDecodeError):
         return []
     written, current = first.removeprefix(SETUP_STAMP).strip(), plugin_version()
     if not first.startswith(SETUP_STAMP) or written == current or current == "unknown":
         return []  # a hand-written config has no stamp; nothing to compare
-    return [f"hint: .lumberjack.toml was written by lumberjack setup {written}, the plugin is {current};"
+    return [f"hint: {name} was written by lumberjack setup {written}, the plugin is {current};"
             " re-run /lumberjack:setup"]
 
 
@@ -1538,10 +1571,10 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
     # git exports GIT_DIR to hooks: a merge inside a linked worktree must not clean up.
     if "GIT_DIR" in os.environ and not same_dir(here, primary):
         return ["sweep: not the primary checkout; skipped"]
+    if not is_set_up(primary):
+        return [NOT_SET_UP]  # before setup nothing runs, not even the self-heal
     notes = self_heal(primary) + setup_hint(primary)
     try:
-        if not is_set_up(primary):
-            return [NOT_SET_UP, *notes]
         cfg = load_config(primary)
     except ConfigError as error:
         return [str(error), *notes]
@@ -1713,6 +1746,8 @@ def active_settings(cfg: Config) -> str:
 def hook(payload: dict[str, object]) -> int:
     """The one harness entry point: dispatch on the event the hook input names."""
     event = payload.get("hook_event_name")
+    if event in ("SessionStart", "SubagentStart") and unconfigured(Path.cwd()):
+        return not_set_up(str(event))
     if event == "Stop":
         reasons = [] if payload.get("stop_hook_active") else gate_reasons(Path.cwd())
         if reasons:
@@ -1740,6 +1775,13 @@ def hook(payload: dict[str, object]) -> int:
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": event, "additionalContext": output + "\n\n" + rules,
     }}))
+    return 0
+
+
+def not_set_up(event: str) -> int:
+    """Before setup: session start gets only the nudge, without the rules; a subagent gets nothing."""
+    if event == "SessionStart":
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": NOT_SET_UP}}))
     return 0
 
 

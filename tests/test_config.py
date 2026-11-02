@@ -362,6 +362,36 @@ def test_unconfigured_repo_only_gets_the_setup_nudge(
     assert path.exists()
 
 
+def test_unconfigured_session_start_gets_only_the_nudge_and_no_rules(
+    primary: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(primary, ".githooks/post-merge", "#!/bin/sh\n# >>> lumberjack\n# <<< lumberjack\n")
+    monkeypatch.setattr("sys.stdin", io.StringIO(SESSION_START))
+    assert sweep_worktrees.main(["--hook"]) == 0
+    output = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert output["additionalContext"] == sweep_worktrees.NOT_SET_UP
+    assert "lumberjack.script=" not in git(primary, "config", "--list")  # no self-heal either
+    assert "hookspath" not in git(primary, "config", "--list").lower()
+
+
+def test_unconfigured_subagent_start_gets_nothing(
+    primary: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"hook_event_name":"SubagentStart","agent_type":"x"}'))
+    assert sweep_worktrees.main(["--hook"]) == 0
+    assert capsys.readouterr() == ("", "")
+
+
+def test_master_repo_without_origin_head_sweeps_against_origin_master(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = make_primary(tmp_path, monkeypatch, "master")
+    git(root, "remote", "set-head", "origin", "--delete")
+    write(root, ".lumberjack.toml", "")
+    assert sweep_worktrees.main(["--cleanup"]) == 0
+    assert capsys.readouterr().out.startswith("sweep: cleaned 0,")
+
+
 def test_unconfigured_repo_has_no_stop_gate(
     primary: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
