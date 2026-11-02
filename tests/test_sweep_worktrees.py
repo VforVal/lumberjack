@@ -512,24 +512,26 @@ def test_cleanup_keeps_blocked_and_prototype_worktrees(
         "blocked claude/eng-31-local wt/eng-31-local: unpushed",
         "blocked claude/eng-32-evidence wt/eng-32-evidence: evidence",
         "blocked claude/eng-34-diverged wt/eng-34-diverged: tip diverged",
-        "blocked claude/eng-35-ignored wt/eng-35-ignored: ignored files (.env)",
+        "cleaned claude/eng-35-ignored wt/eng-35-ignored (local branch kept)",
     ):
         assert line in out
     assert not any("prototype/" in line for line in out[1:])
     unmerged = primary.parent / "wt" / "eng-3-open"
-    for path in (dirty, local, evidence, proto, diverged, unmerged, ignored):
+    for path in (dirty, local, evidence, proto, diverged, unmerged):
         assert path.exists(), path
+    assert not ignored.exists()  # the automatic sweep treats ignored files as disposable
 
 
-def test_cleanup_removes_a_worktree_holding_only_caches_and_tool_files(primary: Path) -> None:
+def test_remove_takes_a_worktree_holding_only_caches_and_tool_files(primary: Path) -> None:
     (primary / ".git" / "info" / "exclude").write_text(
-        "__pycache__/\n.venv/\n.coverage\n.claude/settings.local.json\n"
+        "__pycache__/\n.venv/\n.coverage\n.claude/settings.local.json\nempty/\n"
     )
     path = landed_worktree(primary, "eng-36-caches")
     for name in ("pkg/__pycache__/a.pyc", ".venv/bin/python", "models/x/.coverage", ".claude/settings.local.json"):
         (path / name).parent.mkdir(parents=True, exist_ok=True)
         (path / name).write_text("x\n")
-    assert "cleaned claude/eng-36-caches wt/eng-36-caches (local branch kept)" in cleanup(primary)
+    (path / "empty" / "sub").mkdir(parents=True)
+    assert remove(primary, path) == (0, ["cleaned claude/eng-36-caches wt/eng-36-caches (local branch kept)"])
     assert not path.exists()
 
 

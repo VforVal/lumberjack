@@ -5,10 +5,9 @@
 Re-run `/lumberjack:setup` after upgrading: it now asks a scope (`local` or `team`), proposes
 `branch_shapes` from your remote branches, and writes to the primary checkout from any worktree.
 
-- The automatic sweep now keeps a landed worktree that holds ignored files other than caches,
-  with reason `ignored files (<names>)`, as `--remove` already did. It used to delete them, `.env`
-  files included. `.coverage` and Claude Code's `.claude/settings.local.json` count as caches, and
-  a folder holding only caches no longer blocks as that folder.
+- `--remove` (and so `/lumberjack:cleanup`) no longer blocks on `.coverage` or Claude Code's
+  `.claude/settings.local.json`: they count as caches. A folder holding only caches, or nothing,
+  no longer blocks as that folder. The automatic sweep still treats ignored files as disposable.
 - Before setup, the plugin changes nothing: session start prints
   `lumberjack: not set up in this repository; run /lumberjack:setup` and the Stop gate is off.
   It used to prune and gate on defaults that rarely fit (#47).
