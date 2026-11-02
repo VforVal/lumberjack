@@ -90,8 +90,9 @@ def remote_facts(repo: Path) -> Facts:
     prefixes = Counter(m.group(1) for name in names if (m := TICKET.search(name)))
     prefix = by_count(prefixes)[0] if prefixes else ""
     owners = Counter(first for name in names if "/" in name and is_owner(first := name.split("/")[0]))
+    trunk = origin_default_branch(repo)  # the trunk is no work branch: a `<slug>` vote would allow any name
     branch_shapes = Counter(
-        shape for name in names if (shape := branch_shape(name, prefix, set(owners)))
+        shape for name in names if name != trunk and (shape := branch_shape(name, prefix, set(owners)))
     )
     return {
         "remote_shapes": [{"shape": shape, "count": shapes[shape]} for shape in by_count(shapes)],
@@ -113,9 +114,11 @@ def branch_shape(name: str, prefix: str, owners: set[str]) -> str:
     *head, last = name.split("/")
     if (head and head[0] in BOTS) or name.startswith("revert-"):
         return ""
-    ticket = re.compile(rf"{re.escape(prefix)}\d+(?=-.)" if prefix else r"(?!)")  # (?!) never matches
-    segments = ["<owner>" if seg in owners else seg for seg in head]
-    return "/".join([*segments, "<ticket>-<slug>" if ticket.match(last) else "<slug>"])
+    ticket = rf"{re.escape(prefix)}\d+" if prefix else r"(?!)"  # (?!) never matches
+    segments = [
+        "<owner>" if seg in owners else "<ticket>" if re.fullmatch(ticket, seg) else seg for seg in head
+    ]
+    return "/".join([*segments, "<ticket>-<slug>" if re.match(rf"{ticket}-.", last) else "<slug>"])
 
 
 def by_count(counter: Counter[str]) -> list[str]:

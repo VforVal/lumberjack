@@ -124,7 +124,7 @@ def shape_regex(cfg: Config, shape: str) -> str:
     """A shape such as `<ticket>-<slug>`: tokens become patterns, the rest is literal."""
     tokens = {
         "<owner>": "(?:" + ("|".join(map(re.escape, cfg["owners"])) or SLUG) + ")",
-        "<ticket>": re.escape(cfg["ticket_prefix"]) + r"\d+" if cfg["ticket_prefix"] else r"[a-z]+-\d+",
+        "<ticket>": re.escape(cfg["ticket_prefix"]) + r"\d+",
         "<slug>": SLUG,
     }
     return "".join(tokens.get(part, re.escape(part)) for part in SHAPE_TOKEN.split(shape))
@@ -223,6 +223,8 @@ def parse_config(table: Config, source: str = "") -> Config:
         raise ConfigError("lumberjack: prototype_prefix must not be empty", source)
     if not all(isinstance(shape, str) and "<slug>" in shape for shape in cfg["branch_shapes"]):
         raise ConfigError("lumberjack: each branch_shapes entry must be a string holding <slug>", source)
+    if not cfg["ticket_prefix"] and any("<ticket>" in shape for shape in cfg["branch_shapes"]):
+        raise ConfigError("lumberjack: a branch_shapes entry with <ticket> needs a ticket_prefix", source)
     # git refuses a path outside the worktree, which would read as `docs` and keep every worktree.
     if not all(
         isinstance(root, str) and root and not PureWindowsPath(root).anchor
@@ -342,14 +344,25 @@ def origin_parts(url: str) -> tuple[str, str, str]:
     return (host.group(1) if host else ""), owner, name
 
 
+def unlanded_commits(primary: Path, base: str, shas: set[str]) -> set[str]:
+    """Commits reachable from shas but not from base, in one call; a tip outside it is integrated.
+
+    It costs what the unlanded work costs, not the size of base's history, and replaces one
+    merge-base per tip, which adds up with hundreds of worktrees."""
+    if not shas:
+        return set()
+    listed = git(primary, "rev-list", "--stdin", input="".join(f"{sha}\n" for sha in shas) + f"^{base}\n")
+    return set(lines(listed)) if listed.returncode == 0 else set(shas)  # on error, prove nothing
+
+
 def content_integrated(primary: Path, base: str, tree: str, sha: str) -> bool:
     """Merging sha into base would change nothing; a conflict or error is inconclusive (False)."""
     merged = git(primary, "merge-tree", "--write-tree", "--no-messages", base, sha)
     return merged.returncode == 0 and merged.stdout.splitlines()[:1] == [tree]
 
 
-def merged_prs(primary: Path, branches: list[str], shas: list[str]) -> dict[str, list[Row]] | str:
-    """Merged PRs per branch name and per detached commit sha from one GraphQL call, or why it failed."""
+def merged_prs(primary: Path, branches: list[str]) -> dict[str, list[Row]] | str:
+    """Merged PRs per branch from one GraphQL call, or the reason it failed."""
     gh = shutil.which("gh")
     if not gh:
         return "gh missing"
@@ -358,12 +371,10 @@ def merged_prs(primary: Path, branches: list[str], shas: list[str]) -> dict[str,
         return "not a github remote"
     owner, repo = json.dumps(owner), json.dumps(repo)
     # shortcut: branches past GH_BATCH are not queried; batch the rest if that bites.
-    fields = "nodes { state headRefOid baseRefName mergeCommit { oid } }"
     aliases = " ".join(
-        [f"b{i}: pullRequests(headRefName: {json.dumps(name)}, states: MERGED, first: 10) {{ {fields} }}"
-         for i, name in enumerate(branches[:GH_BATCH])]
-        + [f"c{i}: object(oid: {json.dumps(sha)}) {{ ... on Commit {{ associatedPullRequests(first: 10) {{ {fields} }} }} }}"
-           for i, sha in enumerate(shas[:GH_BATCH])]
+        f"b{i}: pullRequests(headRefName: {json.dumps(name)}, states: MERGED, first: 10)"
+        " { nodes { headRefOid baseRefName mergeCommit { oid } } }"
+        for i, name in enumerate(branches[:GH_BATCH])
     )
     query = f"query {{ repository(owner: {owner}, name: {repo}) {{ {aliases} }} }}"
     try:
@@ -383,12 +394,7 @@ def merged_prs(primary: Path, branches: list[str], shas: list[str]) -> dict[str,
         if done.returncode:
             return "unreachable"
         found = json.loads(done.stdout)["data"]["repository"]
-        by_commit = {
-            sha: [n for n in (found[f"c{i}"] or {}).get("associatedPullRequests", {}).get("nodes", [])
-                  if n.get("state") == "MERGED"]
-            for i, sha in enumerate(shas[:GH_BATCH])
-        }
-        return {**by_commit, **{name: found[f"b{i}"]["nodes"] for i, name in enumerate(branches[:GH_BATCH])}}
+        return {name: found[f"b{i}"]["nodes"] for i, name in enumerate(branches[:GH_BATCH])}
     except (ValueError, KeyError, TypeError):
         return "unreachable"
 
@@ -397,7 +403,7 @@ def pr_verdict(prs: dict[str, list[Row]] | str, tip: Tip, primary_branch: str) -
     """(tier, reason) from the merged-PR lookup; tier is empty on a miss."""
     if isinstance(prs, str):
         return "", prs
-    nodes = prs.get(tip[1] or tip[0], [])  # a detached tip is looked up by its sha
+    nodes = prs.get(tip[1], [])
     into = [n for n in nodes if n["baseRefName"] == primary_branch]
     if any(n["headRefOid"] == tip[0] for n in into):
         return "landed-pr", ""
@@ -428,12 +434,11 @@ def classify(primary: Path, cfg: Config, tips: set[Tip], stale: bool = False) ->
     """(tier, reason) per tip against origin/<primary>, first decisive tier wins."""
     base = f"origin/{cfg['primary_branch']}"
     tree = git(primary, "rev-parse", f"{base}^{{tree}}").stdout.strip()
-    # One rev-list instead of a merge-base per tip: with hundreds of worktrees the calls add up.
-    history = set(lines(git(primary, "rev-list", base)))
+    unlanded = unlanded_commits(primary, base, {sha for sha, _ in tips})
     result: dict[Tip, Verdict] = {}
     rest = []
     for tip in sorted(tips):
-        if tip[0] in history:
+        if tip[0] not in unlanded:
             result[tip] = ("integrated", "")
         elif content_integrated(primary, base, tree, tip[0]):
             result[tip] = ("content-integrated", "")
@@ -442,8 +447,7 @@ def classify(primary: Path, cfg: Config, tips: set[Tip], stale: bool = False) ->
     if not rest:
         return result
     names = sorted({name for _, name in rest if name})
-    detached = sorted({sha for sha, name in rest if not name})  # looked up by commit, not branch
-    prs = merged_prs(primary, names, detached) if names or detached else {}
+    prs = merged_prs(primary, names) if names else {}  # a detached tip has no pull request
     recent = set(patch_ids(primary, "log", "-200", "-p", base))
     # The guess costs several git calls per tip and never prunes, so it yields to the hook timeout.
     deadline, rushed = time.monotonic() + PROBABLE_SECONDS, False
@@ -1248,7 +1252,7 @@ def purge_trash(start: Path) -> list[str]:
 
 
 def stray_ignored(path: Path) -> list[str]:
-    """Ignored top-level entries other than caches, sorted; git worktree remove deletes them silently."""
+    """Ignored paths other than caches (a wholly ignored folder is one entry), sorted; git worktree remove deletes them silently."""
     ignored = lines(git(path, "status", "--porcelain", "--ignored"))
     names = {line[3:] for line in ignored if line.startswith("!! ")}
     return sorted(name for name in names if Path(name.rstrip("/")).name not in CACHE_DIRS)

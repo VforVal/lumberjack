@@ -172,9 +172,9 @@ def test_branch_shapes_guess_skips_type_words_bots_and_reverts_as_owners(
         {"shape": "<ticket>-<slug>", "count": 3},
         {"shape": "<owner>/<slug>", "count": 1},
         {"shape": "<owner>/<ticket>-<slug>", "count": 1},
-        {"shape": "<slug>", "count": 1},
         {"shape": "chore/<slug>", "count": 1},
-    ]
+        {"shape": "fix/<slug>", "count": 1},
+    ]  # the trunk, main, proposes no shape
 
 
 def test_ticket_token_in_shape(cloned: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -182,6 +182,7 @@ def test_ticket_token_in_shape(cloned: Path, capsys: pytest.CaptureFixture[str])
     git(cloned, "fetch", "-q", "origin")
     shapes = [row["shape"] for row in discover(capsys, cloned)["remote_shapes"]]
     assert "team/<ticket>/*" in shapes
+    assert discover(capsys, cloned)["branch_shapes_guess"] == [{"shape": "<owner>/<ticket>/<slug>", "count": 1}]
 
 
 def test_worktree_parents(

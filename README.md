@@ -229,7 +229,7 @@ An `unverified` row carries a reason: `gh missing`, `not a github remote`,
 `unauthenticated`, `unreachable`, `tip diverged`, `non-primary base`
 (merged, but into another branch) or `no pull request`, with `; origin stale` appended
 when the fetch failed, and `; time budget` when the 5 seconds for `landed-probable` guesses ran
-out (with hundreds of worktrees; the next sweep starts over). Only the first 100 branches go to `gh` in one query; the rest get
+out (with hundreds of worktrees; each sweep guesses in the same order, so the same tips can stay `unverified`). Only the first 100 branches go to `gh` in one query; the rest get
 `no pull request`. Plain `sweep_worktrees.py` output and `--json` show tier and reason.
 
 ## Summary line
@@ -341,7 +341,7 @@ the cleanup rule (an unpushed tip is no loss, since the branch keeps it), and al
 
 - `ignored files (<names>)`: ignored files other than caches (`node_modules`, `.venv`,
   `__pycache__`, tool caches), which removal would delete; the line names the first three
-  top-level entries and how many more, for example `ignored files (.env, data/ and 2 more)`
+  ignored paths (a wholly ignored folder counts once) and how many more, for example `ignored files (.env, data/ and 2 more)`
 - `prototype`: a `prototype_prefix` branch, which is never cleaned
 - `primary checkout`: the path is the primary checkout
 - `no branch`: a detached tip that no local branch contains

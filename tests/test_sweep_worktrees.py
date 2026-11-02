@@ -172,9 +172,6 @@ repo = {
     f"b{i}": {"nodes": fixture["prs"].get(name, [])}
     for i, name in re.findall(r'b(\d+): pullRequests\(headRefName: "([^"]*)"', query)
 }
-for i, sha in re.findall(r'c(\d+): object\(oid: "([0-9a-f]+)"\)', query):
-    nodes = [{"state": "MERGED", **n} for n in fixture.get("commits", {}).get(sha, [])]
-    repo[f"c{i}"] = {"associatedPullRequests": {"nodes": nodes}}
 print(json.dumps({"data": {"repository": repo}}))
 """
 
@@ -254,18 +251,6 @@ def test_tier_integrated_and_gh_missing(
     assert found["claude/eng-1-clean"] == ("integrated", "")
     assert found["claude/eng-3-open"] == ("unverified", "gh missing")
     assert found["feature/x"] == ("unverified", "gh missing")
-
-
-def test_detached_tip_of_a_merged_pull_request_is_landed_pr(
-    primary: Path, gh: Gh, capsys: pytest.CaptureFixture[str]
-) -> None:
-    tip = conflicted_branch(primary, "eng-12-detached")
-    path = primary.parent / "wt" / "eng-12-detached"
-    git(path, "checkout", "-q", "--detach")
-    git(primary, "branch", "-q", "-D", "claude/eng-12-detached")
-    gh.set(commits={tip: [pr(tip)]})
-    row = next(w for w in report(capsys)["worktrees"] if w["head"] == tip)  # type: ignore[attr-defined]
-    assert (row["tier"], row["state"]) == ("landed-pr", "integrated")
 
 
 def test_tier_content_integrated(
