@@ -332,24 +332,23 @@ def test_hook_rejects_input_without_a_handled_event_and_changes_nothing(
     assert "lumberjack.script=" not in git(primary, "config", "--list")
 
 
-def test_custom_evidence_dir_protects_worktree_from_cleanup(
-    primary: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    evidence_worktree(primary)
+def test_custom_evidence_dir_protects_worktree_from_cleanup(primary: Path) -> None:
+    path = evidence_worktree(primary)
     configure(primary, 'evidence_dir = ".evidence"')
     assert sweep_worktrees.main(["--cleanup"]) == 0
-    assert ": evidence" in capsys.readouterr().out
+    assert path.exists()
+    (primary / "pyproject.toml").unlink()
+    write(primary, ".lumberjack.toml", "")
+    assert sweep_worktrees.main(["--cleanup"]) == 0
+    assert not path.exists()
 
 
-def test_without_evidence_dir_an_ignored_evidence_file_blocks_as_ignored(
-    primary: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_empty_evidence_dir_protects_nothing_extra(primary: Path) -> None:
     path = evidence_worktree(primary)
     write(primary, ".lumberjack.toml", "")
     assert sweep_worktrees.DEFAULTS["evidence_dir"] == ""
     assert sweep_worktrees.main(["--cleanup"]) == 0
-    assert ": ignored files (.evidence/)" in capsys.readouterr().out
-    assert path.exists()
+    assert not path.exists()
 
 
 def test_unconfigured_repo_only_gets_the_setup_nudge(

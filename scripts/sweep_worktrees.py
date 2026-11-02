@@ -1067,7 +1067,7 @@ def block_reason(
         found = untracked_docs(Path(w["path"]), cfg["doc_roots"])
         if found is None or found:  # a failed listing keeps the worktree
             return "docs"
-    stray = stray_ignored(Path(w["path"]))
+    stray = stray_ignored(Path(w["path"])) if explicit else []
     return f"ignored files ({named(stray)})" if stray else ""
 
 

@@ -31,17 +31,17 @@ Each session start the sweep fetches `origin` (5 second limit; on failure it say
 1. Its tip is verified landed in `origin/<primary_branch>`: an ancestor, identical
    content, or the exact tip of a merged pull request (checked through `gh`). Squash and
    rebase merges count; a guessed match or an unreachable `gh` leaves it unverified.
-2. `git status --porcelain` is empty, and no ignored file other than a cache would be lost.
+2. `git status --porcelain` is empty. Ignored files do not count; untracked ones do.
 3. The tip is pushed (upstream contains it); waived when a merged pull request had this tip.
 4. `evidence_dir` is empty or absent; no `doc_roots` folder holds an untracked or ignored file.
 5. The branch is not a `prototype_prefix` branch, which is never touched.
 
 A worktree that fails a check stays, and the sweep names the reason: `dirty`, `unpushed`, `evidence`,
 `docs`, `tip diverged` (the pull request merged a different tip), `current checkout` (the sweep runs
-inside it), `locked` (`git worktree lock`), `fresh` (added <24h ago, not moved) or `ignored files`. The branch is
+inside it), `locked` (`git worktree lock`) or `fresh` (added <24h ago, not moved). The local branch is
 always kept. Orphan directories in a worktree root holding only caches (`node_modules`, `.venv`,
 `__pycache__`) are deleted; other orphans are listed. A post-merge run in another worktree cleans
-nothing; with the primary off `primary_branch` the sweep still runs and the Stop gate reports it. On `dirty` or `ignored files`, ask once per group of
+nothing; with the primary off `primary_branch` the sweep still runs and the Stop gate reports it. On `dirty`, ask the maintainer once per group of
 stray files (delete, ignore or commit), never file by file; `/lumberjack:cleanup` has the steps.
 
 When other branches are built on a landed branch, the sweep prints one line per dependent,
