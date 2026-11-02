@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
+
+Re-run `/lumberjack:setup` after upgrading: it now asks a scope (`local` or `team`), proposes
+`branch_shapes` from your remote branches, and writes to the primary checkout from any worktree.
 
 - The automatic sweep now keeps a landed worktree that holds ignored files other than caches,
   with reason `ignored files (<names>)`, as `--remove` already did. It used to delete them, `.env`
