@@ -183,7 +183,7 @@ Leave `doc_strategy` out until `/lumberjack:cleanup` asks for it; once set, it n
 
 After fetching `origin` (5 second limit; on failure the summary says `origin stale`),
 a worktree is removed only when its tip is verified landed in `origin/<primary_branch>`
-and nothing blocks it. Eight reasons block it, and the sweep names the one it hit:
+and nothing blocks it. Nine reasons block it, and the sweep names the one it hit:
 
 - `current checkout`: the sweep is running inside this worktree
 - `locked`: the worktree is locked with `git worktree lock`
@@ -197,6 +197,9 @@ and nothing blocks it. Eight reasons block it, and the sweep names the one it hi
 - `fresh`: the worktree was added less than 24 hours ago and its branch has not moved since
   it was created (its reflog has only the creation entry, or no entry at all). A new branch
   from `origin/<primary_branch>` looks landed and pushed, but its session may have just started
+- `ignored files (<names>)`: ignored files other than caches (`node_modules`, `.venv`, `__pycache__`, tool caches, `.coverage`, Claude's `.claude/settings.local.json`), which removal would
+  delete; the line names the first three ignored paths (an ignored folder counts once) and how
+  many more, for example `ignored files (.env, data/ and 2 more)`
 
 If git itself refuses the removal, git's message is the reason. Removal deletes no commits:
 the branch is kept. Bring the work back with `git worktree add <path> <branch>`.
@@ -336,12 +339,10 @@ directory), the note adds `directory left`, as in `(local branch kept; directory
 and the exit is 0; delete the leftover directory by hand. A failure that leaves the
 worktree registered prints `blocked` with git's error.
 
-It refuses with `current checkout`, `locked`, `fresh`, `dirty`, `evidence` or `docs` as in
-the cleanup rule (an unpushed tip is no loss, since the branch keeps it), and also with:
+It refuses with `current checkout`, `locked`, `fresh`, `dirty`, `evidence`, `docs` or
+`ignored files` as in the cleanup rule (an unpushed tip is no loss, since the branch keeps
+it), and also with:
 
-- `ignored files (<names>)`: ignored files other than caches (`node_modules`, `.venv`,
-  `__pycache__`, tool caches), which removal would delete; the line names the first three
-  ignored paths (a wholly ignored folder counts once) and how many more, for example `ignored files (.env, data/ and 2 more)`
 - `prototype`: a `prototype_prefix` branch, which is never cleaned
 - `primary checkout`: the path is the primary checkout
 - `no branch`: a detached tip that no local branch contains

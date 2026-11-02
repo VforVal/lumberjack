@@ -61,7 +61,7 @@ name; a per-group answer under "Stray files" below is that request.
 An `ignored files` line names up to three entries; for all of them, and for `dirty`, run
 `git -C "PATH" status --porcelain -uall --ignored`.
 Stray entries are the untracked (`??`) ones and the ignored (`!!`) ones other than caches
-(`node_modules`, `.venv`, `__pycache__`, tool caches). Modified tracked files (`M`, `D`)
+(`node_modules`, `.venv`, `__pycache__`, tool caches, `.coverage`, Claude's `.claude/settings.local.json`). Modified tracked files (`M`, `D`)
 are not stray: show them and leave them. Group the stray entries by what produced them:
 one tool's output, one file type, one directory. Never ask file by file. Ask one question
 per group, naming its files and the three choices:

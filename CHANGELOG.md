@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The automatic sweep now keeps a landed worktree that holds ignored files other than caches,
+  with reason `ignored files (<names>)`, as `--remove` already did. It used to delete them, `.env`
+  files included. `.coverage` and Claude Code's `.claude/settings.local.json` count as caches, and
+  a folder holding only caches no longer blocks as that folder.
 - Before setup, the plugin changes nothing: session start prints
   `lumberjack: not set up in this repository; run /lumberjack:setup` and the Stop gate is off.
   It used to prune and gate on defaults that rarely fit (#47).

@@ -53,6 +53,8 @@ RMTREE_HANDLER = "onexc" if sys.version_info >= (3, 12) else "onerror"
 CLEANUP_MODES = ("prune", "report", "keep")
 CACHE_DIRS = {"node_modules", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist"}
 CACHE_DIRS.add(".codex-worktree-name")
+# Ignored files that tools recreate: Claude Code writes approved permissions into every worktree.
+DISPOSABLE_FILES = {".coverage", ".claude/settings.local.json"}
 STRAY_NAMES = 3  # ignored entries a blocked line names before "and N more"
 DOC_REFERENCE = ["research", "prototype"]  # bundle name words that make a bundle reference
 DOC_COMMITS = 1000  # newest commits read from unlanded branches when looking for bundle names
@@ -1065,7 +1067,7 @@ def block_reason(
         found = untracked_docs(Path(w["path"]), cfg["doc_roots"])
         if found is None or found:  # a failed listing keeps the worktree
             return "docs"
-    stray = stray_ignored(Path(w["path"])) if explicit else []
+    stray = stray_ignored(Path(w["path"]))
     return f"ignored files ({named(stray)})" if stray else ""
 
 
@@ -1252,10 +1254,25 @@ def purge_trash(start: Path) -> list[str]:
 
 
 def stray_ignored(path: Path) -> list[str]:
-    """Ignored paths other than caches (a wholly ignored folder is one entry), sorted; git worktree remove deletes them silently."""
-    ignored = lines(git(path, "status", "--porcelain", "--ignored"))
+    """Ignored paths other than caches, sorted; git worktree remove deletes them silently.
+
+    `matching` lists each ignored path where its pattern matched, so a folder holding only a
+    cache is not reported as the folder, and an ignored folder stays one entry."""
+    ignored = lines(git(path, "status", "--porcelain", "--ignored=matching", "-uall"))
     names = {line[3:] for line in ignored if line.startswith("!! ")}
-    return sorted(name for name in names if Path(name.rstrip("/")).name not in CACHE_DIRS)
+    return sorted(name for name in names if not disposable(name) and holds_a_file(path / name))
+
+
+def holds_a_file(path: Path) -> bool:
+    """path is a file, or a folder with a file somewhere below it; empty folders lose nothing."""
+    return not path.is_dir() or any(files for _, _, files in os.walk(path))
+
+
+def disposable(name: str) -> bool:
+    """A cache folder or a file a tool recreates, at any depth."""
+    return Path(name.rstrip("/")).name in CACHE_DIRS or any(
+        name == file or name.endswith("/" + file) for file in DISPOSABLE_FILES
+    )
 
 
 def named(entries: list[str]) -> str:
