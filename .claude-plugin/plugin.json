@@ -1,6 +1,6 @@
 {
   "name": "lumberjack",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "Cleans up after coding agents: removes worktrees and trashes work docs once their work has landed, and blocks turns that end on a misnamed branch or an off-branch primary checkout",
   "author": {
     "name": "VforVal",

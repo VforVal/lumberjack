@@ -1,40 +1,56 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 
-- `--remove` (and so `/lumberjack:cleanup`) no longer blocks on `.coverage` or Claude Code's
-  `.claude/settings.local.json`: they count as caches. A folder holding only caches, or nothing,
-  no longer blocks as that folder. The automatic sweep still treats ignored files as disposable.
-- Before setup, the plugin changes nothing: session start prints
-  `lumberjack: not set up in this repository; run /lumberjack:setup` and the Stop gate is off.
-  It used to prune and gate on defaults that rarely fit (#47).
-- The sweep no longer skips when the primary checkout is off `primary_branch`; it still
-  judges every tip against `origin/<primary_branch>`, and the Stop gate reports the primary (#47).
-- `primary_branch` defaults to origin's default branch (`origin/HEAD`), so `master` repositories
-  work without setting it (#47).
-- Setup asks a scope first. `local` (just me) keeps everything out of git: config in
-  `.git/lumberjack.toml`, the hook in `.git/hooks`, the block in `CLAUDE.local.md`. `team` is the
-  committed setup as before (#48).
-- Setup works from any checkout: run from a linked worktree, it writes to the primary checkout,
-  where the hooks read config, and says so (#48).
-- Setup finds `.claude/CLAUDE.md`, and never writes through a symbolic link: an `AGENTS.md`
-  linked to shared guidelines is left alone and another file is asked for (#48).
-- Setup and the hooks find the primary checkout of a submodule or a `--separate-git-dir`
-  repository, and refuse a bare repository with worktrees instead of writing beside it (#48).
-- New `branch_shapes` key: allowed branch names built from `<owner>`, `<ticket>` and `<slug>`,
-  such as `["<ticket>-<slug>", "chore/<slug>"]`, for repositories without owner prefixes. Setup
-  proposes the shapes the remote branches use; `owners_guess` no longer lists change types
-  (`chore`, `fix`), bots (`dependabot`) or `revert-*` branches (#49).
-- An `ignored files` block names the first three ignored entries, for example
-  `ignored files (.env, data/ and 2 more)` (#49).
-- Session start is faster with many worktrees: 400 worktrees took 24 s and now take about 11 s.
-  `landed-probable` guesses stop after 5 seconds, and the rest get `; time budget` (#49).
-- Discover lists worktree folders inside the repository relative to it, and leaves out folders
-  that hold the repository itself, such as the home directory (#48).
-- Website: the product site now lives in `website/` and deploys to GitHub Pages
-  (https://vforval.github.io/lumberjack/) through `.github/workflows/site.yml`.
-- README: new "What it runs and sends" section listing every command, network call and file
-  change, for the Claude plugin directory review. The logo uses Markdown image syntax.
+Lumberjack now fits repositories that don't look like ours: a `master` trunk, ticket branches
+with no owner prefix, a shared repository you don't want to commit setup files to, or a primary
+checkout that sits on a feature branch.
+
+**Upgrade:** update the plugin in Claude Code and in Codex, start a new session, then run
+`/lumberjack:setup` again in each repository. Setup asks two new questions: who the setup is for
+(just you or the team), and which branch names are allowed.
+
+**Heads-up:** cleanup now also runs while your primary checkout is on a feature branch. Before,
+it skipped without saying so, so the first session after the upgrade may remove many landed
+worktrees at once. As before, cleanup deletes a landed worktree's ignored files, `.env` included:
+copy out what you need first, or set `cleanup = "report"` to see the list before anything goes.
+
+### Setup
+
+- Nothing happens before setup. A repository with no lumberjack config gets one line at session
+  start, `lumberjack: not set up in this repository; run /lumberjack:setup`, and nothing else: no
+  cleanup, no Stop hook checks (#47).
+- Just me or team. "Just me" (`scope = "local"`) keeps everything out of git: config in
+  `.git/lumberjack.toml`, the hook in `.git/hooks`, the instructions in `CLAUDE.local.md`. "Team"
+  commits the setup, as before (#48).
+- Run setup from any checkout. Started in a worktree, it writes to the primary checkout, where the
+  hooks read it (#48).
+- Shared instruction files stay untouched. Setup finds `.claude/CLAUDE.md` and never writes through
+  a symbolic link, so an `AGENTS.md` linked to shared guidelines is left alone (#48).
+- The trunk comes from origin, so `master` repositories work without setting it (#47).
+- Submodules and `--separate-git-dir` repositories work; a bare repository gets a clear refusal (#48).
+
+### Branch names
+
+- The new `branch_shapes` setting lists the names you allow, built from `<owner>`, `<ticket>` and
+  `<slug>`, for example `["<ticket>-<slug>", "chore/<slug>"]` for a team with no owner prefixes.
+  Setup proposes the shapes your remote branches already use, and you edit the list. Owner guesses
+  no longer include `chore`, `fix`, bots or reverts (#49).
+
+### Cleanup
+
+- Cleanup runs while the primary checkout is on a feature branch; the Stop hook still reports the
+  primary being off trunk (#47).
+- A blocked line names the files, for example `ignored files (.env, data/ and 2 more)` (#49).
+- `/lumberjack:cleanup` no longer stops at Claude Code's `.claude/settings.local.json` or at
+  `.coverage`: they count as caches, like `.venv` (#53).
+- Faster with many worktrees: session start with 400 worktrees went from 24 s to about 11 s (#49).
+
+### Docs
+
+- The README's new "What it runs and sends" section lists every command, network call and file
+  change.
+- The product site is at https://vforval.github.io/lumberjack/.
 
 ## 1.2.1
 
