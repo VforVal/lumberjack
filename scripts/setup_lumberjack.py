@@ -48,6 +48,14 @@ TRACKER_DOC = Path("docs", "agents", "issue-tracker.md")  # the matt-pocock-skil
 INSTRUCTION_FILES = ("CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md")
 LOCAL_INSTRUCTIONS = "CLAUDE.local.md"  # Claude Code's personal, uncommitted instructions file
 SCOPES = ("team", "local")
+# First segments that name a change type or a bot, never an owner; type words stay literal in shapes.
+TYPE_WORDS = {
+    "build", "bugfix", "chore", "ci", "debug", "docs", "experiment", "feat", "feature", "fix",
+    "hotfix", "perf", "refactor", "release", "revert", "sec", "security", "spike", "test", "wip",
+}  # fmt: skip
+BOTS = {"dependabot", "renovate", "github-actions"}
+NOT_OWNERS = TYPE_WORDS | BOTS
+SHAPE_GUESSES = 5  # branch shapes offered, most common first
 DOC_SCAN = 200  # directory entries examined per ignored folder
 NOT_DOCS = CACHE_DIRS | {".claude", ".codex"}  # tool caches and harness folders, never doc roots
 
@@ -80,12 +88,37 @@ def remote_facts(repo: Path) -> Facts:
         head, _, _ = name.rpartition("/")
         shapes[(TICKET.sub("<ticket>", head) + "/" if head else "") + "*"] += 1
     prefixes = Counter(m.group(1) for name in names if (m := TICKET.search(name)))
-    owners = Counter(name.split("/")[0] for name in names if "/" in name)
+    prefix = by_count(prefixes)[0] if prefixes else ""
+    owners = Counter(first for name in names if "/" in name and is_owner(first := name.split("/")[0]))
+    trunk = origin_default_branch(repo)  # the trunk is no work branch: a `<slug>` vote would allow any name
+    branch_shapes = Counter(
+        shape for name in names if name != trunk and (shape := branch_shape(name, prefix, set(owners)))
+    )
     return {
         "remote_shapes": [{"shape": shape, "count": shapes[shape]} for shape in by_count(shapes)],
-        "ticket_prefix_guess": by_count(prefixes)[0] if prefixes else "",
+        "ticket_prefix_guess": prefix,
         "owners_guess": by_count(owners),
+        "branch_shapes_guess": [
+            {"shape": shape, "count": branch_shapes[shape]} for shape in by_count(branch_shapes)[:SHAPE_GUESSES]
+        ],
     }
+
+
+def is_owner(segment: str) -> bool:
+    """A first path segment that names a person or agent, not a change type, a bot or a revert."""
+    return segment not in NOT_OWNERS and not segment.startswith("revert-") and not TICKET.search(segment)
+
+
+def branch_shape(name: str, prefix: str, owners: set[str]) -> str:
+    """name as a branch_shapes entry, such as `<ticket>-<slug>`; empty for bot and revert branches."""
+    *head, last = name.split("/")
+    if (head and head[0] in BOTS) or name.startswith("revert-"):
+        return ""
+    ticket = rf"{re.escape(prefix)}\d+" if prefix else r"(?!)"  # (?!) never matches
+    segments = [
+        "<owner>" if seg in owners else "<ticket>" if re.fullmatch(ticket, seg) else seg for seg in head
+    ]
+    return "/".join([*segments, "<ticket>-<slug>" if re.match(rf"{ticket}-.", last) else "<slug>"])
 
 
 def by_count(counter: Counter[str]) -> list[str]:
@@ -249,6 +282,7 @@ def instructions_facts(repo: Path) -> Facts:
 
 CONFIG_DOC = {
     "owners": "Branch owners allowed in <owner>/<slug> names; empty allows any owner.",
+    "branch_shapes": "Allowed branch names from <owner>, <ticket> and <slug>; empty uses <owner>/<ticket>-<slug> or <owner>/<slug>.",
     "ticket_prefix": "Ticket prefix in branch names (for example eng-); empty means no ticket.",
     "prototype_prefix": "Prefix of throwaway prototype branches, which skip the owner rule.",
     "primary_branch": "Trunk branch the primary checkout stays on; landed work merges into it.",

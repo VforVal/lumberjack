@@ -147,6 +147,7 @@ SessionStart prints the error and cleans nothing.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `owners` | `[]` | Allowed branch prefixes `<owner>/...`; empty accepts any lowercase owner |
+| `branch_shapes` | `[]` | Allowed branch names built from `<owner>`, `<ticket>` (`ticket_prefix` then digits) and `<slug>`, the rest literal; each must hold `<slug>`. Empty means `<owner>/<ticket>-<slug>` or `<owner>/<slug>`. Setup proposes the shapes your remote branches use. A table entry: `branch_shapes = ["<ticket>-<slug>", "<owner>/<ticket>-<slug>", "chore/<slug>"]` |
 | `ticket_prefix` | `""` | Issue slug prefix in branches and directories; empty makes the ticket segment optional |
 | `prototype_prefix` | `"prototype/"` | Prototype capture branch prefix; such branches are never cleaned |
 | `primary_branch` | origin's default branch (`origin/HEAD`), else `"main"` | Branch the primary checkout stays on and work lands in |
@@ -227,7 +228,8 @@ Each tip is checked against `origin/<primary_branch>`; the first decisive tier w
 An `unverified` row carries a reason: `gh missing`, `not a github remote`,
 `unauthenticated`, `unreachable`, `tip diverged`, `non-primary base`
 (merged, but into another branch) or `no pull request`, with `; origin stale` appended
-when the fetch failed. Only the first 100 branches go to `gh` in one query; the rest get
+when the fetch failed, and `; time budget` when the 5 seconds for `landed-probable` guesses ran
+out (with hundreds of worktrees; each sweep guesses in the same order, so the same tips can stay `unverified`). Only the first 100 branches go to `gh` in one query; the rest get
 `no pull request`. Plain `sweep_worktrees.py` output and `--json` show tier and reason.
 
 ## Summary line
@@ -337,8 +339,9 @@ worktree registered prints `blocked` with git's error.
 It refuses with `current checkout`, `locked`, `fresh`, `dirty`, `evidence` or `docs` as in
 the cleanup rule (an unpushed tip is no loss, since the branch keeps it), and also with:
 
-- `ignored files`: ignored files other than caches (`node_modules`, `.venv`,
-  `__pycache__`, tool caches), which removal would delete
+- `ignored files (<names>)`: ignored files other than caches (`node_modules`, `.venv`,
+  `__pycache__`, tool caches), which removal would delete; the line names the first three
+  ignored paths (a wholly ignored folder counts once) and how many more, for example `ignored files (.env, data/ and 2 more)`
 - `prototype`: a `prototype_prefix` branch, which is never cleaned
 - `primary checkout`: the path is the primary checkout
 - `no branch`: a detached tip that no local branch contains

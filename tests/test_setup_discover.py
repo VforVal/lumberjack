@@ -15,7 +15,7 @@ import setup_lumberjack  # noqa: E402
 
 KEYS = {
     "repo", "started_in", "name", "instructions", "harness", "origin", "remote_shapes", "ticket_prefix_guess",
-    "owners_guess", "worktree_parents", "tracker", "hook_manager", "post_merge_hook",
+    "owners_guess", "branch_shapes_guess", "worktree_parents", "tracker", "hook_manager", "post_merge_hook",
     "hooks_path", "git_version", "python", "gh", "config", "doc_root_candidates",
 }  # fmt: skip
 
@@ -156,11 +156,33 @@ def test_remote_branch_guesses(cloned: Path, capsys: pytest.CaptureFixture[str])
     ]
 
 
+def test_branch_shapes_guess_skips_type_words_bots_and_reverts_as_owners(
+    cloned: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    branches = (
+        "sta-1-a", "sta-2-b", "sta-3-c", "itai/sta-4-d", "itai/e", "chore/bump",
+        "dependabot/uv/models/x", "revert-1618-itai", "fix/typo",
+    )  # fmt: skip
+    for branch in branches:
+        git(cloned, "push", "-q", "origin", f"main:{branch}")
+    git(cloned, "fetch", "-q", "origin")
+    facts = discover(capsys, cloned)
+    assert facts["owners_guess"] == ["itai"]
+    assert facts["branch_shapes_guess"] == [
+        {"shape": "<ticket>-<slug>", "count": 3},
+        {"shape": "<owner>/<slug>", "count": 1},
+        {"shape": "<owner>/<ticket>-<slug>", "count": 1},
+        {"shape": "chore/<slug>", "count": 1},
+        {"shape": "fix/<slug>", "count": 1},
+    ]  # the trunk, main, proposes no shape
+
+
 def test_ticket_token_in_shape(cloned: Path, capsys: pytest.CaptureFixture[str]) -> None:
     git(cloned, "push", "-q", "origin", "main:team/eng-9/slug")
     git(cloned, "fetch", "-q", "origin")
     shapes = [row["shape"] for row in discover(capsys, cloned)["remote_shapes"]]
     assert "team/<ticket>/*" in shapes
+    assert discover(capsys, cloned)["branch_shapes_guess"] == [{"shape": "<owner>/<ticket>/<slug>", "count": 1}]
 
 
 def test_worktree_parents(

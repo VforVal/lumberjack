@@ -43,18 +43,18 @@ write it, and offer another of `CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md` tha
 
 **B. Branch shape.**
 - `ticket_prefix`: `tracker.prefix`, else `ticket_prefix_guess`, else `""`.
-- `owners`: `owners_guess`, else `[]` (empty accepts any lowercase owner).
-- `prototype_prefix`: `"prototype/"`.
-- `primary_branch`: `origin.default_branch`, else `"main"`.
+- `branch_shapes`: propose the `branch_shapes_guess` shapes that cover most branches, with counts,
+  as the canonical list; the maintainer adds, drops or edits. `[]` means `<owner>/<ticket>-<slug>`.
+- `owners` (only when a shape holds `<owner>`): `owners_guess`, else `[]` (any lowercase owner).
+- `prototype_prefix`: `"prototype/"`. `primary_branch`: `origin.default_branch`, else `"main"`.
 
 **C. Worktree roots** (`worktree_roots`): only where to look for leftover folders; registered
 worktrees are swept wherever they live, so confirm, do not explore. Recommend `worktree_parents`
 as globs; outside the repo, a root without `{name}` only matches `<dir>/<name>`. Always write
 a list: the defaults scan the home directory.
 
-**D. Behaviour.** `cleanup`: recommend `"prune"` (removes landed worktrees at session
-start); offer `"report"` to watch what it would remove first. `stop_gate`: recommend
-`true` (the Stop hook blocks on branch and primary-checkout debt).
+**D. Behaviour.** `cleanup`: recommend `"prune"` (removes landed worktrees at session start);
+offer `"report"` to watch first. `stop_gate`: recommend `true` (blocks branch and primary debt).
 
 **E. Git hook** (`hook`). Recommend `hook_manager` when set (`husky`, `lefthook`,
 `pre-commit`, `simple-git-hooks`), else `plain`; `none` skips the hook. The hook runs
@@ -83,7 +83,7 @@ working one remove `"*"`, deleting the key when no word is left. Copy `config.do
 Show one consolidated summary and wait for an explicit yes:
 
 1. The full answers JSON. Keys: `scope`, `harnesses`, `pin_claude_settings`, `instructions`,
-   `ticket_prefix`, `owners`, `prototype_prefix`, `primary_branch`, `worktree_roots`, `cleanup`,
+   `branch_shapes`, `ticket_prefix`, `owners`, `prototype_prefix`, `primary_branch`, `worktree_roots`, `cleanup`,
    `stop_gate`, `hook`, `evidence_dir`, `doc_roots`, `doc_reference`, `doc_strategy`.
 2. The files apply will write: team: `.lumberjack.toml`, the hook file, `.claude/settings.json`
    when pinning, the `instructions` block, `.gitignore` entries for roots inside the repository;

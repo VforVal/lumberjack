@@ -57,13 +57,15 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
 - `skills/lumberjack/SKILL.md` stays at most 79 lines, `skills/setup/SKILL.md` at most 120;
   they and `skills/cleanup/SKILL.md` name no consumer project, path or ticket; config keys
   carry the project-specific values.
+- `branch_pattern` checks names against `branch_shapes` (else `LEGACY_SHAPES`).
+- Session start must stay well inside its 30 s timeout at 400 worktrees (11 s on Linux): nothing
+  quadratic in worktrees; guesses yield to `PROBABLE_SECONDS`.
 - The hooks act only on a repository with a config file (`is_set_up`); without one, session
   start prints `NOT_SET_UP` and the Stop gate is off. Never gate or prune on bare `DEFAULTS`.
 
 ## Release checklist
 
-Our own repos share one shape (trunk `main`, `<owner>/` branches, setup run from the primary),
-so every release also proves a foreign one before the version bump:
+Our repos share one shape (`main`, `<owner>/` branches), so each release proves a foreign one:
 
 - Tests cover a trunk other than `main`, a primary checkout off trunk and an unconfigured repo.
 - A marketplace install (not `--plugin-dir`) on macOS and on Windows reaches a finished setup

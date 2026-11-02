@@ -17,8 +17,8 @@ under one of `worktree_roots`, one per task, so it inherits nothing uncommitted.
 
 ## Branch names and documents
 
-`<owner>/<ticket_prefix><n>-<slug>` or `<owner>/<slug>`, where `<owner>` is one of
-`owners` (empty means any lowercase owner). Throwaway captures use
+One of `branch_shapes`, where `<ticket>` is `<ticket_prefix><n>`; empty means `<owner>/<ticket>-<slug>`
+or `<owner>/<slug>`, `<owner>` one of `owners` (empty: any lowercase owner). Throwaway captures use
 `<prototype_prefix><ticket_prefix><n>-<slug>`. Other shapes fail the Stop gate.
 Put work documents only in a `doc_roots` folder named `<ticket_prefix><n>-<slug>` or the branch slug.
 When you read or extend a bundle for your ticket, add it to the bundle's `Tickets: <ids>` line (top file).

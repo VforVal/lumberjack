@@ -58,7 +58,8 @@ name; a per-group answer under "Stray files" below is that request.
 
 ### Stray files (`dirty` or `ignored files`)
 
-The block line names no files. Run `git -C "PATH" status --porcelain -uall --ignored`.
+An `ignored files` line names up to three entries; for all of them, and for `dirty`, run
+`git -C "PATH" status --porcelain -uall --ignored`.
 Stray entries are the untracked (`??`) ones and the ignored (`!!`) ones other than caches
 (`node_modules`, `.venv`, `__pycache__`, tool caches). Modified tracked files (`M`, `D`)
 are not stray: show them and leave them. Group the stray entries by what produced them:

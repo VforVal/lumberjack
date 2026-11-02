@@ -20,6 +20,7 @@ BEGIN, END = "# >>> lumberjack", "# <<< lumberjack"
 ANSWERS = {
     "harnesses": ["claude"],
     "owners": ["val", "claude"],
+    "branch_shapes": ["<owner>/<ticket>-<slug>", "<ticket>-<slug>"],
     "ticket_prefix": "eng-",
     "prototype_prefix": "proto/",
     "primary_branch": "trunk",

@@ -28,8 +28,10 @@ Row = dict[str, Any]
 Config = dict[str, Any]
 # Neutral defaults: any owner, no ticket prefix, nothing extra protected from prune.
 # .lumberjack.toml, else [tool.lumberjack] in pyproject.toml, overrides them.
+SLUG = r"[a-z0-9][a-z0-9_-]*"
 DEFAULTS: Config = {
     "owners": [],
+    "branch_shapes": [],
     "ticket_prefix": "",
     "prototype_prefix": "prototype/",
     "primary_branch": "main",
@@ -51,6 +53,7 @@ RMTREE_HANDLER = "onexc" if sys.version_info >= (3, 12) else "onerror"
 CLEANUP_MODES = ("prune", "report", "keep")
 CACHE_DIRS = {"node_modules", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist"}
 CACHE_DIRS.add(".codex-worktree-name")
+STRAY_NAMES = 3  # ignored entries a blocked line names before "and N more"
 DOC_REFERENCE = ["research", "prototype"]  # bundle name words that make a bundle reference
 DOC_COMMITS = 1000  # newest commits read from unlanded branches when looking for bundle names
 TRASH_STAMP = "%Y%m%dT%H%M%SZ"  # a trash folder is named for the UTC moment its files moved
@@ -99,12 +102,37 @@ def walk(path: str, deadline: float = math.inf) -> Iterator[os.DirEntry[str]]:
         yield entry
 
 
+# The built-in naming rule, as shapes: an owner, then an optional ticket, then a slug.
+LEGACY_SHAPES = ("<owner>/<ticket>-<slug>", "<owner>/<slug>")
+SHAPE_TOKEN = re.compile(r"(<owner>|<ticket>|<slug>)")
+
+
 def branch_pattern(cfg: Config) -> re.Pattern[str]:
-    owners = "|".join(map(re.escape, cfg["owners"])) or r"[a-z0-9][a-z0-9_-]*"
+    """Every allowed branch name: one of the shapes, or a prototype branch."""
+    shapes = allowed_shapes(cfg)
     ticket = rf"{re.escape(cfg['ticket_prefix'])}\d+-" if cfg["ticket_prefix"] else ""
-    slug = r"[a-z0-9][a-z0-9_-]*"
-    proto = re.escape(cfg["prototype_prefix"])
-    return re.compile(rf"^({owners})/({ticket})?{slug}$|^{proto}{ticket}{slug}$")
+    proto = re.escape(cfg["prototype_prefix"]) + ticket + SLUG
+    return re.compile("|".join(f"^{shape_regex(cfg, shape)}$" for shape in shapes) + f"|^{proto}$")
+
+
+def allowed_shapes(cfg: Config) -> list[str]:
+    """branch_shapes, else the built-in rule (its ticket shape only with a ticket_prefix)."""
+    return cfg["branch_shapes"] or list(LEGACY_SHAPES if cfg["ticket_prefix"] else LEGACY_SHAPES[1:])
+
+
+def shape_regex(cfg: Config, shape: str) -> str:
+    """A shape such as `<ticket>-<slug>`: tokens become patterns, the rest is literal."""
+    tokens = {
+        "<owner>": "(?:" + ("|".join(map(re.escape, cfg["owners"])) or SLUG) + ")",
+        "<ticket>": re.escape(cfg["ticket_prefix"]) + r"\d+",
+        "<slug>": SLUG,
+    }
+    return "".join(tokens.get(part, re.escape(part)) for part in SHAPE_TOKEN.split(shape))
+
+
+def rename_hint(cfg: Config) -> str:
+    """The first allowed shape, spelled for a person: `<ticket>` becomes `<prefix><n>`."""
+    return allowed_shapes(cfg)[0].replace("<ticket>", f"{cfg['ticket_prefix']}<n>")
 
 
 class ConfigError(Exception):
@@ -193,6 +221,10 @@ def parse_config(table: Config, source: str = "") -> Config:
             raise ConfigError(f"lumberjack: {key} must be {type(default).__name__}", source)
     if not cfg["prototype_prefix"]:
         raise ConfigError("lumberjack: prototype_prefix must not be empty", source)
+    if not all(isinstance(shape, str) and "<slug>" in shape for shape in cfg["branch_shapes"]):
+        raise ConfigError("lumberjack: each branch_shapes entry must be a string holding <slug>", source)
+    if not cfg["ticket_prefix"] and any("<ticket>" in shape for shape in cfg["branch_shapes"]):
+        raise ConfigError("lumberjack: a branch_shapes entry with <ticket> needs a ticket_prefix", source)
     # git refuses a path outside the worktree, which would read as `docs` and keep every worktree.
     if not all(
         isinstance(root, str) and root and not PureWindowsPath(root).anchor
@@ -299,6 +331,7 @@ GH_TIMEOUT = 5
 GH_BATCH = 100
 FETCH_TIMEOUT = 5
 FRESH_HOURS = 24
+PROBABLE_SECONDS = 5  # time for landed-probable guesses per sweep; later tips stay unverified
 Tip = tuple[str, str]  # (commit sha, branch name; empty when detached)
 Verdict = tuple[str, str]  # (tier, reason; the reason is empty unless unverified)
 
@@ -311,13 +344,21 @@ def origin_parts(url: str) -> tuple[str, str, str]:
     return (host.group(1) if host else ""), owner, name
 
 
-def local_tier(primary: Path, base: str, tree: str, sha: str) -> str:
-    if git(primary, "merge-base", "--is-ancestor", sha, base).returncode == 0:
-        return "integrated"
+def unlanded_commits(primary: Path, base: str, shas: set[str]) -> set[str]:
+    """Commits reachable from shas but not from base, in one call; a tip outside it is integrated.
+
+    It costs what the unlanded work costs, not the size of base's history, and replaces one
+    merge-base per tip, which adds up with hundreds of worktrees."""
+    if not shas:
+        return set()
+    listed = git(primary, "rev-list", "--stdin", input="".join(f"{sha}\n" for sha in shas) + f"^{base}\n")
+    return set(lines(listed)) if listed.returncode == 0 else set(shas)  # on error, prove nothing
+
+
+def content_integrated(primary: Path, base: str, tree: str, sha: str) -> bool:
+    """Merging sha into base would change nothing; a conflict or error is inconclusive (False)."""
     merged = git(primary, "merge-tree", "--write-tree", "--no-messages", base, sha)
-    if merged.returncode == 0 and merged.stdout.splitlines()[:1] == [tree]:
-        return "content-integrated"
-    return ""  # a conflict or error is inconclusive
+    return merged.returncode == 0 and merged.stdout.splitlines()[:1] == [tree]
 
 
 def merged_prs(primary: Path, branches: list[str]) -> dict[str, list[Row]] | str:
@@ -393,11 +434,14 @@ def classify(primary: Path, cfg: Config, tips: set[Tip], stale: bool = False) ->
     """(tier, reason) per tip against origin/<primary>, first decisive tier wins."""
     base = f"origin/{cfg['primary_branch']}"
     tree = git(primary, "rev-parse", f"{base}^{{tree}}").stdout.strip()
+    unlanded = unlanded_commits(primary, base, {sha for sha, _ in tips})
     result: dict[Tip, Verdict] = {}
     rest = []
     for tip in sorted(tips):
-        if tier := local_tier(primary, base, tree, tip[0]):
-            result[tip] = (tier, "")
+        if tip[0] not in unlanded:
+            result[tip] = ("integrated", "")
+        elif content_integrated(primary, base, tree, tip[0]):
+            result[tip] = ("content-integrated", "")
         else:
             rest.append(tip)
     if not rest:
@@ -405,13 +449,16 @@ def classify(primary: Path, cfg: Config, tips: set[Tip], stale: bool = False) ->
     names = sorted({name for _, name in rest if name})
     prs = merged_prs(primary, names) if names else {}  # a detached tip has no pull request
     recent = set(patch_ids(primary, "log", "-200", "-p", base))
+    # The guess costs several git calls per tip and never prunes, so it yields to the hook timeout.
+    deadline, rushed = time.monotonic() + PROBABLE_SECONDS, False
     for tip in rest:
         tier, reason = pr_verdict(prs, tip, cfg["primary_branch"])
-        if not tier:
+        if not tier and not (rushed := rushed or time.monotonic() > deadline):
             tier = "landed-probable" if probable(primary, base, tip[0], recent) else ""
         if not tier:
             tier = "unverified"
             reason = (reason or "no pull request") + ("; origin stale" if stale else "")
+            reason += "; time budget" if rushed else ""
         result[tip] = (tier, reason)
     return result
 
@@ -467,14 +514,20 @@ def classify_orphan(path: Path) -> str:
 
 
 def same_dir(a: str | Path, b: str | Path) -> bool:
-    return os.path.normcase(Path(a).resolve()) == os.path.normcase(Path(b).resolve())
+    return dir_key(a) == dir_key(b)
+
+
+def dir_key(path: str | Path) -> str:
+    """One spelling per directory, for comparing paths on any platform."""
+    return os.path.normcase(Path(path).resolve())
 
 
 def orphan_rows(primary: Path, cfg: Config, trees: list[Row]) -> list[Row]:
+    listed = {dir_key(tree["path"]) for tree in trees}  # resolved once: hundreds of worktrees add up
     return [
         {"kind": classify_orphan(path), "path": path.as_posix()}
         for path in sorted(orphan_candidates(primary, cfg))
-        if not any(same_dir(path, tree["path"]) for tree in trees)
+        if dir_key(path) not in listed
     ]
 
 
@@ -1012,7 +1065,8 @@ def block_reason(
         found = untracked_docs(Path(w["path"]), cfg["doc_roots"])
         if found is None or found:  # a failed listing keeps the worktree
             return "docs"
-    return "ignored files" if explicit and stray_ignored(Path(w["path"])) else ""
+    stray = stray_ignored(Path(w["path"])) if explicit else []
+    return f"ignored files ({named(stray)})" if stray else ""
 
 
 def tag(primary: Path, w: Row) -> str:
@@ -1197,11 +1251,17 @@ def purge_trash(start: Path) -> list[str]:
     return done or ["trash: nothing past retention"]
 
 
-def stray_ignored(path: Path) -> bool:
-    """Ignored entries other than caches; git worktree remove deletes them silently."""
+def stray_ignored(path: Path) -> list[str]:
+    """Ignored paths other than caches (a wholly ignored folder is one entry), sorted; git worktree remove deletes them silently."""
     ignored = lines(git(path, "status", "--porcelain", "--ignored"))
-    names = [Path(line[3:].rstrip("/")).name for line in ignored if line.startswith("!! ")]
-    return any(name not in CACHE_DIRS for name in names)
+    names = {line[3:] for line in ignored if line.startswith("!! ")}
+    return sorted(name for name in names if Path(name.rstrip("/")).name not in CACHE_DIRS)
+
+
+def named(entries: list[str]) -> str:
+    """Up to STRAY_NAMES entries, then how many more."""
+    more = len(entries) - STRAY_NAMES
+    return ", ".join(entries[:STRAY_NAMES]) + (f" and {more} more" if more > 0 else "")
 
 
 def dependent_hints(primary: Path, trunk: str, name: str, sha: str) -> list[str]:
@@ -1654,10 +1714,9 @@ def gate(start: Path) -> list[str]:
     reasons = []
     ok = {cfg["primary_branch"], "HEAD"}
     if branch not in ok and not branch_pattern(cfg).match(branch):
-        ticket = f"{cfg['ticket_prefix']}<n>-" if cfg["ticket_prefix"] else ""
         reasons.append(
             f"gate: branch {branch} violates the lumberjack skill naming;"
-            f" rename it: git branch -m <owner>/{ticket}<slug>"
+            f" rename it: git branch -m {rename_hint(cfg)}"
         )
     if here == primary and branch != cfg["primary_branch"]:
         reasons.append(
