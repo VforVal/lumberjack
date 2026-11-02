@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `--remove` (and so `/lumberjack:cleanup`) no longer blocks on `.coverage` or Claude Code's
+  `.claude/settings.local.json`: they count as caches. A folder holding only caches, or nothing,
+  no longer blocks as that folder. The automatic sweep still treats ignored files as disposable.
 - Before setup, the plugin changes nothing: session start prints
   `lumberjack: not set up in this repository; run /lumberjack:setup` and the Stop gate is off.
   It used to prune and gate on defaults that rarely fit (#47).

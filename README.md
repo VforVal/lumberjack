@@ -340,8 +340,10 @@ It refuses with `current checkout`, `locked`, `fresh`, `dirty`, `evidence` or `d
 the cleanup rule (an unpushed tip is no loss, since the branch keeps it), and also with:
 
 - `ignored files (<names>)`: ignored files other than caches (`node_modules`, `.venv`,
-  `__pycache__`, tool caches), which removal would delete; the line names the first three
-  ignored paths (a wholly ignored folder counts once) and how many more, for example `ignored files (.env, data/ and 2 more)`
+  `__pycache__`, tool caches, `.coverage`, Claude's `.claude/settings.local.json`), which removal
+  would delete; the line names the first three ignored paths (an ignored folder counts once) and
+  how many more, for example `ignored files (.env, data/ and 2 more)`. The automatic sweep does
+  not check ignored files: it treats them as disposable.
 - `prototype`: a `prototype_prefix` branch, which is never cleaned
 - `primary checkout`: the path is the primary checkout
 - `no branch`: a detached tip that no local branch contains

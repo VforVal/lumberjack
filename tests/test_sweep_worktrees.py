@@ -519,7 +519,20 @@ def test_cleanup_keeps_blocked_and_prototype_worktrees(
     unmerged = primary.parent / "wt" / "eng-3-open"
     for path in (dirty, local, evidence, proto, diverged, unmerged):
         assert path.exists(), path
-    assert not ignored.exists()  # ignored files are disposable
+    assert not ignored.exists()  # the automatic sweep treats ignored files as disposable
+
+
+def test_remove_takes_a_worktree_holding_only_caches_and_tool_files(primary: Path) -> None:
+    (primary / ".git" / "info" / "exclude").write_text(
+        "__pycache__/\n.venv/\n.coverage\n.claude/settings.local.json\nempty/\n"
+    )
+    path = landed_worktree(primary, "eng-36-caches")
+    for name in ("pkg/__pycache__/a.pyc", ".venv/bin/python", "models/x/.coverage", ".claude/settings.local.json"):
+        (path / name).parent.mkdir(parents=True, exist_ok=True)
+        (path / name).write_text("x\n")
+    (path / "empty" / "sub").mkdir(parents=True)
+    assert remove(primary, path) == (0, ["cleaned claude/eng-36-caches wt/eng-36-caches (local branch kept)"])
+    assert not path.exists()
 
 
 def doc_worktree(primary: Path, name: str, doc: str | None, extra: str = 'doc_roots = ["docs/work"]\n') -> Path:
