@@ -40,8 +40,8 @@ A worktree that fails a check stays, and the sweep names the reason: `dirty`, `u
 `docs`, `tip diverged` (the pull request merged a different tip), `current checkout` (the sweep runs
 inside it), `locked` (`git worktree lock`) or `fresh` (added <24h ago, not moved). The local branch is
 always kept. Orphan directories in a worktree root holding only caches (`node_modules`, `.venv`,
-`__pycache__`) are deleted; other orphans are listed. With the primary off `primary_branch`, or a
-post-merge run in another worktree, nothing is cleaned. On `dirty`, ask the maintainer once per group of
+`__pycache__`) are deleted; other orphans are listed. A post-merge run in another worktree cleans
+nothing; with the primary off `primary_branch` the sweep still runs and the Stop gate reports it. On `dirty`, ask the maintainer once per group of
 stray files (delete, ignore or commit), never file by file; `/lumberjack:cleanup` has the steps.
 
 When other branches are built on a landed branch, the sweep prints one line per dependent,

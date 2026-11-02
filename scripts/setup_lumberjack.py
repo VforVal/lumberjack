@@ -33,6 +33,7 @@ from sweep_worktrees import (
     lines,
     load_config,
     local_config,
+    origin_default_branch,
     origin_parts,
     parse_config,
     plugin_version,
@@ -62,14 +63,9 @@ def origin_facts(repo: Path) -> Facts:
         return facts
     _, owner, name = origin_parts(url)
     facts.update(url=url, owner=owner or None, name=name or None)
-    head = git_out(repo, "symbolic-ref", "refs/remotes/origin/HEAD")
-    if head.startswith(REMOTE):
-        facts["default_branch"] = head.removeprefix(REMOTE)
-    else:
-        for name in ("main", "master"):
-            if git(repo, "rev-parse", "--verify", "-q", REMOTE + name).returncode == 0:
-                facts["default_branch"] = name
-                break
+    branch = origin_default_branch(repo)
+    if git(repo, "rev-parse", "--verify", "-q", REMOTE + branch).returncode == 0:
+        facts["default_branch"] = branch
     return facts
 
 
@@ -292,13 +288,14 @@ def write_file(repo: Path, rel: str, text: str) -> None:
     print(f"wrote {rel}")
 
 
-def check_answers(answers: Any) -> Facts:
+def check_answers(answers: Any, repo: Path) -> Facts:
     if not isinstance(answers, dict):
         raise abort("answers must be a JSON object")
     if unknown := sorted(answers.keys() - ANSWER_KEYS):
         raise abort("unknown answer key: " + ", ".join(unknown))
     optional = {"harnesses": [], "pin_claude_settings": False, "scope": "team", "instructions": ""}
-    full = {"hook": "plain", **optional, **DEFAULTS, **answers}
+    trunk = {"primary_branch": origin_default_branch(repo)}  # an omitted trunk is origin's, not "main"
+    full = {"hook": "plain", **optional, **DEFAULTS, **trunk, **answers}
     for key, default in optional.items():
         if not isinstance(full[key], type(default)):
             raise abort(f"{key} must be {type(default).__name__}")
@@ -660,7 +657,7 @@ def main(argv: list[str] | None = None) -> int:
     repo = find_primary(started_in)  # the hooks read config from the primary checkout only
     if args.command == "apply":
         try:
-            answers = check_answers(json.loads(args.answers.read_text(encoding="utf-8")))
+            answers = check_answers(json.loads(args.answers.read_text(encoding="utf-8")), repo)
         except (OSError, ValueError) as error:
             raise abort(f"cannot read answers: {error}") from error
         apply(answers, repo)

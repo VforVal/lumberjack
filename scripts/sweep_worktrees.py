@@ -158,13 +158,29 @@ def load_config(primary: Path) -> Config:
 
 def is_set_up(primary: Path) -> bool:
     """Whether a config file exists; the hooks act only on a repository that setup has seen."""
-    return bool(config_table(primary)[0])
+    try:
+        return bool(config_table(primary)[0])
+    except ConfigError:
+        return True  # a broken config is still a config: its error must reach the maintainer
+
+
+def unconfigured(start: Path) -> bool:
+    """start is inside a git repository that has no lumberjack config."""
+    try:
+        return not is_set_up(find_primary(start))
+    except SystemExit:
+        return False  # not a repository: the hook paths report that themselves
 
 
 def origin_default_branch(primary: Path) -> str:
-    """The branch origin/HEAD names, else the built-in primary_branch default."""
+    """The branch origin/HEAD names, else origin's main or master, else the built-in default."""
     ref = git(primary, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD").stdout.strip()
-    return ref.removeprefix("origin/") or DEFAULTS["primary_branch"]
+    if ref.startswith("origin/"):
+        return ref.removeprefix("origin/")
+    for name in ("main", "master"):
+        if git(primary, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{name}").returncode == 0:
+            return name
+    return DEFAULTS["primary_branch"]
 
 
 def parse_config(table: Config, source: str = "") -> Config:
@@ -1482,10 +1498,10 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
     # git exports GIT_DIR to hooks: a merge inside a linked worktree must not clean up.
     if "GIT_DIR" in os.environ and not same_dir(here, primary):
         return ["sweep: not the primary checkout; skipped"]
+    if not is_set_up(primary):
+        return [NOT_SET_UP]  # before setup nothing runs, not even the self-heal
     notes = self_heal(primary) + setup_hint(primary)
     try:
-        if not is_set_up(primary):
-            return [NOT_SET_UP, *notes]
         cfg = load_config(primary)
     except ConfigError as error:
         return [str(error), *notes]
@@ -1658,6 +1674,8 @@ def active_settings(cfg: Config) -> str:
 def hook(payload: dict[str, object]) -> int:
     """The one harness entry point: dispatch on the event the hook input names."""
     event = payload.get("hook_event_name")
+    if event in ("SessionStart", "SubagentStart") and unconfigured(Path.cwd()):
+        return not_set_up(str(event))
     if event == "Stop":
         reasons = [] if payload.get("stop_hook_active") else gate_reasons(Path.cwd())
         if reasons:
@@ -1685,6 +1703,13 @@ def hook(payload: dict[str, object]) -> int:
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": event, "additionalContext": output + "\n\n" + rules,
     }}))
+    return 0
+
+
+def not_set_up(event: str) -> int:
+    """Before setup: session start gets only the nudge, without the rules; a subagent gets nothing."""
+    if event == "SessionStart":
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": NOT_SET_UP}}))
     return 0
 
 
