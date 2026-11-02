@@ -68,7 +68,7 @@ def test_config_round_trips_through_load_config(
     code, out, _ = apply(repo, capsys)
     assert code == 0 and "wrote .lumberjack.toml" in out
     text = read(repo, ".lumberjack.toml")
-    assert text.startswith("# written by lumberjack setup 1.2.1\n")
+    assert text.startswith(f"# written by lumberjack setup {setup_lumberjack.plugin_version()}\n")
     expected = {k: v for k, v in ANSWERS.items() if k in load_config(repo)}
     assert load_config(repo) == expected == tomllib.loads(text)
     for key in expected:  # every key has a comment line directly above it
