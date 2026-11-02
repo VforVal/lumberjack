@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import setup_lumberjack  # noqa: E402
 
 KEYS = {
-    "repo", "name", "harness", "origin", "remote_shapes", "ticket_prefix_guess",
+    "repo", "started_in", "name", "instructions", "harness", "origin", "remote_shapes", "ticket_prefix_guess",
     "owners_guess", "worktree_parents", "tracker", "hook_manager", "post_merge_hook",
     "hooks_path", "git_version", "python", "gh", "config", "doc_root_candidates",
 }  # fmt: skip
@@ -55,6 +55,40 @@ def test_plain_repo_without_origin_has_every_key(
     assert facts["python"] == sys.version.split()[0]
     assert facts["gh"] == {"present": False, "authenticated": None}
     assert facts["config"] == {"source": None, "error": None}
+
+
+def test_discover_from_a_worktree_reports_the_primary_checkout(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    linked = repo.parent / "lumberjack-setup-d6328e"
+    git(repo, "worktree", "add", "-q", "-b", "claude/setup", str(linked))
+    facts = discover(capsys, linked)
+    assert facts["repo"] == str(repo) and facts["name"] == "plain"
+    assert facts["started_in"] == str(linked)
+    assert discover(capsys, repo)["started_in"] is None
+
+
+def test_instructions_target_finds_the_claude_folder_file_before_agents_md(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(repo, "AGENTS.md", "x")
+    write(repo, ".claude/CLAUDE.md", "x")
+    facts = discover(capsys, repo)
+    assert facts["instructions"] == {"target": ".claude/CLAUDE.md", "symlink": False, "links_to": None}
+    assert facts["harness"]["claude_md"] is True
+
+
+def test_instructions_target_reports_a_symlinked_agents_md(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(repo, "docs/ai/GLOBAL_GUIDELINES.md", "shared\n")
+    try:
+        (repo / "AGENTS.md").symlink_to(Path("docs", "ai", "GLOBAL_GUIDELINES.md"))
+    except OSError:
+        pytest.skip("symlinks need extra rights on this system")
+    assert discover(capsys, repo)["instructions"] == {
+        "target": "AGENTS.md", "symlink": True, "links_to": os.path.join("docs", "ai", "GLOBAL_GUIDELINES.md"),
+    }  # fmt: skip
 
 
 def test_git_missing_exits_with_install_instructions(
@@ -124,10 +158,13 @@ def test_worktree_parents(
 ) -> None:
     git(cloned, "worktree", "add", "-q", "-b", "a", str(tmp_path / "wts" / "a"))
     git(cloned, "worktree", "add", "-q", "-b", "b", str(tmp_path / "home" / "wt" / "b"))
+    git(cloned, "worktree", "add", "-q", "-b", "c", str(cloned / ".claude" / "worktrees" / "c"))
+    git(cloned, "worktree", "add", "-q", "-b", "d", str(tmp_path / "next-to-primary"))
     assert discover(capsys, cloned)["worktree_parents"] == [
+        ".claude/worktrees",
         (tmp_path / "wts").as_posix(),
         "~/wt",
-    ]
+    ]  # tmp_path holds the primary itself, so it is no root
 
 
 def test_tracker_doc(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:

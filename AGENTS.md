@@ -8,7 +8,11 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
 - `scripts/sweep_worktrees.py` - worktree and branch sweep (standard-library Python 3.11+).
 - `scripts/setup_lumberjack.py` - setup helper: `discover` prints repo facts as JSON (read-only),
   `apply ANSWERS.json` writes `.lumberjack.toml`, the post-merge hook (marker-bounded block),
-  Claude settings, the CLAUDE.md/AGENTS.md block and `.gitignore` entries; never commits.
+  Claude settings, the instructions block and `.gitignore` entries; never commits. Both resolve
+  the primary checkout first (`find_primary`), so setup works from a linked worktree. `scope =
+  "local"` writes untracked files instead: `.git/lumberjack.toml` (`LOCAL_CONFIG`, the last place
+  `config_files` looks), `.git/hooks/post-merge`, `CLAUDE.local.md`, `.git/info/exclude`.
+  Apply never writes through a symlink (`instructions_target`).
   Imports `sweep_worktrees` for config loading and `parse_config`, remote URL parsing, the hook
   markers (`HOOK_BEGIN`, `HOOK_END`, `HOOK_MARKERS`) and `hook_manager` (`HOOK_MANAGERS` table).
 - `skills/lumberjack/SKILL.md` - the rules the script enforces.

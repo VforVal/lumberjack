@@ -116,14 +116,27 @@ class ConfigError(Exception):
 
 
 CONFIG_FILES = ((".lumberjack.toml", ()), ("pyproject.toml", ("tool", "lumberjack")))
+# A just-me setup keeps its config in the git common dir: every worktree reads it, git never tracks it.
+LOCAL_CONFIG = ".git/lumberjack.toml"
 NOT_SET_UP = "lumberjack: not set up in this repository; run /lumberjack:setup"
+
+
+def local_config(primary: Path) -> Path:
+    """Where a just-me setup keeps its config: lumberjack.toml in the git common dir."""
+    common = git(primary, "rev-parse", "--git-common-dir").stdout.strip() or ".git"
+    return (primary / common).resolve() / "lumberjack.toml"
+
+
+def config_files(primary: Path) -> list[tuple[Path, str, tuple[str, ...]]]:
+    """(path, display name, TOML section) per config location, committed files first."""
+    committed = [(primary / name, name, section) for name, section in CONFIG_FILES]
+    return [*committed, (local_config(primary), LOCAL_CONFIG, ())]
 
 
 def config_table(primary: Path) -> tuple[str, Config]:
     """(file name, raw table) from the first config file found; ("", {}) when none."""
     # shortcut: first file found wins, no merge across files; revisit if both are needed.
-    for name, section in CONFIG_FILES:
-        path = primary / name
+    for path, name, section in config_files(primary):
         if not path.is_file():
             continue
         try:
@@ -1446,8 +1459,9 @@ def plugin_version() -> str:
 
 def setup_hint(primary: Path) -> list[str]:
     """A hint to re-run setup when another version's setup wrote .lumberjack.toml: new settings need its questions."""
+    stamped = (path for path, _, section in config_files(primary) if not section and path.is_file())
     try:
-        with (primary / ".lumberjack.toml").open(encoding="utf-8") as file:
+        with next(stamped, primary / ".lumberjack.toml").open(encoding="utf-8") as file:
             first = file.readline()
     except (OSError, UnicodeDecodeError):
         return []

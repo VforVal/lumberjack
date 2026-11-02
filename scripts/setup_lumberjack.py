@@ -12,6 +12,7 @@ if sys.version_info < (3, 11):  # before tomllib: a plain message instead of a t
     sys.exit(f"lumberjack: Python 3.11+ required, found {sys.version.split()[0]}")
 import tomllib
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from sweep_worktrees import (
     HOOK_BEGIN,
     HOOK_END,
     HOOK_MARKERS,
+    LOCAL_CONFIG,
     SETUP_STAMP,
     ConfigError,
     config_table,
@@ -30,6 +32,7 @@ from sweep_worktrees import (
     hook_script,
     lines,
     load_config,
+    local_config,
     origin_parts,
     parse_config,
     plugin_version,
@@ -40,6 +43,10 @@ Facts = dict[str, Any]
 REMOTE = "refs/remotes/origin/"
 TICKET = re.compile(r"\b([a-z]+-)\d+")
 TRACKER_DOC = Path("docs", "agents", "issue-tracker.md")  # the matt-pocock-skills convention
+# The block goes to the first that exists, else AGENTS.md; .claude/CLAUDE.md is Claude Code's too.
+INSTRUCTION_FILES = ("CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md")
+LOCAL_INSTRUCTIONS = "CLAUDE.local.md"  # Claude Code's personal, uncommitted instructions file
+SCOPES = ("team", "local")
 DOC_SCAN = 200  # directory entries examined per ignored folder
 NOT_DOCS = CACHE_DIRS | {".claude", ".codex"}  # tool caches and harness folders, never doc roots
 
@@ -91,14 +98,20 @@ def by_count(counter: Counter[str]) -> list[str]:
 
 
 def worktree_parents(repo: Path) -> list[str]:
-    parents = set()
-    for tree in registered(repo)[1:]:
-        parent = Path(tree["path"]).parent
-        try:
-            parents.add("~/" + parent.relative_to(Path.home()).as_posix())
-        except ValueError:
-            parents.add(parent.as_posix())
-    return sorted(parents)
+    """Folders holding linked worktrees: relative inside the repo, ~-based under home.
+
+    A folder that holds the repo itself (home, ~/Documents) is left out: as a root it would
+    match every project next to this one."""
+    parents = {Path(tree["path"]).parent for tree in registered(repo)[1:]}
+    return sorted(root_text(repo, p) for p in parents if not repo.is_relative_to(p))
+
+
+def root_text(repo: Path, parent: Path) -> str:
+    if parent.is_relative_to(repo):
+        return parent.relative_to(repo).as_posix()
+    if parent.is_relative_to(Path.home()):
+        return "~/" + parent.relative_to(Path.home()).as_posix()
+    return parent.as_posix()
 
 
 def tracker_facts(repo: Path) -> Facts:
@@ -191,15 +204,17 @@ def config_facts(repo: Path) -> Facts:
         return {"source": error.source or None, "error": str(error)}
 
 
-def discover(repo: Path) -> Facts:
+def discover(repo: Path, started_in: Path) -> Facts:
+    """Facts about the primary checkout repo; started_in is the checkout setup was run from."""
     hooks_path = git_out(repo, "config", "--type=path", "core.hooksPath") or None
     has = repo.joinpath
-    package = has("package.json")
     return {
         "repo": str(repo),
+        "started_in": None if started_in == repo else str(started_in),
         "name": repo.name,
+        "instructions": instructions_facts(repo),
         "harness": {
-            "claude_md": has("CLAUDE.md").is_file(),
+            "claude_md": has("CLAUDE.md").is_file() or has(".claude", "CLAUDE.md").is_file(),
             "agents_md": has("AGENTS.md").is_file(),
             "claude_settings": has(".claude", "settings.json").is_file(),
             "codex_dir": has(".codex").is_dir(),
@@ -219,6 +234,17 @@ def discover(repo: Path) -> Facts:
     }
 
 
+def instructions_facts(repo: Path) -> Facts:
+    """Where apply writes the instructions block for a team setup, and whether that file is a link."""
+    target = next((name for name in INSTRUCTION_FILES if (repo / name).is_file()), "AGENTS.md")
+    path = repo / target
+    return {
+        "target": target,
+        "symlink": path.is_symlink(),
+        "links_to": os.path.relpath(path.resolve(), repo) if path.is_symlink() else None,
+    }
+
+
 CONFIG_DOC = {
     "owners": "Branch owners allowed in <owner>/<slug> names; empty allows any owner.",
     "ticket_prefix": "Ticket prefix in branch names (for example eng-); empty means no ticket.",
@@ -233,7 +259,7 @@ CONFIG_DOC = {
     "doc_reference": "Per doc root, folder-name words that make a bundle reference (* for all: a durable root); default research, prototype.",
 }
 HARNESSES = ("claude", "codex")
-ANSWER_KEYS = {*DEFAULTS, "harnesses", "hook", "pin_claude_settings"}
+ANSWER_KEYS = {*DEFAULTS, "harnesses", "hook", "pin_claude_settings", "scope", "instructions"}
 
 
 def abort(message: str) -> SystemExit:
@@ -271,14 +297,21 @@ def check_answers(answers: Any) -> Facts:
         raise abort("answers must be a JSON object")
     if unknown := sorted(answers.keys() - ANSWER_KEYS):
         raise abort("unknown answer key: " + ", ".join(unknown))
-    full = {"harnesses": [], "hook": "plain", "pin_claude_settings": False, **DEFAULTS, **answers}
-    for key, default in {"harnesses": [], "pin_claude_settings": False}.items():
+    optional = {"harnesses": [], "pin_claude_settings": False, "scope": "team", "instructions": ""}
+    full = {"hook": "plain", **optional, **DEFAULTS, **answers}
+    for key, default in optional.items():
         if not isinstance(full[key], type(default)):
             raise abort(f"{key} must be {type(default).__name__}")
     if not set(full["harnesses"]) <= set(HARNESSES):
         raise abort("harnesses must be a list of " + " and/or ".join(HARNESSES))
     if full["hook"] not in HOOKS:
         raise abort("hook must be one of " + ", ".join(HOOKS))
+    if full["scope"] not in SCOPES:
+        raise abort("scope must be one of " + ", ".join(SCOPES))
+    if full["scope"] == "local" and full["pin_claude_settings"]:
+        raise abort("pin_claude_settings needs scope team: pinning prompts every teammate")
+    if full["scope"] == "local" and full["hook"] not in ("plain", "none"):
+        raise abort("scope local needs hook plain or none: a hook manager's files are committed")
     return full
 
 
@@ -490,10 +523,8 @@ HOOK_WRITERS = {
 HOOKS = (*HOOK_WRITERS, "none")
 
 
-def write_hook(repo: Path, hook: str) -> None:
-    if hook == "none":
-        return
-    HOOK_WRITERS[hook](repo)
+def write_hook(repo: Path, writer: Callable[[Path], None]) -> None:
+    writer(repo)
     script = hook_script(find_primary(repo))
     git(repo, "config", "lumberjack.script", script)
     print(f"ran git config lumberjack.script {script}")
@@ -520,36 +551,73 @@ Re-run the `lumberjack:setup` skill after conventions change.
 """
 
 
-def write_instructions(repo: Path, block: str) -> None:
-    for name in ("CLAUDE.md", "AGENTS.md"):
-        if (repo / name).is_file():
-            write_merged(repo, name, block, markers=MD_MARKERS)
-            return
-    write_file(repo, "AGENTS.md", block)
+def instructions_target(answers: Facts, repo: Path) -> str:
+    """The file that gets the instructions block; never a symbolic link, which may be shared."""
+    default = LOCAL_INSTRUCTIONS if answers["scope"] == "local" else instructions_facts(repo)["target"]
+    target = answers["instructions"] or default
+    path = repo / target
+    if Path(target).is_absolute() or ".." in Path(target).parts:
+        raise abort(f"instructions must be a path inside the repository: {target}")
+    if path.is_symlink():
+        linked = os.path.relpath(path.resolve(), repo)
+        raise abort(f"{target} is a symbolic link to {linked}; set instructions to another file")
+    return target
 
 
-def write_ignores(repo: Path, roots: list[str]) -> None:
-    ignore = repo / ".gitignore"
+def write_instructions(repo: Path, target: str, block: str) -> None:
+    write_merged(repo, target, block, markers=MD_MARKERS)
+
+
+def write_ignores(repo: Path, rel: str, entries: list[str]) -> None:
+    """Append the entries missing from the ignore file at rel."""
+    ignore = repo / rel
     text = ignore.read_text(encoding="utf-8") if ignore.is_file() else ""
     have = text.splitlines()
-    if new := [x for x in worktree_ignores(roots) if x not in have]:
+    if new := [x for x in entries if x not in have]:
         sep = "" if text.endswith("\n") or not text else "\n"
-        write_file(repo, ".gitignore", text + sep + "".join(f"{x}\n" for x in new))
+        write_file(repo, rel, text + sep + "".join(f"{x}\n" for x in new))
+
+
+def local_rel(repo: Path, path: Path) -> str:
+    """path relative to the primary checkout when inside it, as apply prints it; else absolute."""
+    return path.relative_to(repo).as_posix() if path.is_relative_to(repo) else str(path)
+
+
+def local_plain_hook(repo: Path) -> None:
+    """The plain hook in the git common dir's hooks folder; core.hooksPath is left alone."""
+    if hook_facts(repo, None):
+        plain_hook(repo)  # appends to the existing hook there
+        return
+    path = local_config(repo).parent / "hooks" / "post-merge"
+    write_merged(repo, local_rel(repo, path), BLOCK, start="#!/bin/sh\n")
+    make_executable(path)
 
 
 def apply(answers: Facts, repo: Path) -> None:
+    """Write the answers into the primary checkout repo: committed files (team) or untracked ones (local)."""
     config, hook = config_text(answers), answers["hook"]
+    local = answers["scope"] == "local"
     settings = None  # every read that can abort runs before the first write
     if answers["pin_claude_settings"] and "claude" in answers["harnesses"]:
         settings = read_json(repo, ".claude/settings.json") or {}
     if hook == "simple-git-hooks" and read_json(repo, "package.json") is None:
         raise abort("simple-git-hooks needs a package.json")
-    write_file(repo, ".lumberjack.toml", config)
-    write_hook(repo, hook)
+    if local and hook == "plain" and git_out(repo, "config", "core.hooksPath"):
+        raise abort("scope local cannot write a hook under core.hooksPath (it is committed); use hook none")
+    target = instructions_target(answers, repo)
+    ignores = worktree_ignores(answers["worktree_roots"])
+    git_dir = local_config(repo).parent
+    write_file(repo, local_rel(repo, git_dir / "lumberjack.toml") if local else ".lumberjack.toml", config)
+    if hook != "none":
+        write_hook(repo, local_plain_hook if local and hook == "plain" else HOOK_WRITERS[hook])
+    if local:
+        untracked = [target] if git(repo, "ls-files", "--error-unmatch", target).returncode else []
+        write_ignores(repo, local_rel(repo, git_dir / "info" / "exclude"), [*ignores, *untracked])
+    else:
+        write_ignores(repo, ".gitignore", ignores)
     if settings is not None:
         write_settings(repo, settings)
-    write_instructions(repo, instructions(answers))
-    write_ignores(repo, answers["worktree_roots"])
+    write_instructions(repo, target, instructions(answers))
     for harness in HARNESSES:
         if harness in answers["harnesses"]:
             for line in INSTALL_STEPS[harness]:
@@ -563,7 +631,8 @@ def save_strategy(strategy: Any, repo: Path) -> None:
     try:
         source, table = config_table(repo)
         table.pop("doc_strategy", None)  # replaced whole, so an old-style one never blocks its own fix
-        write_file(repo, ".lumberjack.toml", config_text({**parse_config(table, source), "doc_strategy": strategy}))
+        target = local_rel(repo, local_config(repo)) if source == LOCAL_CONFIG else ".lumberjack.toml"
+        write_file(repo, target, config_text({**parse_config(table, source), "doc_strategy": strategy}))
     except ConfigError as error:
         raise abort(str(error)) from error
 
@@ -587,20 +656,22 @@ def main(argv: list[str] | None = None) -> int:
         raise abort("git missing: install git from https://git-scm.com/downloads and re-run") from error
     if not top:
         raise SystemExit(f"setup: not a git repository: {args.repo or Path.cwd()}")
+    started_in = Path(top)
+    repo = find_primary(started_in)  # the hooks read config from the primary checkout only
     if args.command == "apply":
         try:
             answers = check_answers(json.loads(args.answers.read_text(encoding="utf-8")))
         except (OSError, ValueError) as error:
             raise abort(f"cannot read answers: {error}") from error
-        apply(answers, Path(top))
+        apply(answers, repo)
         return 0
     if args.command == "strategy":
         try:
-            save_strategy(json.loads(args.strategy.read_text(encoding="utf-8")), Path(top))
+            save_strategy(json.loads(args.strategy.read_text(encoding="utf-8")), repo)
         except (OSError, ValueError) as error:
             raise abort(f"cannot read strategy: {error}") from error
         return 0
-    print(json.dumps(discover(Path(top)), indent=2))
+    print(json.dumps(discover(repo, started_in), indent=2))
     return 0
 
 
