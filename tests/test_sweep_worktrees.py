@@ -814,9 +814,9 @@ def test_fetch_failure_marks_origin_stale_and_still_classifies(primary: Path) ->
     assert "blocked claude/eng-1-clean wt/eng-1-clean: unpushed" in out
 
 
-def test_cleanup_skips_a_primary_off_the_primary_branch(primary: Path) -> None:
+def test_cleanup_still_sweeps_when_the_primary_is_off_the_primary_branch(primary: Path) -> None:
     git(primary, "checkout", "-q", "-b", "claude/eng-50-x")
-    assert cleanup(primary) == ["sweep: primary checkout is not on main; skipped"]
+    assert cleanup(primary)[0].startswith("sweep: cleaned 0, landed 2,")
 
 
 def test_bad_config_prints_in_cleanup_and_blocks_the_gate(primary: Path) -> None:

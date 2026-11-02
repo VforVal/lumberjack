@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Before setup, the plugin changes nothing: session start prints
+  `lumberjack: not set up in this repository; run /lumberjack:setup` and the Stop gate is off.
+  It used to prune and gate on defaults that rarely fit (#47).
+- The sweep no longer skips when the primary checkout is off `primary_branch`; it still
+  judges every tip against `origin/<primary_branch>`, and the Stop gate reports the primary (#47).
+- `primary_branch` defaults to origin's default branch (`origin/HEAD`), so `master` repositories
+  work without setting it (#47).
 - Website: the product site now lives in `website/` and deploys to GitHub Pages
   (https://vforval.github.io/lumberjack/) through `.github/workflows/site.yml`.
 - README: new "What it runs and sends" section listing every command, network call and file

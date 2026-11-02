@@ -116,6 +116,7 @@ class ConfigError(Exception):
 
 
 CONFIG_FILES = ((".lumberjack.toml", ()), ("pyproject.toml", ("tool", "lumberjack")))
+NOT_SET_UP = "lumberjack: not set up in this repository; run /lumberjack:setup"
 
 
 def config_table(primary: Path) -> tuple[str, Config]:
@@ -139,7 +140,34 @@ def config_table(primary: Path) -> tuple[str, Config]:
 
 def load_config(primary: Path) -> Config:
     source, table = config_table(primary)
-    return parse_config(table, source)
+    return parse_config({"primary_branch": origin_default_branch(primary), **table}, source)
+
+
+def is_set_up(primary: Path) -> bool:
+    """Whether a config file exists; the hooks act only on a repository that setup has seen."""
+    try:
+        return bool(config_table(primary)[0])
+    except ConfigError:
+        return True  # a broken config is still a config: its error must reach the maintainer
+
+
+def unconfigured(start: Path) -> bool:
+    """start is inside a git repository that has no lumberjack config."""
+    try:
+        return not is_set_up(find_primary(start))
+    except SystemExit:
+        return False  # not a repository: the hook paths report that themselves
+
+
+def origin_default_branch(primary: Path) -> str:
+    """The branch origin/HEAD names, else origin's main or master, else the built-in default."""
+    ref = git(primary, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD").stdout.strip()
+    if ref.startswith("origin/"):
+        return ref.removeprefix("origin/")
+    for name in ("main", "master"):
+        if git(primary, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{name}").returncode == 0:
+            return name
+    return DEFAULTS["primary_branch"]
 
 
 def parse_config(table: Config, source: str = "") -> Config:
@@ -1456,6 +1484,8 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
     # git exports GIT_DIR to hooks: a merge inside a linked worktree must not clean up.
     if "GIT_DIR" in os.environ and not same_dir(here, primary):
         return ["sweep: not the primary checkout; skipped"]
+    if not is_set_up(primary):
+        return [NOT_SET_UP]  # before setup nothing runs, not even the self-heal
     notes = self_heal(primary) + setup_hint(primary)
     try:
         cfg = load_config(primary)
@@ -1474,9 +1504,8 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
 
 
 def fetch_trunk(primary: Path, trunk: str) -> tuple[bool, str]:
-    """Fetch origin when the primary checkout is on trunk; (origin stale, why the sweep skips or empty)."""
-    if git(primary, "branch", "--show-current").stdout.strip() != trunk:
-        return False, f"sweep: primary checkout is not on {trunk}; skipped"
+    """Fetch origin; (origin stale, why the sweep skips or empty). Whatever the primary has checked out,
+    tips are judged against origin/<trunk>, and the Stop gate reports an off-trunk primary."""
     stale = fetch(primary)
     if git(primary, "rev-parse", "--verify", "-q", f"origin/{trunk}").returncode:
         return stale, f"sweep: origin/{trunk} is missing; skipped"
@@ -1584,6 +1613,8 @@ def mark_session(start: Path, session_id: str) -> None:
 def gate(start: Path) -> list[str]:
     """Debt in the checkout a session runs in; the Stop hook reports it once."""
     primary = find_primary(start)
+    if not is_set_up(primary):
+        return []
     cfg = load_config(primary)
     if not cfg["stop_gate"]:
         return []
@@ -1629,6 +1660,8 @@ def active_settings(cfg: Config) -> str:
 def hook(payload: dict[str, object]) -> int:
     """The one harness entry point: dispatch on the event the hook input names."""
     event = payload.get("hook_event_name")
+    if event in ("SessionStart", "SubagentStart") and unconfigured(Path.cwd()):
+        return not_set_up(str(event))
     if event == "Stop":
         reasons = [] if payload.get("stop_hook_active") else gate_reasons(Path.cwd())
         if reasons:
@@ -1656,6 +1689,13 @@ def hook(payload: dict[str, object]) -> int:
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": event, "additionalContext": output + "\n\n" + rules,
     }}))
+    return 0
+
+
+def not_set_up(event: str) -> int:
+    """Before setup: session start gets only the nudge, without the rules; a subagent gets nothing."""
+    if event == "SessionStart":
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": NOT_SET_UP}}))
     return 0
 
 
