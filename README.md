@@ -102,20 +102,30 @@ or `claude plugin --help` and upgrade to a tested version before continuing.
 
 ## Setup
 
-In Claude Code, run `/lumberjack:setup` once per repository. In Codex, choose
+In Claude Code, run `/lumberjack:setup` once per repository, from any of its checkouts:
+it always writes to the primary checkout, which is where the hooks read config. In Codex, choose
 `lumberjack:setup` from the skill picker. The agent reads facts about the repository
-(`discover`, read-only), then asks about harnesses, branch shape, worktree roots,
+(`discover`, read-only), then asks the scope first, then about harnesses, branch shape, worktree roots,
 cleanup and Stop gate behaviour, the git hook and an evidence directory and doc roots, each with a
 recommended answer. Doc roots are suggested from a `.scratch/` folder and ignored top-level
 folders that hold Markdown (found by file name, without reading any file), each with a reason;
 a re-run keeps your saved `doc_roots`. Setup then asks, root by root, whether each one is durable
 (its bundles are `reference`, saved as `doc_reference` `["*"]`) or working (its bundles may be
 trashed once their tickets land), because the same folder name is durable in one repository and
-working in another. After your yes it writes `.lumberjack.toml`, the post-merge hook,
-the `CLAUDE.md` (else `AGENTS.md`) block (creating `AGENTS.md` when neither exists),
-optional `.claude/settings.json` pinning and
-`.gitignore` lines for worktree roots inside the repository. It never commits; review
-`git diff` and commit it yourself. Re-running is safe.
+working in another. It never commits, and re-running is safe. What it writes after your yes
+depends on the scope:
+
+| Scope | For | Writes |
+| --- | --- | --- |
+| `local` (just me) | Trying it, or a shared repository you don't own | `.git/lumberjack.toml` (read by every worktree, never tracked), `.git/hooks/post-merge`, the block in `CLAUDE.local.md`, and `.git/info/exclude` lines. `git status` stays clean |
+| `team` | Everyone on the repository | `.lumberjack.toml`, the post-merge hook, the block in the first of `CLAUDE.md`, `.claude/CLAUDE.md` and `AGENTS.md` (creating `AGENTS.md` when none exists), optional `.claude/settings.json` pinning, and `.gitignore` lines for worktree roots inside the repository. Review `git diff` and commit it |
+
+Setup never writes through a symbolic link: if the instructions file is one (an `AGENTS.md`
+linked to shared guidelines), it names the target and asks for another file. A committed
+`.lumberjack.toml` or `[tool.lumberjack]` wins over `.git/lumberjack.toml`, so a `local` setup is
+refused while one exists, and also when its instructions file is tracked. Submodules and
+`--separate-git-dir` checkouts work; a bare repository with worktrees has no primary checkout,
+so setup and the hooks refuse it.
 
 If git or Python 3.11+ is missing, install the requirement before setup. The PATH that
 matters is the one the harness and Git hooks inherit; an interactive shell alias is not
@@ -126,8 +136,9 @@ prove that the setup skill or hooks ran.
 
 ## Configuration
 
-Optional `.lumberjack.toml` at the repo root (top-level keys), else a
-`[tool.lumberjack]` table in `pyproject.toml`; the first file found is used.
+`.lumberjack.toml` at the repo root (top-level keys), else a `[tool.lumberjack]` table in
+`pyproject.toml`, else `.git/lumberjack.toml` (a `local` setup); the first file found is used.
+Without any of them the plugin is not set up and changes nothing.
 Missing keys keep these defaults. A config error (unknown key, bad TOML, a `cleanup`
 outside the three modes, a non-boolean `stop_gate`, a key of the wrong TOML type, an empty
 `prototype_prefix`) makes the Stop gate block;
@@ -143,7 +154,7 @@ SessionStart prints the error and cleans nothing.
 | `doc_roots` | `[]` | Folders inside a worktree for work documents (handoffs, plans, research, run output); an untracked or ignored file under one blocks cleanup with `docs`. `evidence_dir` is one more such folder but keeps its own reason, `evidence` |
 | `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); `"*"` makes every bundle of the root `reference` (a durable root; setup asks root by root); a root not listed uses `["research", "prototype"]`; an empty word is a config error. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
 | `doc_strategy` | `{}` | How `/lumberjack:cleanup` trashes doc bundles, saved after it asks once (empty: nothing is removed). Keys, all required once set: `scope` (`markdown` or `bundle`), `trash_days` (whole days, at least 1) and `grace_days` (whole days, 0 or more: how long a bundle stays `linked` before session start trashes it; 0 trashes it at the first session start that sees it linked); optional `roots`, a table of doc root to `keep` whose bundles are always kept, so `roots = {"docs/handoffs" = "keep"}` keeps every handoff. The old keys `ephemeral`, `reference` and `tracker` are a config error; saving a new strategy replaces them. A table: `[doc_strategy]` then `scope = "bundle"`, `trash_days = 30` and `grace_days = 7` |
-| `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where worktrees live: `~` is home, `*` a glob, `{name}` the repo name |
+| `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where to look for leftover worktree folders that git no longer lists (registered worktrees are swept wherever they live): `~` is home, `*` a glob, `{name}` the repo name |
 | `cleanup` | `"prune"` | `prune` removes landed worktrees, trashes linked ephemeral bundles and purges trash past `trash_days`; `report` lists them as `would remove`, `would trash` and `would purge` (with file counts) under a `sweep would:` line; `keep` does nothing |
 | `stop_gate` | `true` | `false` turns the Stop hook off |
 

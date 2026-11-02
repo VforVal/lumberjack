@@ -14,7 +14,7 @@ from helpers import git, write
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import setup_lumberjack  # noqa: E402
-from sweep_worktrees import HOOK_MANAGERS, load_config, manager_wired  # noqa: E402
+from sweep_worktrees import HOOK_MANAGERS, find_primary, load_config, manager_wired  # noqa: E402
 
 BEGIN, END = "# >>> lumberjack", "# <<< lumberjack"
 ANSWERS = {
@@ -621,3 +621,97 @@ def test_linked_hooks_dir_keeps_its_foreign_hook_in_place(
     assert code == 2 and "outside the repository" in err
     assert (outside / "post-merge").read_text(encoding="utf-8").endswith("print('mine')\n")
     assert not (outside / "post-merge.user").exists()
+
+
+def test_apply_never_writes_through_a_symlinked_instructions_file(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(repo, "docs/ai/GLOBAL_GUIDELINES.md", "shared\n")
+    try:
+        (repo / "AGENTS.md").symlink_to(Path("docs", "ai", "GLOBAL_GUIDELINES.md"))
+    except OSError:
+        pytest.skip("symlinks need extra rights on this system")
+    code, _, err = apply(repo, capsys)
+    assert code == 2 and "AGENTS.md is a symbolic link to" in err
+    assert read(repo, "docs/ai/GLOBAL_GUIDELINES.md") == "shared\n"
+    assert not (repo / ".lumberjack.toml").exists()  # refused before the first write
+    code, out, _ = apply(repo, capsys, instructions="CLAUDE.md")
+    assert code == 0 and "wrote CLAUDE.md" in out
+    assert read(repo, "docs/ai/GLOBAL_GUIDELINES.md") == "shared\n"
+
+
+def test_apply_from_a_worktree_writes_to_the_primary_checkout(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    linked = repo.parent / "linked"
+    git(repo, "worktree", "add", "-q", "-b", "claude/setup", str(linked))
+    code, _, _ = apply(linked, capsys)
+    assert code == 0
+    assert (repo / ".lumberjack.toml").is_file() and not (linked / ".lumberjack.toml").exists()
+
+
+def test_local_scope_leaves_the_checkout_clean_and_every_worktree_reads_it(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    linked = repo.parent / "linked"
+    git(repo, "worktree", "add", "-q", "-b", "claude/eng-1-x", str(linked))
+    code, out, _ = apply(repo, capsys, scope="local", hook="plain", harnesses=["claude", "codex"])
+    assert code == 0 and "wrote .git/lumberjack.toml" in out
+    assert git(repo, "status", "--porcelain") == ""
+    assert git(repo, "config", "--get-regexp", "^core\\.").count("hookspath") == 0
+    assert BEGIN in read(repo, ".git/hooks/post-merge")
+    assert "config in `.git/lumberjack.toml`" in read(repo, "CLAUDE.local.md")
+    assert {"CLAUDE.local.md", ".wt/"} <= set(read(repo, ".git/info/exclude").splitlines())
+    assert load_config(repo)["ticket_prefix"] == load_config(find_primary(linked))["ticket_prefix"] == "eng-"
+
+
+@pytest.mark.parametrize(
+    ("answers", "message"),
+    [
+        ({"pin_claude_settings": True}, "pin_claude_settings needs scope team"),
+        ({"hook": "husky"}, "scope local needs hook plain or none"),
+        ({"instructions": "TRACKED.md"}, "scope local cannot edit TRACKED.md: git tracks it"),
+    ],
+)
+def test_local_scope_refuses_answers_that_commit_files(
+    repo: Path, capsys: pytest.CaptureFixture[str], answers: dict[str, object], message: str
+) -> None:
+    write(repo, "TRACKED.md", "x\n")
+    git(repo, "add", "TRACKED.md")
+    git(repo, "commit", "-q", "-m", "tracked")
+    code, _, err = apply(repo, capsys, scope="local", **answers)
+    assert code == 2 and message in err
+    assert git(repo, "status", "--porcelain") == ""
+
+
+def test_local_scope_refuses_when_a_committed_config_would_win(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert apply(repo, capsys)[0] == 0
+    code, _, err = apply(repo, capsys, scope="local", ticket_prefix="abc-")
+    assert code == 2 and ".lumberjack.toml already configures lumberjack" in err
+    assert not (repo / ".git" / "lumberjack.toml").exists()
+
+
+def test_apply_refuses_a_target_inside_a_linked_folder(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(repo, "docs/shared/CLAUDE.md", "shared\n")
+    try:
+        (repo / ".claude").symlink_to(Path("docs", "shared"), target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks need extra rights on this system")
+    code, _, err = apply(repo, capsys, instructions=".claude/CLAUDE.md")
+    assert code == 2 and "is a symbolic link to" in err
+    assert read(repo, "docs/shared/CLAUDE.md") == "shared\n"
+
+
+def test_apply_in_a_separate_git_dir_repo_writes_into_its_checkout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    git(tmp_path, "init", "-q", "-b", "main", f"--separate-git-dir={tmp_path / 'sep.git'}", "sep")
+    root = tmp_path / "sep"
+    git(root, "commit", "-q", "--allow-empty", "-m", "root")
+    code, _, _ = apply(root, capsys, scope="local")
+    assert code == 0
+    assert (root / "CLAUDE.local.md").is_file() and (tmp_path / "sep.git" / "lumberjack.toml").is_file()
