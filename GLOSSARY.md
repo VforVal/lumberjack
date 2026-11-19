@@ -15,9 +15,9 @@ confirmed removal.
 **dependent**: a branch built on top of a landed branch. It needs a rebase onto the
 primary branch before it is pushed, or its pull request carries the squashed commits.
 
-**fresh**: a worktree added less than 24 hours ago whose branch has not moved since it was
-created (its reflog has only the creation entry, or none). Kept, even though it looks
-integrated; after 24 hours the usual rules apply.
+**fresh**: a worktree added less than 24 hours ago whose branch or detached `HEAD` has not
+moved since it was created (its reflog has only the creation entry, or none). Kept, even though
+it looks integrated; after 24 hours the usual rules apply.
 
 **locked**: a worktree locked with `git worktree lock`. Never removed by lumberjack.
 

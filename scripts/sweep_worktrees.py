@@ -1009,21 +1009,22 @@ def unpushed(path: Path) -> bool:
 
 
 def fresh(path: Path, branch: str, head: str) -> bool:
-    """Added under FRESH_HOURS ago, and its branch has not moved since it was created."""
+    """Added under FRESH_HOURS ago, and its branch or detached HEAD has not moved since creation."""
     admin = git(path, "rev-parse", "--absolute-git-dir").stdout.strip()
     try:  # git writes commondir once, when the worktree is added
         age = time.time() - Path(admin, "commondir").stat().st_mtime
     except OSError:
         return False
-    if not branch or age > FRESH_HOURS * 3600:
+    if age > FRESH_HOURS * 3600:
         return False
-    log = lines(git(path, "reflog", "show", "--format=%H %gs", f"refs/heads/{branch}"))
+    ref = f"refs/heads/{branch}" if branch else "HEAD"
+    log = lines(git(path, "reflog", "show", "--format=%H %gs", ref))
     if not log:  # some tools (the Claude desktop app) create branches without a reflog entry
         return True  # and any later commit or reset would have written one
     if len(log) > 1:  # moved since it was created, even when reset back to that commit
         return False
     sha, _, subject = log[0].partition(" ")
-    return sha == head and subject.startswith("branch: Created from")
+    return sha == head and (not branch or subject.startswith("branch: Created from"))
 
 
 def short_path(primary: Path, path: str | Path) -> str:

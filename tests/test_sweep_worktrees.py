@@ -908,6 +908,41 @@ def test_branch_reset_to_its_creation_commit_is_not_fresh(primary: Path) -> None
     assert "cleaned claude/eng-43-reset wt/eng-43-reset (local branch kept)" in cleanup(primary)
 
 
+def test_fresh_detached_worktree_is_kept_until_moved_or_aged(primary: Path) -> None:
+    wt = primary.parent / "wt"
+    detached = wt / "eng-44-detached"
+    git(primary, "worktree", "add", "-q", "--detach", str(detached), "origin/main")
+    assert "blocked (detached) wt/eng-44-detached: fresh" in cleanup(primary)
+    assert remove(primary, detached) == (1, ["blocked (detached) wt/eng-44-detached: fresh"])
+    assert not sweep_worktrees.fresh(detached, "", "0" * 40)
+    assert detached.exists()
+    # A detached worktree whose HEAD moved (commit then reset) is no longer fresh.
+    moved = wt / "eng-45-detached-moved"
+    git(primary, "worktree", "add", "-q", "--detach", str(moved), "origin/main")
+    (moved / "m.txt").write_text("m\n")
+    git(moved, "add", ".")
+    git(moved, "commit", "-q", "-m", "m")
+    git(moved, "reset", "-q", "--hard", "origin/main")
+    assert "blocked (detached) wt/eng-45-detached-moved: unpushed" in cleanup(primary)
+    # Aging past FRESH_HOURS ends the fresh protection on the unmoved detached worktree too.
+    added = primary / ".git" / "worktrees" / "eng-44-detached" / "commondir"
+    old = added.stat().st_mtime - sweep_worktrees.FRESH_HOURS * 3600 - 60
+    os.utime(added, (old, old))
+    assert "blocked (detached) wt/eng-44-detached: unpushed" in cleanup(primary)
+    assert remove(primary, detached) == (0, ["cleaned (detached) wt/eng-44-detached"])
+    assert not detached.exists()
+
+
+def test_fresh_detached_worktree_without_reflog_is_kept(primary: Path) -> None:
+    detached = primary.parent / "wt" / "eng-46-no-reflog"
+    git(primary, "worktree", "add", "-q", "--detach", str(detached), "origin/main")
+    head_log = primary / ".git" / "worktrees" / "eng-46-no-reflog" / "logs" / "HEAD"
+    if head_log.exists():
+        head_log.unlink()
+    assert "blocked (detached) wt/eng-46-no-reflog: fresh" in cleanup(primary)
+    assert remove(primary, detached) == (1, ["blocked (detached) wt/eng-46-no-reflog: fresh"])
+
+
 def test_locked_worktree_is_never_removed(primary: Path) -> None:
     path = landed_worktree(primary, "eng-42-locked")
     git(primary, "worktree", "lock", "--reason", "busy", str(path))
@@ -1045,6 +1080,9 @@ def test_the_sweep_and_remove_both_keep_the_primary_and_prototypes(primary: Path
 def test_remove_takes_a_detached_worktree_whose_commit_is_on_a_branch(primary: Path) -> None:
     detached = primary.parent / "wt" / "detached"
     git(primary, "worktree", "add", "-q", "--detach", str(detached), "claude/eng-3-open")
+    added = primary / ".git" / "worktrees" / "detached" / "commondir"
+    old = added.stat().st_mtime - sweep_worktrees.FRESH_HOURS * 3600 - 60
+    os.utime(added, (old, old))
     assert remove(primary, detached) == (0, ["cleaned (detached) wt/detached"])
     assert not detached.exists()
 
