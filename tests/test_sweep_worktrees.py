@@ -1597,7 +1597,7 @@ def test_session_start_skips_a_bundle_with_no_markdown_left_silently(
     assert first[0].endswith("docs 1") and any(l.startswith("cleared docs/work/eng-150-handoff: ") for l in first)
     assert recorded(primary, "skipped") == ["docs/work/eng-150-handoff"]
     again = cleanup(primary)
-    assert again[0].endswith("blocked 2, unverified 3, orphans 0, docs 0")  # the two worktrees only
+    assert again[0].endswith("blocked 1, unverified 3, orphans 0, docs 0")  # eng-2-dirty only
     assert not any("no Markdown in scope" in line for line in again)
     assert clear(primary, "docs/work/eng-150-handoff") == (
         1, "blocked docs/work/eng-150-handoff: no Markdown in scope"
@@ -1914,7 +1914,7 @@ def test_a_bundle_that_cannot_be_read_is_a_blocked_line_not_an_error(
     out = sweep_worktrees.cleanup_session(primary)
     line = next(l for l in out if l.startswith("blocked docs/work/eng-150-handoff: "))
     assert "/abs" not in line and str(primary) not in line
-    assert out[0].endswith("blocked 3, unverified 3, orphans 0, docs 0")  # two worktrees plus this one
+    assert out[0].endswith("blocked 2, unverified 3, orphans 0, docs 0")  # eng-2-dirty plus this one
 
 
 STATE = "lumberjack-docs.json"
@@ -2069,7 +2069,7 @@ def test_preview_lists_what_the_next_session_start_does_and_changes_nothing(prim
     trash = old_trash(primary, files=3)
     out = run_lines(primary, "--preview")
     assert out[1] == (
-        "sweep would: remove 1 worktree, delete 0 orphans, trash 1 bundle (1 file, 2 B),"
+        "sweep would: remove 2 worktrees, delete 0 orphans, trash 1 bundle (1 file, 2 B),"
         " purge 1 trash folder (3 files, 3 B)"
     )
     assert "landed claude/eng-20-a wt/eng-20-a: would remove" in out
@@ -2081,7 +2081,7 @@ def test_preview_lists_what_the_next_session_start_does_and_changes_nothing(prim
         assert not (primary / ".git" / written).exists()
     assert config_value(primary, "lumberjack.script") == ""
     done = cleanup(primary)  # the preview's numbers are what prune does
-    assert done[0].startswith("sweep: cleaned 1,") and done[0].endswith("docs 1")
+    assert done[0].startswith("sweep: cleaned 2,") and done[0].endswith("docs 1")
     assert "purged " + OLD in done
 
 
