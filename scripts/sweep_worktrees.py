@@ -39,6 +39,7 @@ DEFAULTS: Config = {
     "doc_roots": [],
     "doc_reference": {},
     "doc_strategy": {},
+    "disposable_paths": [],
     "worktree_roots": [
         "~/.codex/worktrees/*",
         ".claude/worktrees",
@@ -264,6 +265,17 @@ def parse_config(table: Config, source: str = "") -> Config:
     # One spelling per root, so "docs/work/" in doc_reference finds the root "./docs/work".
     cfg["doc_roots"] = [posixpath.normpath(root) for root in cfg["doc_roots"]]
     cfg["doc_reference"] = {posixpath.normpath(k): v for k, v in cfg["doc_reference"].items()}
+    if not all(
+        isinstance(p, str) and p and not PureWindowsPath(p).anchor
+        and ".." not in PureWindowsPath(p).parts
+        and (norm := posixpath.normpath(p.replace("\\", "/"))) not in (".", ".git")
+        and not norm.startswith(".git/")
+        for p in cfg["disposable_paths"]
+    ):
+        raise ConfigError("lumberjack: disposable_paths must be relative paths inside the repo", source)
+    cfg["disposable_paths"] = [
+        posixpath.normpath(p.replace("\\", "/")) for p in cfg["disposable_paths"]
+    ]
     if cfg["cleanup"] not in CLEANUP_MODES:
         raise ConfigError(
             f"lumberjack: cleanup must be one of {', '.join(CLEANUP_MODES)}", source
@@ -508,11 +520,34 @@ def orphan_candidates(primary: Path, cfg: Config) -> list[Path]:
     return [path for path in found if path.is_dir()]
 
 
-def classify_orphan(path: Path) -> str:
-    entries = list(path.iterdir())
-    if entries and all(entry.name in CACHE_DIRS for entry in entries):
-        return "node_modules-only"
-    return "mixed" if (path / ".git").exists() else "not-git"
+def only_disposable(folder: Path, prefix: str, extra: tuple[str, ...]) -> bool:
+    """Non-empty folder holding only disposable entries or subfolders that do; never follows links."""
+    with os.scandir(folder) as entries:
+        children = list(entries)
+    if not children:
+        return False
+    for entry in children:
+        rel = f"{prefix}/{entry.name}" if prefix else entry.name
+        if disposable(rel, extra):
+            continue
+        if not is_folder(entry) or not only_disposable(Path(entry.path), rel, extra):
+            return False
+    return True
+
+
+def classify_orphan(path: Path, extra: tuple[str, ...] = ()) -> str:
+    if (path / ".git").exists():
+        return "mixed"
+    return "node_modules-only" if only_disposable(path, "", extra) else "not-git"
+
+
+def orphan_kind(path: Path, extra: tuple[str, ...]) -> str | None:
+    try:
+        return classify_orphan(path, extra)
+    except FileNotFoundError:
+        return "not-git" if path.exists() else None
+    except (OSError, RecursionError):
+        return "not-git"
 
 
 def same_dir(a: str | Path, b: str | Path) -> bool:
@@ -526,11 +561,12 @@ def dir_key(path: str | Path) -> str:
 
 def orphan_rows(primary: Path, cfg: Config, trees: list[Row]) -> list[Row]:
     listed = {dir_key(tree["path"]) for tree in trees}  # resolved once: hundreds of worktrees add up
-    return [
-        {"kind": classify_orphan(path), "path": path.as_posix()}
-        for path in sorted(orphan_candidates(primary, cfg))
-        if dir_key(path) not in listed
-    ]
+    extra = tuple(cfg["disposable_paths"])
+    rows = []
+    for path in sorted(orphan_candidates(primary, cfg)):
+        if dir_key(path) not in listed and (kind := orphan_kind(path, extra)) is not None:
+            rows.append({"kind": kind, "path": path.as_posix()})
+    return rows
 
 
 def branch_tips(primary: Path, cfg: Config, trees: list[Row]) -> dict[str, str]:
@@ -1067,7 +1103,7 @@ def block_reason(
         found = untracked_docs(Path(w["path"]), cfg["doc_roots"])
         if found is None or found:  # a failed listing keeps the worktree
             return "docs"
-    stray = stray_ignored(Path(w["path"])) if explicit else []
+    stray = stray_ignored(Path(w["path"]), tuple(cfg["disposable_paths"])) if explicit else []
     return f"ignored files ({named(stray)})" if stray else ""
 
 
@@ -1081,16 +1117,21 @@ def worktree_event(primary: Path, cfg: Config, w: Row, here: Path | None) -> tup
         return "blocked", f"blocked {tag(primary, w)}: {reason}"
     if cfg["cleanup"] == "report":
         return "removable", f"landed {tag(primary, w)}: would remove"
-    return remove_worktree(primary, w)
+    return remove_worktree(primary, w, tuple(cfg["disposable_paths"]))
 
 
-def remove_worktree(primary: Path, w: Row) -> tuple[str, str]:
+def remove_worktree(primary: Path, w: Row, extra: tuple[str, ...] = ()) -> tuple[str, str]:
     notes = ["local branch kept"] if w["branch"] else []
     if (gone := git(primary, "worktree", "remove", w["path"])).returncode:
         # On Windows a locked directory fails the remove after git deleted the files and entry.
         if any(same_dir(t["path"], w["path"]) for t in registered(primary)):
             return "blocked", f"blocked {tag(primary, w)}: {gone.stderr.strip()}"
-        notes += ["directory left"] if Path(w["path"]).exists() else []
+    leftover = Path(w["path"])
+    if leftover.exists() and orphan_kind(leftover, extra) == "node_modules-only":
+        with contextlib.suppress(OSError):
+            shutil.rmtree(leftover, **{RMTREE_HANDLER: make_writable})
+    if leftover.exists():
+        notes.append("directory left")
     return "cleaned", f"cleaned {tag(primary, w)}" + (f" ({'; '.join(notes)})" if notes else "")
 
 
@@ -1107,7 +1148,7 @@ def remove_named(start: Path, target: str) -> tuple[bool, str]:
     here = Path(git(start, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
     if reason := block_reason(primary, cfg, w, here, explicit=True):
         return False, f"blocked {tag(primary, w)}: {reason}"
-    outcome, line = remove_worktree(primary, w)
+    outcome, line = remove_worktree(primary, w, tuple(cfg["disposable_paths"]))
     return outcome == "cleaned", line
 
 
@@ -1253,26 +1294,58 @@ def purge_trash(start: Path) -> list[str]:
     return done or ["trash: nothing past retention"]
 
 
-def stray_ignored(path: Path) -> list[str]:
+def is_stray(root: Path, name: str, extra: tuple[str, ...]) -> bool:
+    """Whether ignored entry name holds non-disposable files (or links) that --remove would lose."""
+    if disposable(name, extra):
+        return False
+    target = root / name
+    try:
+        st = target.lstat()
+        if not stat.S_ISDIR(st.st_mode) or reparse(st):
+            return True
+        if only_disposable(target, name.rstrip("/"), extra):
+            return False
+    except FileNotFoundError:
+        return False
+    except (OSError, RecursionError):
+        return True
+    return holds_a_file(target)
+
+
+def stray_ignored(path: Path, extra: tuple[str, ...] = ()) -> list[str]:
     """Ignored paths other than caches, sorted; git worktree remove deletes them silently.
 
     `matching` lists each ignored path where its pattern matched, so a folder holding only a
     cache is not reported as the folder, and an ignored folder stays one entry."""
-    ignored = lines(git(path, "status", "--porcelain", "--ignored=matching", "-uall"))
-    names = {line[3:] for line in ignored if line.startswith("!! ")}
-    return sorted(name for name in names if not disposable(name) and holds_a_file(path / name))
+    status = git(path, "status", "--porcelain", "-z", "--ignored=matching", "-uall")
+    if status.returncode:
+        return []
+    names, entries = set(), iter(status.stdout.split("\0"))
+    for entry in entries:
+        if entry[:2] in ("R ", "C "):
+            next(entries, "")
+        elif entry.startswith("!! "):
+            names.add(entry[3:])
+    return sorted(name for name in names if is_stray(path, name, extra))
 
 
 def holds_a_file(path: Path) -> bool:
-    """path is a file, or a folder with a file somewhere below it; empty folders lose nothing."""
-    return not path.is_dir() or any(files for _, _, files in os.walk(path))
+    """Whether real directory path holds any file or link; empty folders lose nothing."""
+    try:
+        return any(not is_folder(entry) for entry in walk(str(path)))
+    except (OSError, RecursionError):
+        return True
 
 
-def disposable(name: str) -> bool:
-    """A cache folder or a file a tool recreates, at any depth."""
-    return Path(name.rstrip("/")).name in CACHE_DIRS or any(
-        name == file or name.endswith("/" + file) for file in DISPOSABLE_FILES
-    )
+def disposable(name: str, extra: tuple[str, ...] = ()) -> bool:
+    """A cache folder, disposable tool file, or configured disposable path."""
+    rel = name.rstrip("/")
+    if posixpath.basename(rel) in CACHE_DIRS or any(
+        rel == file or rel.endswith("/" + file) for file in DISPOSABLE_FILES
+    ):
+        return True
+    parts = rel.split("/")
+    return any((rel == p or rel.startswith(p + "/")) if "/" in p else (p in parts) for p in extra)
 
 
 def named(entries: list[str]) -> str:

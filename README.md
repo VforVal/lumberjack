@@ -155,6 +155,7 @@ SessionStart prints the error and cleans nothing.
 | `doc_roots` | `[]` | Folders inside a worktree for work documents (handoffs, plans, research, run output); an untracked or ignored file under one blocks cleanup with `docs`. `evidence_dir` is one more such folder but keeps its own reason, `evidence` |
 | `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); `"*"` makes every bundle of the root `reference` (a durable root; setup asks root by root); a root not listed uses `["research", "prototype"]`; an empty word is a config error. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
 | `doc_strategy` | `{}` | How `/lumberjack:cleanup` trashes doc bundles, saved after it asks once (empty: nothing is removed). Keys, all required once set: `scope` (`markdown` or `bundle`), `trash_days` (whole days, at least 1) and `grace_days` (whole days, 0 or more: how long a bundle stays `linked` before session start trashes it; 0 trashes it at the first session start that sees it linked); optional `roots`, a table of doc root to `keep` whose bundles are always kept, so `roots = {"docs/handoffs" = "keep"}` keeps every handoff. The old keys `ephemeral`, `reference` and `tracker` are a config error; saving a new strategy replaces them. A table: `[doc_strategy]` then `scope = "bundle"`, `trash_days = 30` and `grace_days = 7` |
+| `disposable_paths` | `[]` | Extra cache folder names (matched at any depth) or repo-relative paths (such as `[".claude/skills", ".next"]`) treated as disposable in orphan cleanup and `--remove` |
 | `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where to look for leftover worktree folders that git no longer lists (registered worktrees are swept wherever they live): `~` is home, `*` a glob, `{name}` the repo name |
 | `cleanup` | `"prune"` | `prune` removes landed worktrees, trashes linked ephemeral bundles and purges trash past `trash_days`; `report` lists them as `would remove`, `would trash` and `would purge` (with file counts) under a `sweep would:` line; `keep` does nothing |
 | `stop_gate` | `true` | `false` turns the Stop hook off |
@@ -340,7 +341,8 @@ It refuses with `current checkout`, `locked`, `fresh`, `dirty`, `evidence` or `d
 the cleanup rule (an unpushed tip is no loss, since the branch keeps it), and also with:
 
 - `ignored files (<names>)`: ignored files other than caches (`node_modules`, `.venv`,
-  `__pycache__`, tool caches, `.coverage`, Claude's `.claude/settings.local.json`), which removal
+  `__pycache__`, tool caches, `.coverage`, Claude's `.claude/settings.local.json`, or
+  `disposable_paths`), which removal
   would delete; the line names the first three ignored paths (an ignored folder counts once) and
   how many more, for example `ignored files (.env, data/ and 2 more)`. The automatic sweep does
   not check ignored files: it treats them as disposable.

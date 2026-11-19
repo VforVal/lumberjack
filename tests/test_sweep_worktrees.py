@@ -139,6 +139,74 @@ def test_orphan_classification(
     assert not only.exists() and mixed.exists() and plain.exists() and empty.exists()
 
 
+def make_dir_link(target: Path, link: Path) -> None:
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+def test_disposable_paths_and_nested_caches_clean_orphans_without_deleting_link_targets(
+    primary: Path, tmp_path: Path,
+) -> None:
+    orphans_root = tmp_path / "primary_orphans"
+    settings(
+        primary,
+        f'worktree_roots = ["{(tmp_path / "{name}_orphans").as_posix()}"]\n'
+        'disposable_paths = [".claude/skills", ".next"]\n',
+    )
+    target = tmp_path / "shared_skills"
+    write(target, "keep.md", "keep\n")
+    linked = orphans_root / "linked"
+    (linked / ".claude").mkdir(parents=True)
+    make_dir_link(target, linked / ".claude" / "skills")
+    write(linked, ".claude/settings.local.json", "{}")
+    (linked / "node_modules").mkdir()
+    nested = orphans_root / "nested"
+    (nested / "packages/web/node_modules").mkdir(parents=True)
+    write(nested, "apps/ui/.next/build.json", "{}")
+    keep = orphans_root / "keep"
+    write(keep, ".claude/custom.txt", "keep\n")
+    empty_sub = orphans_root / "empty_sub"
+    (empty_sub / "src").mkdir(parents=True)
+    out = cleanup(primary)
+    assert {"cleaned orphan primary_orphans/linked", "cleaned orphan primary_orphans/nested"} <= set(out)
+    assert {"orphan not-git primary_orphans/keep", "orphan not-git primary_orphans/empty_sub"} <= set(out)
+    assert not linked.exists() and not nested.exists()
+    assert keep.exists() and empty_sub.exists() and (target / "keep.md").exists()
+
+
+def test_orphan_scan_tolerates_unreadable_and_vanished_directories(
+    primary: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    locked = tmp_path / "orphans" / "locked"
+    locked.mkdir(parents=True)
+    vanished = tmp_path / "orphans" / "vanished"
+    vanished.mkdir(parents=True)
+    only = tmp_path / "orphans" / "only"
+    (only / "node_modules").mkdir(parents=True)
+    monkeypatch.setattr(sweep_worktrees, "orphan_candidates", lambda *_: [locked, vanished, only])
+    real_classify = sweep_worktrees.classify_orphan
+
+    def flaky(path: Path, extra: tuple[str, ...] = ()) -> str:
+        if path == locked:
+            raise PermissionError(13, "Access denied")
+        if path == vanished:
+            vanished.rmdir()
+            raise FileNotFoundError(2, "Gone")
+        return real_classify(path, extra)
+
+    monkeypatch.setattr(sweep_worktrees, "classify_orphan", flaky)
+    cfg = sweep_worktrees.load_config(primary)
+    rows = sweep_worktrees.orphan_rows(primary, cfg, sweep_worktrees.registered(primary))
+    assert rows == [
+        {"kind": "not-git", "path": locked.as_posix()},
+        {"kind": "node_modules-only", "path": only.as_posix()},
+    ]
+
+
 @pytest.mark.parametrize(
     ("name", "valid"),
     [
@@ -533,6 +601,29 @@ def test_remove_takes_a_worktree_holding_only_caches_and_tool_files(primary: Pat
     (path / "empty" / "sub").mkdir(parents=True)
     assert remove(primary, path) == (0, ["cleaned claude/eng-36-caches wt/eng-36-caches (local branch kept)"])
     assert not path.exists()
+
+
+def test_remove_honors_disposable_paths_non_ascii_and_link_leaves(
+    primary: Path, tmp_path: Path
+) -> None:
+    (primary / ".git" / "info" / "exclude").write_text(
+        ".claude/skills/\napps/\ncafé/\n", encoding="utf-8"
+    )
+    settings(primary, 'disposable_paths = [".claude/skills", ".next"]\n')
+    target = tmp_path / "shared_skills"
+    write(target, "keep.md", "keep\n")
+    ok = landed_worktree(primary, "eng-38-disposable")
+    (ok / ".claude").mkdir()
+    make_dir_link(target, ok / ".claude" / "skills")
+    write(ok, "apps/web/.next/cache.json", "{}")
+    assert remove(primary, ok) == (0, ["cleaned claude/eng-38-disposable wt/eng-38-disposable (local branch kept)"])
+    assert not ok.exists() and (target / "keep.md").exists()
+
+    stray = landed_worktree(primary, "eng-39-nonascii")
+    write(stray, "café/secret.txt", "keep\n")
+    code, lines_out = remove(primary, stray)
+    assert (code, lines_out) == (1, ["blocked claude/eng-39-nonascii wt/eng-39-nonascii: ignored files (café/)"])
+    assert stray.exists()
 
 
 def doc_worktree(primary: Path, name: str, doc: str | None, extra: str = 'doc_roots = ["docs/work"]\n') -> Path:
