@@ -874,6 +874,12 @@ def test_current_checkout_is_never_removed(primary: Path) -> None:
     assert path.exists()
 
 
+def age_worktree(primary: Path, name: str) -> None:
+    added = primary / ".git" / "worktrees" / name / "commondir"
+    old = added.stat().st_mtime - sweep_worktrees.FRESH_HOURS * 3600 - 60
+    os.utime(added, (old, old))
+
+
 def test_fresh_worktree_is_kept_until_it_has_its_own_commits(primary: Path) -> None:
     wt = primary.parent / "wt"
     fresh, merged = wt / "eng-40-fresh", wt / "eng-41-merged"
@@ -892,9 +898,7 @@ def test_fresh_worktree_is_kept_until_it_has_its_own_commits(primary: Path) -> N
     assert remove(primary, fresh) == (1, ["blocked claude/eng-40-fresh wt/eng-40-fresh: fresh"])
     (primary / ".git" / "logs" / "refs" / "heads" / "claude" / "eng-40-fresh").unlink()
     assert "blocked claude/eng-40-fresh wt/eng-40-fresh: fresh" in cleanup(primary)  # no reflog
-    added = primary / ".git" / "worktrees" / "eng-40-fresh" / "commondir"
-    old = added.stat().st_mtime - sweep_worktrees.FRESH_HOURS * 3600 - 60
-    os.utime(added, (old, old))
+    age_worktree(primary, "eng-40-fresh")
     assert "cleaned claude/eng-40-fresh wt/eng-40-fresh (local branch kept)" in cleanup(primary)
 
 
@@ -916,18 +920,16 @@ def test_fresh_detached_worktree_is_kept_until_moved_or_aged(primary: Path) -> N
     assert remove(primary, detached) == (1, ["blocked (detached) wt/eng-44-detached: fresh"])
     assert not sweep_worktrees.fresh(detached, "", "0" * 40)
     assert detached.exists()
-    # A detached worktree whose HEAD moved (commit then reset) is no longer fresh.
+    # A detached worktree whose HEAD moved (commit then reset) is no longer fresh, even with a HEAD file.
     moved = wt / "eng-45-detached-moved"
     git(primary, "worktree", "add", "-q", "--detach", str(moved), "origin/main")
-    (moved / "m.txt").write_text("m\n")
-    git(moved, "add", ".")
+    (moved / "HEAD").write_text("file named HEAD\n")
+    git(moved, "add", "HEAD")
     git(moved, "commit", "-q", "-m", "m")
     git(moved, "reset", "-q", "--hard", "origin/main")
     assert "blocked (detached) wt/eng-45-detached-moved: unpushed" in cleanup(primary)
     # Aging past FRESH_HOURS ends the fresh protection on the unmoved detached worktree too.
-    added = primary / ".git" / "worktrees" / "eng-44-detached" / "commondir"
-    old = added.stat().st_mtime - sweep_worktrees.FRESH_HOURS * 3600 - 60
-    os.utime(added, (old, old))
+    age_worktree(primary, "eng-44-detached")
     assert "blocked (detached) wt/eng-44-detached: unpushed" in cleanup(primary)
     assert remove(primary, detached) == (0, ["cleaned (detached) wt/eng-44-detached"])
     assert not detached.exists()
@@ -941,6 +943,11 @@ def test_fresh_detached_worktree_without_reflog_is_kept(primary: Path) -> None:
         head_log.unlink()
     assert "blocked (detached) wt/eng-46-no-reflog: fresh" in cleanup(primary)
     assert remove(primary, detached) == (1, ["blocked (detached) wt/eng-46-no-reflog: fresh"])
+    git(detached, "commit", "-q", "--allow-empty", "-m", "work")
+    tip = git(detached, "rev-parse", "HEAD").strip()
+    git(primary, "merge", "-q", "--ff-only", tip)
+    git(primary, "push", "-q", "origin", "main")  # 1 reflog entry matching HEAD, non-empty subject
+    assert "blocked (detached) wt/eng-46-no-reflog: unpushed" in cleanup(primary)
 
 
 def test_locked_worktree_is_never_removed(primary: Path) -> None:
@@ -1080,9 +1087,7 @@ def test_the_sweep_and_remove_both_keep_the_primary_and_prototypes(primary: Path
 def test_remove_takes_a_detached_worktree_whose_commit_is_on_a_branch(primary: Path) -> None:
     detached = primary.parent / "wt" / "detached"
     git(primary, "worktree", "add", "-q", "--detach", str(detached), "claude/eng-3-open")
-    added = primary / ".git" / "worktrees" / "detached" / "commondir"
-    old = added.stat().st_mtime - sweep_worktrees.FRESH_HOURS * 3600 - 60
-    os.utime(added, (old, old))
+    age_worktree(primary, "detached")
     assert remove(primary, detached) == (0, ["cleaned (detached) wt/detached"])
     assert not detached.exists()
 

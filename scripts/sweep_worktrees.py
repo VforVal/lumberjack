@@ -1018,13 +1018,13 @@ def fresh(path: Path, branch: str, head: str) -> bool:
     if age > FRESH_HOURS * 3600:
         return False
     ref = f"refs/heads/{branch}" if branch else "HEAD"
-    log = lines(git(path, "reflog", "show", "--format=%H %gs", ref))
+    log = lines(git(path, "reflog", "show", "--format=%H %gs", ref, "--"))
     if not log:  # some tools (the Claude desktop app) create branches without a reflog entry
         return True  # and any later commit or reset would have written one
     if len(log) > 1:  # moved since it was created, even when reset back to that commit
         return False
     sha, _, subject = log[0].partition(" ")
-    return sha == head and (not branch or subject.startswith("branch: Created from"))
+    return sha == head and (subject.startswith("branch: Created from") if branch else not subject)
 
 
 def short_path(primary: Path, path: str | Path) -> str:
