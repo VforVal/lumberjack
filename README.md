@@ -188,8 +188,8 @@ and nothing blocks it. Eight reasons block it, and the sweep names the one it hi
 - `current checkout`: the sweep is running inside this worktree
 - `locked`: the worktree is locked with `git worktree lock`
 - `dirty`: uncommitted or untracked files (ignored files do not count)
-- `unpushed`: no upstream, or the tip is not contained in it; waived when a merged pull
-  request had exactly this tip
+- `unpushed`: no upstream, or the tip is not contained in it; waived when `integrated` on
+  `origin/<primary_branch>` or when a merged pull request had exactly this tip
 - `evidence`: `evidence_dir` is set and not empty in the worktree
 - `docs`: a `doc_roots` folder holds a file that git does not track, ignored files included
 - `tip diverged`: a pull request from this branch merged into the primary branch with a
