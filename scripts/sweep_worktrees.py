@@ -571,8 +571,8 @@ def prototype_rows(primary: Path, cfg: Config) -> list[Row]:
     ticket = cfg["ticket_prefix"]
     return [
         {
-            "issue": f"{ticket}{m[1]}"
-            if ticket and (m := re.search(rf"{re.escape(ticket)}(\d+)", n))
+            "issue": f"{ticket.lower()}{m[1]}"
+            if ticket and (m := re.search(rf"{re.escape(ticket)}(\d+)", n, re.I))
             else "none",
             "name": n,
         }
@@ -611,9 +611,9 @@ def format_rows(report: Row) -> list[str]:
 
 
 def ticket_ids(cfg: Config, text: str) -> list[str]:
-    """Ticket ids (`ticket_prefix` + digits) in text, in order; none without a prefix."""
+    """Ticket ids (`ticket_prefix` + digits) in text, lowercase and in order; none without a prefix."""
     prefix = cfg["ticket_prefix"]
-    return re.findall(rf"(?<![A-Za-z0-9]){re.escape(prefix)}\d+", text) if prefix else []
+    return [m.lower() for m in re.findall(rf"(?<![A-Za-z0-9]){re.escape(prefix)}\d+", text, re.I)] if prefix else []
 
 
 def untracked_docs(path: Path, roots: list[str]) -> list[str] | None:
@@ -1111,6 +1111,16 @@ def remove_named(start: Path, target: str) -> tuple[bool, str]:
     return outcome == "cleaned", line
 
 
+def update_doc_state(since: dict[str, date], skipped: set[str], rel: str, status: str) -> None:
+    """Drop cleared/partial grace dates and update skipped bundles in doc_work state."""
+    if status in ("cleared", "partial"):  # a trashed bundle loses its date: restored, it starts over
+        since.pop(rel, None)
+    if status == "cleared":
+        skipped.discard(rel)
+    elif status in ("partial", "skip"):
+        skipped.add(rel)  # nothing left in scope: not worth walking again
+
+
 def clear_bundles(start: Path, targets: list[str], promoted: str = "") -> list[tuple[str, str]]:
     """Trash linked bundles as the saved strategy says; (status, output line) each, as clear_bundle."""
     primary = find_primary(start)
@@ -1122,7 +1132,13 @@ def clear_bundles(start: Path, targets: list[str], promoted: str = "") -> list[t
             return [("blocked", f"blocked {target}: {BUSY}") for target in targets]
         docs = {d["path"]: d for d in build_report(primary, cfg)["docs"]}
         stamp = datetime.now(timezone.utc).strftime(TRASH_STAMP)  # one trash folder per call
-        return [clear_bundle(primary, cfg, docs, target, promoted, stamp) for target in targets]
+        results: list[tuple[str, str]] = []
+        for target in targets:
+            status, line = clear_bundle(primary, cfg, docs, target, promoted, stamp)
+            rel = posixpath.normpath(target.replace("\\", "/"))
+            update_doc_state(state["since"], state["skipped"], rel, status)
+            results.append((status, line))
+        return results
 
 
 def clear_bundle(
@@ -1136,13 +1152,14 @@ def clear_bundle(
     strategy, rel = cfg["doc_strategy"], posixpath.normpath(target.replace("\\", "/"))
     doc = docs.get(rel)
     action = doc["action"] if doc else ""
+    ref = posixpath.normpath(promoted.replace("\\", "/")) if promoted else ""
     saved = False
-    if action == "promote" and promoted.startswith(cfg["prototype_prefix"]):  # a pushed prototype
-        copy = git(primary, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{promoted}")
+    if action == "promote" and ref.startswith(cfg["prototype_prefix"]):  # a pushed prototype
+        copy = git(primary, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{ref}")
         saved = copy.returncode == 0
-    elif action == "promote" and promoted:  # ... or a document tracked on the primary branch
+    elif action == "promote" and ref:  # ... or a document tracked on the primary branch
         base = f"origin/{cfg['primary_branch']}"
-        saved = git(primary, "cat-file", "-t", f"{base}:{promoted}").stdout.strip() == "blob"
+        saved = git(primary, "cat-file", "-t", f"{base}:{ref}").stdout.strip() == "blob"
     reason = (
         "no strategy saved" if not strategy
         else "not a bundle" if doc is None
@@ -1352,13 +1369,11 @@ def trash_docs(primary: Path, cfg: Config, report: Row, state: Row, deadline: fl
         if status == "timeout" and deadline - started > (deadline - opened) / 2:
             skip.add(doc["path"])
             line = f"blocked {doc['path']}: {TOO_LARGE}"
-        if status in ("cleared", "partial"):  # a trashed bundle loses its date: restored, it starts over
+        if status in ("cleared", "partial"):
             trashed += 1
-            del since[doc["path"]]
         # shortcut: a skipped bundle stays skipped while linked, so a new .md in it needs --clear;
         # recheck skipped bundles by mtime if new files in them turn out to matter.
-        if status in ("partial", "skip"):
-            skip.add(doc["path"])  # nothing left in scope: not worth walking again
+        update_doc_state(since, skip, doc["path"], status)
         if line and status != "skip":
             out.append(line)
     state["since"], state["skipped"] = since, skip

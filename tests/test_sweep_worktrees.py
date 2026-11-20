@@ -1315,6 +1315,59 @@ def test_reference_bundle_is_cleared_once_a_tracked_doc_is_on_origin(primary: Pa
     )
 
 
+def test_uppercase_tickets_stay_live_normalize_lowercase_and_link_prototypes(
+    primary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    git(primary, "branch", "prototype/ENG-66-spike", "main")
+    settings(primary, 'doc_roots = ["docs/work"]\n')
+    write(primary, "docs/work/eng-200-handoff/a.md", "Tickets: ENG-200, ENG-3\n")
+    write(primary, "docs/work/ENG-131-handoff/a.md", "notes\n")
+    data = report(capsys)
+    docs = {d["path"]: d for d in data["docs"]}  # type: ignore[attr-defined]
+    assert docs["docs/work/eng-200-handoff"]["state"] == "live"
+    assert docs["docs/work/eng-200-handoff"]["tickets"] == ["eng-200", "eng-3"]
+    assert docs["docs/work/ENG-131-handoff"]["state"] == "linked"
+    assert docs["docs/work/ENG-131-handoff"]["tickets"] == ["eng-131"]
+    assert {"issue": "eng-66", "name": "prototype/ENG-66-spike"} in data["prototypes"]  # type: ignore[operator]
+
+
+def test_promoted_accepts_windows_backslashes(primary: Path) -> None:
+    strategy_settings(primary)
+    bundle = "docs/work/eng-135-research"
+    write(primary, f"{bundle}/a.md", "Ticket: eng-135\n")
+    write(primary, "docs/findings.md", "promoted\n")
+    git(primary, "add", "docs/findings.md")
+    git(primary, "commit", "-q", "-m", "docs findings")
+    git(primary, "push", "-q", "origin", "main")
+    assert clear(primary, bundle, "--promoted", r"docs\findings.md")[0] == 0
+    assert not (primary / bundle).exists()
+
+
+def test_manual_clear_updates_doc_state_since_and_skipped(primary: Path) -> None:
+    grace_bundle(primary, 30)
+    save_state(primary, {BUNDLE: "2020-01-01"}, [BUNDLE])
+    assert clear(primary, BUNDLE)[0] == 0
+    assert recorded(primary) == {} and recorded(primary, "skipped") == []
+
+    # Restoring the bundle restarts its grace period instead of trashing on the stale date.
+    write(primary, f"{BUNDLE}/a.md", "x\n")
+    out = cleanup(primary)
+    assert out[0].endswith("docs 0") and (primary / BUNDLE).exists()
+
+    # Markdown scope: partial pops since + marks skipped; skip marks skipped.
+    strategy_settings(primary, scope="markdown", grace_days=30)
+    partial = "docs/work/eng-161-handoff"
+    skip_only = "docs/work/eng-162-logs"
+    write(primary, f"{partial}/a.md", "Ticket: eng-161\n")
+    write(primary, f"{partial}/run.log", "keep\n")
+    write(primary, f"{skip_only}/run.log", "Ticket: eng-162\n")
+    save_state(primary, {partial: "2020-01-01", skip_only: "2020-01-01"})
+    code, _ = clear(primary, partial, skip_only)
+    assert code == 1  # skip exits 1 ("no Markdown in scope")
+    assert recorded(primary) == {skip_only: "2020-01-01"}
+    assert set(recorded(primary, "skipped")) == {partial, skip_only}
+
+
 OLD = "20200101T000000Z"
 
 
