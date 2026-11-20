@@ -380,6 +380,20 @@ def test_branch_tips_collects_all_loose_branches_in_one_git_call(
     assert len(calls) == 1 and calls[0][0] == "branch"
 
 
+def test_branch_tips_skips_detached_head_and_tag_collisions(primary: Path) -> None:
+    cfg = sweep_worktrees.load_config(primary)
+    git(primary, "tag", "claude/eng-3-open", "main")
+    git(primary, "checkout", "-q", "--detach", "HEAD")
+    (primary / "detached.txt").write_text("d\n")
+    git(primary, "add", "detached.txt")
+    git(primary, "commit", "-q", "-m", "detached work")
+    trees = sweep_worktrees.registered(primary)
+    tips = sweep_worktrees.branch_tips(primary, cfg, trees)
+    assert set(tips) == {"claude/eng-4-loose", "feature/x"}
+    tiers_map = {r["branch"]: r["tier"] for r in sweep_worktrees.build_report(primary, cfg)["worktrees"]}
+    assert tiers_map["claude/eng-1-clean"] == "integrated"
+
+
 def test_gh_batches_prioritize_worktrees_and_keep_partial_results_on_timeout(
     primary: Path, gh: Gh, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -394,36 +408,71 @@ def test_gh_batches_prioritize_worktrees_and_keep_partial_results_on_timeout(
     })
     monkeypatch.setattr(sweep_worktrees, "GH_BATCH", 2)
     batches: list[list[str]] = []
+    timeouts: list[float] = []
     real_run = subprocess.run
 
     def spy_run(cmd, *args, **kwargs):
         if "graphql" in cmd:
             query = cmd[-1]
             batches.append(re.findall(r'b\d+: pullRequests\(headRefName: "([^"]*)"', query))
+            timeouts.append(kwargs["timeout"])
         return real_run(cmd, *args, **kwargs)
 
     monkeypatch.setattr(sweep_worktrees.subprocess, "run", spy_run)
     found = tiers(capsys)
     assert len(batches) >= 2
     assert set(batches[0]) == {"claude/eng-3-open", "claude/zz-wt-landed"}
+    assert all(0 < t <= sweep_worktrees.GH_TIMEOUT for t in timeouts)
     assert found["claude/zz-wt-landed"] == ("landed-pr", "")
     assert found["claude/aa-loose"] == ("landed-pr", "")
     assert found["claude/bb-loose"] == ("landed-pr", "")
 
     calls = 0
 
-    def timeout_second_batch(cmd, *args, **kwargs):
-        nonlocal calls
+    def fail_second_batch(mode: str):
+        def _runner(cmd, *args, **kwargs):
+            nonlocal calls
+            if "graphql" in cmd:
+                calls += 1
+                if calls > 1:
+                    if mode == "timeout":
+                        raise subprocess.TimeoutExpired(cmd, 10)
+                    if mode == "auth":
+                        return subprocess.CompletedProcess(cmd, 4, "", "To authenticate, run: gh auth login")
+                    return subprocess.CompletedProcess(cmd, 1, "", "502 Bad Gateway")
+            return real_run(cmd, *args, **kwargs)
+
+        return _runner
+
+    for mode, expected_loose_reason in (
+        ("timeout", "no pull request"),
+        ("auth", "unauthenticated"),
+        ("error", "unreachable"),
+    ):
+        calls = 0
+        monkeypatch.setattr(sweep_worktrees.subprocess, "run", fail_second_batch(mode))
+        partial = tiers(capsys)
+        assert partial["claude/zz-wt-landed"] == ("landed-pr", "")
+        assert partial["claude/aa-loose"] == ("unverified", expected_loose_reason)
+
+    # Inter-batch deadline expiry breaks loop before launching batch 2.
+    ticks = iter([0.0, 0.0, 20.0])
+    monkeypatch.setattr(
+        sweep_worktrees, "time", types.SimpleNamespace(monotonic=lambda: next(ticks, 20.0), time=time.time)
+    )
+    batch_calls = 0
+
+    def count_graphql(cmd, *args, **kwargs):
+        nonlocal batch_calls
         if "graphql" in cmd:
-            calls += 1
-            if calls > 1:
-                raise subprocess.TimeoutExpired(cmd, 10)
+            batch_calls += 1
         return real_run(cmd, *args, **kwargs)
 
-    monkeypatch.setattr(sweep_worktrees.subprocess, "run", timeout_second_batch)
-    partial = tiers(capsys)
-    assert partial["claude/zz-wt-landed"] == ("landed-pr", "")
-    assert partial["claude/aa-loose"] == ("unverified", "no pull request")
+    monkeypatch.setattr(sweep_worktrees.subprocess, "run", count_graphql)
+    early = tiers(capsys)
+    assert batch_calls == 1
+    assert early["claude/zz-wt-landed"] == ("landed-pr", "")
+    assert early["claude/aa-loose"] == ("unverified", "no pull request")
 
 
 def test_patch_ids_stays_lazy_unless_cherry_also_fails(
@@ -451,7 +500,14 @@ def test_patch_ids_stays_lazy_unless_cherry_also_fails(
     assert found["claude/eng-10-cherry"][0] == "landed-probable"
     assert patch_calls == []
 
+    # Empty patch-id diffs never trigger recent() log hashing.
+    monkeypatch.setattr(sweep_worktrees, "patch_ids", lambda *_: [])
+    assert not sweep_worktrees.probable(
+        primary, "origin/main", open_tip, lambda: (_ for _ in ()).throw(AssertionError("recent called"))
+    )
+
     # Two squash branches falling through past cherry both trigger one lazy log hash + their diffs.
+    monkeypatch.setattr(sweep_worktrees, "patch_ids", spy_patch_ids)
     for name in ("eng-11-squash-a", "eng-12-squash-b"):
         squash = add_worktree(primary, primary.parent / "wt", f"claude/{name}", merge=False)
         (squash / f"{name}-extra.txt").write_text("2\n")

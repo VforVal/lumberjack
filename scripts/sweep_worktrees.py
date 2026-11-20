@@ -62,8 +62,9 @@ TRASH_STAMP = "%Y%m%dT%H%M%SZ"  # a trash folder is named for the UTC moment its
 SCOPES = ("markdown", "bundle")  # doc_strategy scope: only .md files, or whole bundles
 BUNDLE_ACTION = {"ephemeral": "trash", "reference": "promote"}  # by class, outside a keep-root
 SIZE_SECONDS = 3  # sizing bundles, timed from when sizing starts
-DOC_SECONDS = 7  # trashing and purging, timed after the report; with fetch and gh it fits the hook's 30
+DOC_SECONDS = 7  # trashing and purging; capped with probable guesses by SESSION_SECONDS
 PURGE_SECONDS = 3  # the end of DOC_SECONDS kept for purging, so trashing never starves it
+SESSION_SECONDS = 27  # total session sweep ceiling so offline fetch/gh + cleanup stay under the 30s hook timeout
 NO_MARKDOWN = "no Markdown in scope"
 TOO_LARGE = "too large to walk in time"
 DOC_STATE = "lumberjack-docs.json"  # next to the trash: first-seen dates and skipped bundles
@@ -369,23 +370,23 @@ def content_integrated(primary: Path, base: str, tree: str, sha: str) -> bool:
     return merged.returncode == 0 and merged.stdout.splitlines()[:1] == [tree]
 
 
-def merged_prs(primary: Path, branches: list[str]) -> dict[str, list[Row]] | str:
-    """Merged PRs per branch from batched GraphQL calls within GH_TIMEOUT, or failure reason."""
+def merged_prs(primary: Path, branches: list[str]) -> tuple[dict[str, list[Row]], str]:
+    """(merged PRs by branch, fallback failure reason) from batched GraphQL calls within GH_TIMEOUT."""
     if not branches:
-        return {}
+        return {}, ""
     gh = shutil.which("gh")
     if not gh:
-        return "gh missing"
+        return {}, "gh missing"
     host, owner, repo = origin_parts(git(primary, "remote", "get-url", "origin").stdout.strip())
     if host != "github.com" or not (owner and repo):
-        return "not a github remote"
+        return {}, "not a github remote"
     owner, repo = json.dumps(owner), json.dumps(repo)
     out: dict[str, list[Row]] = {}
     deadline = time.monotonic() + GH_TIMEOUT
     for offset in range(0, len(branches), GH_BATCH):
         remaining = deadline - time.monotonic()
         if offset > 0 and remaining <= 0:
-            break
+            return out, ""
         batch = branches[offset : offset + GH_BATCH]
         aliases = " ".join(
             f"b{i}: pullRequests(headRefName: {json.dumps(name)}, states: MERGED, first: 10)"
@@ -402,25 +403,29 @@ def merged_prs(primary: Path, branches: list[str]) -> dict[str, list[Row]] | str
                 encoding="utf-8",
                 timeout=max(0.1, remaining),
             )
-        except (subprocess.TimeoutExpired, OSError):
-            return "unreachable" if offset == 0 else out
+        except subprocess.TimeoutExpired:
+            return out, "unreachable" if offset == 0 else ""
+        except OSError:
+            return out, "unreachable"
         if done.returncode == 4 or "auth" in done.stderr.lower():
-            return "unauthenticated" if offset == 0 else out
+            return out, "unauthenticated"
         try:
             if done.returncode:
-                return "unreachable" if offset == 0 else out
+                return out, "unreachable"
             found = json.loads(done.stdout)["data"]["repository"]
             out.update({name: found[f"b{i}"]["nodes"] for i, name in enumerate(batch)})
         except (ValueError, KeyError, TypeError):
-            return "unreachable" if offset == 0 else out
-    return out
+            return out, "unreachable"
+    return out, ""
 
 
-def pr_verdict(prs: dict[str, list[Row]] | str, tip: Tip, primary_branch: str) -> Verdict:
+def pr_verdict(
+    prs: dict[str, list[Row]], tip: Tip, primary_branch: str, fallback: str = ""
+) -> Verdict:
     """(tier, reason) from the merged-PR lookup; tier is empty on a miss."""
-    if isinstance(prs, str):
-        return "", prs
-    nodes = prs.get(tip[1], [])
+    if tip[1] not in prs:
+        return "", fallback
+    nodes = prs[tip[1]]
     into = [n for n in nodes if n["baseRefName"] == primary_branch]
     if any(n["headRefOid"] == tip[0] for n in into):
         return "landed-pr", ""
@@ -446,7 +451,8 @@ def probable(primary: Path, base: str, sha: str, recent: Callable[[], set[str]])
     cherry = lines(git(primary, "cherry", base, sha))
     if cherry and all(line.startswith("-") for line in cherry):
         return True
-    return bool(set(patch_ids(primary, "diff", f"{base}...{sha}")) & recent())
+    diffs = set(patch_ids(primary, "diff", f"{base}...{sha}"))
+    return bool(diffs and (diffs & recent()))
 
 
 def classify(
@@ -455,6 +461,7 @@ def classify(
     tips: set[Tip],
     stale: bool = False,
     priority: set[str] | None = None,
+    deadline: float = math.inf,
 ) -> dict[Tip, Verdict]:
     """(tier, reason) per tip against origin/<primary>, first decisive tier wins."""
     base = f"origin/{cfg['primary_branch']}"
@@ -472,14 +479,15 @@ def classify(
     if not rest:
         return result
     prior = priority or set()
+    rest.sort(key=lambda tip: (tip[1] not in prior, tip[0], tip[1]))
     names = sorted({name for _, name in rest if name}, key=lambda n: (n not in prior, n))
-    prs = merged_prs(primary, names) if names else {}  # a detached tip has no pull request
+    prs, fallback = merged_prs(primary, names) if names else ({}, "")  # detached has no pull request
     recent = functools.cache(lambda: set(patch_ids(primary, "log", "-200", "-p", base)))
     # The guess costs several git calls per tip and never prunes, so it yields to the hook timeout.
-    deadline, rushed = time.monotonic() + PROBABLE_SECONDS, False
+    guess_deadline, rushed = min(time.monotonic() + PROBABLE_SECONDS, deadline), False
     for tip in rest:
-        tier, reason = pr_verdict(prs, tip, cfg["primary_branch"])
-        if not tier and not (rushed := rushed or time.monotonic() > deadline):
+        tier, reason = pr_verdict(prs, tip, cfg["primary_branch"], fallback)
+        if not tier and not (rushed := rushed or time.monotonic() > guess_deadline):
             tier = "landed-probable" if probable(primary, base, tip[0], recent) else ""
         if not tier:
             tier = "unverified"
@@ -561,12 +569,14 @@ def branch_tips(primary: Path, cfg: Config, trees: list[Row]) -> dict[str, str]:
     """Unmerged local branches that no worktree has checked out, with their tips."""
     checked_out = {tree["branch"] for tree in trees}
     base = f"origin/{cfg['primary_branch']}"
-    rows = lines(git(primary, "branch", "--format=%(refname:short) %(objectname)", "--no-merged", base))
+    rows = lines(git(primary, "branch", "--format=%(refname) %(objectname)", "--no-merged", base))
     tips: dict[str, str] = {}
     for row in rows:
-        name, _, sha = row.partition(" ")
-        if name and sha and name not in checked_out:
-            tips[name] = sha
+        ref, _, sha = row.rpartition(" ")
+        if ref.startswith("refs/heads/") and sha:
+            name = ref.removeprefix("refs/heads/")
+            if name not in checked_out:
+                tips[name] = sha
     return tips
 
 
@@ -753,7 +763,9 @@ def bundle_class(cfg: Config, root: str, name: str) -> str:
     return "reference" if any(w == "*" or w.lower() in name.lower() for w in words) else "ephemeral"
 
 
-def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verdict]) -> list[Row]:
+def doc_rows(
+    primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verdict], budget: float = math.inf
+) -> list[Row]:
     """Untracked doc-root bundles: class, tickets and live/linked/unlinked; size for linked."""
     # Any worktree counts, by branch or folder name, so a detached Codex worktree does too.
     # A branch without one counts until it lands: landed local branches are never deleted.
@@ -761,7 +773,7 @@ def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verd
     names = [n for t in trees[1:] for n in (t["branch"], worktree_name(primary, t["path"])) if n]
     names += [n for _, n in unlanded if n]
     carried = {t for name in names for t in ticket_ids(cfg, name)}
-    deadline = time.monotonic() + SIZE_SECONDS
+    deadline = min(time.monotonic() + SIZE_SECONDS, budget)
     worktrees = [Path(tree["path"]).resolve() for tree in trees[1:]]
     bundles = [
         (root, rel) for root, rel in doc_entries(primary, cfg)
@@ -982,18 +994,22 @@ def trash_rows(primary: Path, cfg: Config) -> list[Row]:
     return rows
 
 
-def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
+def build_report(primary: Path, cfg: Config, stale: bool = False, deadline: float = math.inf) -> Row:
     trees = registered(primary)
     loose = branch_tips(primary, cfg, trees)
     tips = {(t["head"], t["branch"]) for t in trees[1:]}
     tips |= {(sha, name) for name, sha in loose.items()}
-    tiers = classify(primary, cfg, tips, stale, priority={t["branch"] for t in trees[1:] if t["branch"]})
+    reserve = DOC_SECONDS if cfg["doc_strategy"] and cfg["cleanup"] != "keep" else 0
+    budget = deadline - reserve
+    tiers = classify(
+        primary, cfg, tips, stale, priority={t["branch"] for t in trees[1:] if t["branch"]}, deadline=budget
+    )
     local = lines(git(primary, "branch", "--format=%(refname:short)"))
     pattern = branch_pattern(cfg)
     return {
         "worktrees": worktree_rows(trees, tiers),
         "orphans": orphan_rows(primary, cfg, trees),
-        "docs": doc_rows(primary, cfg, trees, tiers),
+        "docs": doc_rows(primary, cfg, trees, tiers, budget),
         "doc_strategy": cfg["doc_strategy"],
         "trash": trash_rows(primary, cfg),
         "branches": branch_rows(loose, tiers),
@@ -1390,13 +1406,15 @@ def trash_docs(primary: Path, cfg: Config, report: Row, state: Row, deadline: fl
     return run
 
 
-def sweep_docs(primary: Path, cfg: Config, report: Row) -> DocRun:
+def sweep_docs(
+    primary: Path, cfg: Config, report: Row, session_deadline: float = math.inf
+) -> DocRun:
     """Session start's doc work: trash by rule, then purge, within DOC_SECONDS.
 
     Leaves docs alone while another run holds the doc lock: two at once would move the same files."""
     if not cfg["doc_strategy"] or cfg["cleanup"] == "keep":
         return DocRun()
-    deadline = time.monotonic() + DOC_SECONDS  # started after the branch checks, so slow git or gh never eats it
+    deadline = min(time.monotonic() + DOC_SECONDS, session_deadline)
     run = DocRun()
     try:
         with doc_work(primary) as state:
@@ -1625,12 +1643,14 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
         return [str(error), *notes]
     if include_context:
         notes.insert(0, active_settings(cfg))
+    session_deadline = time.monotonic() + SESSION_SECONDS
     stale, skipped = fetch_trunk(primary, cfg["primary_branch"])
     if skipped:
         return [skipped, *notes]
     try:
-        report = build_report(primary, cfg, stale)
-        return [*run_cleanup(primary, cfg, report, stale, here), *notes]
+        report = build_report(primary, cfg, stale, deadline=session_deadline)
+        docs = lambda p, c, r: sweep_docs(p, c, r, session_deadline=session_deadline)
+        return [*run_cleanup(primary, cfg, report, stale, here, docs=docs), *notes]
     except OSError as error:
         return [f"sweep: unavailable ({error})", *notes]
 

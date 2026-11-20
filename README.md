@@ -67,7 +67,7 @@ lumberjack runs its two bundled Python scripts, `git` and, when installed, `gh`.
 no code and installs nothing. The images in `assets/` are for this page and the plugin icon,
 and `website/` is the product site; no script or hook opens them.
 
-- **Network:** `git fetch --prune origin`, and with `gh` logged in, a read-only GitHub GraphQL
+- **Network:** `git fetch --prune --no-tags origin`, and with `gh` logged in, a read-only GitHub GraphQL
   query that sends the repository's branch names to find merged pull requests (setup
   also runs `gh auth status`). `gh` uses its own saved login; lumberjack never reads, stores or
   sends a token. Nothing goes to any other server.
