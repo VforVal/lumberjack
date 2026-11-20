@@ -1,4 +1,4 @@
-# written by lumberjack setup 1.0.0
+# written by lumberjack setup 1.3.0
 
 # Branch owners allowed in <owner>/<slug> names; empty allows any owner.
 owners = ["claude", "codex"]

@@ -33,6 +33,13 @@ jobs:
           wrong = {path: v for path, v in found.items() if v != version}
           if wrong:
               sys.exit(f"VERSION is {version}, but {wrong}")
+          html = Path("website/dist/index.html").read_text(encoding="utf-8")
+          site_versions = re.findall(rf"(?<![\w.-])v{re.escape(version)}(?![\w.-])", html)
+          if len(site_versions) != 2:
+              sys.exit(
+                  f"VERSION is {version}, but website/dist/index.html mentions v{version}"
+                  f" {len(site_versions)} time(s) (expected 2)"
+              )
           match = re.search(rf"^## {re.escape(version)}\n(.*?)(?=^## |\Z)", Path("CHANGELOG.md").read_text(), re.M | re.S)
           if not match or not match.group(1).strip():
               sys.exit(f"CHANGELOG.md has no '## {version}' section")

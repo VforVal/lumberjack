@@ -72,8 +72,9 @@ and `website/` is the product site; no script or hook opens them.
   also runs `gh auth status`). `gh` uses its own saved login; lumberjack never reads, stores or
   sends a token. Nothing goes to any other server.
 - **Your files:** it removes landed worktrees with `git worktree remove` (never `--force`),
-  deletes orphan worktree folders that hold only `node_modules`, and moves landed doc bundles
-  to `.git/lumberjack-trash`, which it purges after `trash_days`. Setup writes only the files
+  deletes orphan worktree folders that hold only caches (`node_modules`, `.venv`, `__pycache__`,
+  tool caches, `dist`, `.codex-worktree-name`), and moves landed doc bundles to
+  `.git/lumberjack-trash`, which it purges after `trash_days`. Setup writes only the files
   listed under [Setup](#setup), after your yes.
 
 ## Install on Claude Code

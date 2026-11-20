@@ -2678,3 +2678,54 @@ def test_files_lists_a_single_file_bundle_only_in_scope(tmp_path: Path) -> None:
     write(tmp_path, "docs/notes.txt", "x")
     assert sweep_worktrees.file_lines(tmp_path / "docs/notes.txt", tmp_path, ".md") == []
     assert sweep_worktrees.file_lines(tmp_path / "docs/gone", tmp_path)[0].startswith("files: cannot list docs/gone (")
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--json", "--cleanup"],
+        ["--preview", "--tally"],
+        ["--gate", "--hook"],
+        ["--clear", "docs/work/a", "--purge-trash"],
+        ["--remove", "wt/a", "--cleanup"],
+    ],
+)
+def test_conflicting_mode_flags_are_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], argv: list[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as error:
+        sweep_worktrees.main(argv)
+    assert error.value.code == 2 and "not allowed with argument" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [["--promoted", "findings.md"], ["--promoted", ""], ["--json", "--promoted", "findings.md"]],
+)
+def test_promoted_without_clear_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], flag: list[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as error:
+        sweep_worktrees.main(flag)
+    assert error.value.code == 2 and "--promoted needs --clear" in capsys.readouterr().err
+
+
+def test_fetch_combines_with_json_without_conflict(
+    primary: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fetched: list[Path] = []
+    monkeypatch.setattr(sweep_worktrees, "fetch", lambda p: (fetched.append(p), False)[-1])
+    assert sweep_worktrees.main(["--fetch", "--json"]) == 0
+    assert fetched == [primary]
+    assert "worktrees" in json.loads(capsys.readouterr().out)
+
+
+def test_gate_uses_normalized_directory_identity(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    git(primary, "checkout", "-q", "-b", "claude/eng-99-off-trunk")
+    monkeypatch.setattr(sweep_worktrees, "find_primary", lambda _: primary / ".." / primary.name)
+    reasons = sweep_worktrees.gate(primary)
+    assert len(reasons) == 1 and "the primary checkout is on claude/eng-99-off-trunk" in reasons[0]

@@ -1889,7 +1889,7 @@ def gate(start: Path) -> list[str]:
             f"gate: branch {branch} violates the lumberjack skill naming;"
             f" rename it: git branch -m {rename_hint(cfg)}"
         )
-    if here == primary and branch != cfg["primary_branch"]:
+    if same_dir(here, primary) and branch != cfg["primary_branch"]:
         reasons.append(
             f"gate: the primary checkout is on {branch}; move the work to a"
             f" worktree and return the primary to {cfg['primary_branch']}"
@@ -1963,33 +1963,34 @@ def not_set_up(event: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--json", action="store_true", help="emit JSON")
     parser.add_argument("--fetch", action="store_true", help="git fetch origin first")
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--json", action="store_true", help="emit JSON")
+    mode.add_argument(
         "--hook", action="store_true",
         help="harness hook: read the hook input on stdin and act on its hook_event_name",
     )
-    parser.add_argument("--cleanup", action="store_true", help="remove landed worktrees, exit 0")
-    parser.add_argument("--gate", action="store_true", help="exit 2 on debt")
-    parser.add_argument(
+    mode.add_argument("--cleanup", action="store_true", help="remove landed worktrees, exit 0")
+    mode.add_argument("--gate", action="store_true", help="exit 2 on debt")
+    mode.add_argument(
         "--remove", metavar="PATH",
         help="remove only this worktree, any tier, keeping its branch; exit 1 when blocked",
     )
-    parser.add_argument(
+    mode.add_argument(
         "--clear", metavar="PATH", nargs="+",
         help="trash these linked doc bundles as doc_strategy says; exit 1 when one is blocked",
     )
     parser.add_argument(
-        "--promoted", metavar="REF", default="",
+        "--promoted", metavar="REF", default=None,
         help="with --clear: a doc tracked on origin's primary branch, or a pushed prototype"
         " branch, holding a reference bundle's findings",
     )
-    parser.add_argument("--purge-trash", action="store_true", help="delete trash past retention")
-    parser.add_argument(
+    mode.add_argument("--purge-trash", action="store_true", help="delete trash past retention")
+    mode.add_argument(
         "--preview", action="store_true",
         help="list what the next session start would remove, trash and purge, with file counts; change nothing",
     )
-    parser.add_argument(
+    mode.add_argument(
         "--tally", action="store_true",
         help="count bundles trashed and files purged this session and in all, and what the trash holds",
     )
@@ -1998,6 +1999,8 @@ def main(argv: list[str] | None = None) -> int:
         help="with --preview or --tally: list every file of these bundle paths or trash timestamps, or of all",
     )
     args = parser.parse_args(argv)
+    if args.promoted is not None and args.clear is None:
+        parser.error("--promoted needs --clear")
     if args.files is not None and not (args.preview or args.tally):
         parser.error("--files needs --preview or --tally")
     if args.preview or args.tally:
@@ -2014,7 +2017,7 @@ def main(argv: list[str] | None = None) -> int:
                 lines = purge_trash(Path.cwd())
                 print("\n".join(lines))
                 return 1 if any(line.startswith("blocked") for line in lines) else 0
-            results = clear_bundles(Path.cwd(), args.clear, args.promoted)
+            results = clear_bundles(Path.cwd(), args.clear, args.promoted or "")
         except (ConfigError, OSError) as error:
             raise SystemExit(error) from error
         print("\n".join(line for _, line in results))
