@@ -76,7 +76,7 @@ trashed by rule, only promoted or kept) or working (bundles may be trashed once 
 under a saved `doc_strategy`). Never assume: one folder name is durable here, working elsewhere.
 Recommend durable when `config.doc_reference` maps the root to `["*"]` or its name holds `research`,
 `prototype` or `archive`. Start from `config.doc_reference`: set a durable root to `["*"]`; for a
-working one remove `"*"`, deleting the key when no word is left. Copy `config.doc_strategy` as is.
+working one remove `"*"`, deleting the key when no word is left. Copy `config.doc_strategy` and `config.disposable_paths` as is.
 
 ## 3. Confirm
 
@@ -84,7 +84,7 @@ Show one consolidated summary and wait for an explicit yes:
 
 1. The full answers JSON. Keys: `scope`, `harnesses`, `pin_claude_settings`, `instructions`,
    `branch_shapes`, `ticket_prefix`, `owners`, `prototype_prefix`, `primary_branch`, `worktree_roots`, `cleanup`,
-   `stop_gate`, `hook`, `evidence_dir`, `doc_roots`, `doc_reference`, `doc_strategy`.
+   `stop_gate`, `hook`, `evidence_dir`, `doc_roots`, `doc_reference`, `doc_strategy`, `disposable_paths`.
 2. The files apply will write: team: `.lumberjack.toml`, the hook file, `.claude/settings.json`
    when pinning, the `instructions` block, `.gitignore` entries for roots inside the repository;
    local: `.git/lumberjack.toml`, `.git/hooks/post-merge`, `CLAUDE.local.md`,
