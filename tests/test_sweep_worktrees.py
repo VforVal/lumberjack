@@ -2110,7 +2110,7 @@ def test_no_session_marker_outside_prune_mode(primary: Path, mode: str) -> None:
 def test_null_session_ids_do_not_merge_in_tally(primary: Path) -> None:
     rule_bundles(primary)
     session_start(primary, None)  # trashes eng-150
-    session_start(primary, None)  # distinct null-ID session
+    assert sweep(primary, "--hook", stdin='{"hook_event_name": "SessionStart"}').returncode == 0
     events = [
         json.loads(line)
         for line in (primary / ".git" / "lumberjack-tally.jsonl").read_text(encoding="utf-8").splitlines()
@@ -2126,13 +2126,14 @@ def test_report_mode_hints_only_when_cleanup_has_removable_items_and_not_in_prev
     settings(primary, 'cleanup = "report"\n')
     assert hint not in cleanup(primary)
 
-    # Removable worktree triggers hint in session cleanup, not in --preview on prune.
+    # Removable worktree triggers hint in session cleanup, not in --preview under report or prune.
     wt = landed_worktree(primary, "eng-20-a")
     assert hint in cleanup(primary)
+    assert hint not in run_lines(primary, "--preview")
 
     settings(primary, 'cleanup = "prune"\n')
     preview_out = run_lines(primary, "--preview")
-    assert f"landed claude/eng-20-a wt/eng-20-a: would remove" in preview_out
+    assert "landed claude/eng-20-a wt/eng-20-a: would remove" in preview_out
     assert hint not in preview_out
 
     # Remove worktree cleanly so subsequent checks isolate each remaining signal.

@@ -255,7 +255,7 @@ and nothing moves:
 sweep would: remove 2 worktrees, delete 1 orphan, trash 3 bundles (120 files, 4.2 MB), purge 1 trash folder (40 files, 1.1 MB)
 ```
 
-When something would be cleaned, session cleanup appends
+When something would be cleaned, session start and `--cleanup` add
 `hint: cleanup = "report" removes nothing; set cleanup = "prune" to clean automatically`.
 
 A `dependent` line is a branch built on top of a landed one; run the printed rebase

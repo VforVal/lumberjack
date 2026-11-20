@@ -1711,7 +1711,7 @@ def purged(events: list[Row]) -> str:
 def mark_session(start: Path, session_id: str) -> None:
     """Record a session start in the tally, so --tally can tell this session's work from earlier work.
 
-    Only in prune mode with a saved doc_strategy: nothing is trashed or purged otherwise."""
+    Only in prune mode with a saved doc_strategy: session start trashes and purges nothing otherwise."""
     try:
         primary = find_primary(start)
         cfg = load_config(primary)
@@ -1779,7 +1779,7 @@ def hook(payload: dict[str, object]) -> int:
         return 0
     if event == "SessionStart":
         sid = payload.get("session_id")
-        mark_session(Path.cwd(), "" if sid is None else str(sid))
+        mark_session(Path.cwd(), sid if isinstance(sid, str) else "")
         output = "\n".join(cleanup_session(Path.cwd(), include_context=True))
     elif event == "SubagentStart":
         # Claude forks inherit context; Codex children always receive the approved refresh.
