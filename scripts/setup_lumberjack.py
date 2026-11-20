@@ -310,6 +310,7 @@ CONFIG_DOC = {
     "stop_gate": "Whether the Stop hook blocks on branch and primary-checkout debt.",
     "doc_strategy": "What /lumberjack:cleanup may do with doc bundles; empty until the maintainer answers once.",
     "doc_reference": "Per doc root, folder-name words that make a bundle reference (* for all: a durable root); default research, prototype.",
+    "disposable_paths": "Extra cache names or relative paths treated as disposable in orphan cleanup and --remove.",
 }
 HARNESSES = ("claude", "codex")
 ANSWER_KEYS = {*DEFAULTS, "harnesses", "hook", "pin_claude_settings", "scope", "instructions"}

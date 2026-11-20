@@ -97,10 +97,14 @@ def landed(primary: Path, trees: Path, name: str, *, pushed: bool = True) -> Pat
     write(path, "payload.txt", name + "\n")
     git(path, "add", "payload.txt")
     git(path, "commit", "-q", "-m", name)
-    git(primary, "merge", "-q", "--ff-only", branch)
-    git(primary, "push", "-q", "origin", "main")
     if pushed:
+        git(primary, "merge", "-q", "--ff-only", branch)
         git(path, "push", "-q", "-u", "origin", branch)
+    else:  # content-integrated on origin/main without merging or pushing the branch itself
+        write(primary, "payload.txt", name + "\n")
+        git(primary, "add", "payload.txt")
+        git(primary, "commit", "-q", "-m", f"squash {name}")
+    git(primary, "push", "-q", "origin", "main")
     return path
 
 
@@ -118,10 +122,10 @@ def test_setup_cleanup_modes_protect_and_restore_worktrees(
     write(dirty, "scratch.txt", "keep this uncommitted work\n")
     evidence = landed(primary, trees, "evidence")
     write(evidence, ".evidence/receipt.txt", "keep this receipt\n")
-    unpushed = landed(primary, trees, "unpushed", pushed=False)
     prototype = landed(primary, trees, "prototype")
     git(prototype, "branch", "-m", "prototype/eng-1-capture")
     git(prototype, "push", "-q", "-u", "origin", "prototype/eng-1-capture")
+    unpushed = landed(primary, trees, "unpushed", pushed=False)
     write(trees, "old cache/node_modules/cache", "cache\n")
     write(tmp_path, "outside roots/node_modules/receipt", "outside scan\n")
     monkeypatch.chdir(primary)

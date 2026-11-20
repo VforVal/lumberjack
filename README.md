@@ -67,7 +67,7 @@ lumberjack runs its two bundled Python scripts, `git` and, when installed, `gh`.
 no code and installs nothing. The images in `assets/` are for this page and the plugin icon,
 and `website/` is the product site; no script or hook opens them.
 
-- **Network:** `git fetch --prune origin`, and with `gh` logged in, a read-only GitHub GraphQL
+- **Network:** `git fetch --prune --no-tags origin`, and with `gh` logged in, a read-only GitHub GraphQL
   query that sends the repository's branch names to find merged pull requests (setup
   also runs `gh auth status`). `gh` uses its own saved login; lumberjack never reads, stores or
   sends a token. Nothing goes to any other server.
@@ -155,6 +155,7 @@ SessionStart prints the error and cleans nothing.
 | `doc_roots` | `[]` | Folders inside a worktree for work documents (handoffs, plans, research, run output); an untracked or ignored file under one blocks cleanup with `docs`. `evidence_dir` is one more such folder but keeps its own reason, `evidence` |
 | `doc_reference` | `{}` | Per doc root, the words that make a bundle `reference` instead of `ephemeral` when its folder name contains one (case-insensitive); `"*"` makes every bundle of the root `reference` (a durable root; setup asks root by root); a root not listed uses `["research", "prototype"]`; an empty word is a config error. A table: `[doc_reference]` then `"docs/work" = ["spike"]` |
 | `doc_strategy` | `{}` | How `/lumberjack:cleanup` trashes doc bundles, saved after it asks once (empty: nothing is removed). Keys, all required once set: `scope` (`markdown` or `bundle`), `trash_days` (whole days, at least 1) and `grace_days` (whole days, 0 or more: how long a bundle stays `linked` before session start trashes it; 0 trashes it at the first session start that sees it linked); optional `roots`, a table of doc root to `keep` whose bundles are always kept, so `roots = {"docs/handoffs" = "keep"}` keeps every handoff. The old keys `ephemeral`, `reference` and `tracker` are a config error; saving a new strategy replaces them. A table: `[doc_strategy]` then `scope = "bundle"`, `trash_days = 30` and `grace_days = 7` |
+| `disposable_paths` | `[]` | Extra cache folder names (matched at any depth) or repo-relative paths (such as `[".claude/skills", ".next"]`) treated as disposable in orphan cleanup and `--remove` |
 | `worktree_roots` | `["~/.codex/worktrees/*", ".claude/worktrees", "~/worktrees/{name}"]` | Where to look for leftover worktree folders that git no longer lists (registered worktrees are swept wherever they live): `~` is home, `*` a glob, `{name}` the repo name |
 | `cleanup` | `"prune"` | `prune` removes landed worktrees, trashes linked ephemeral bundles and purges trash past `trash_days`; `report` lists them as `would remove`, `would trash` and `would purge` (with file counts) under a `sweep would:` line; `keep` does nothing |
 | `stop_gate` | `true` | `false` turns the Stop hook off |
@@ -181,22 +182,23 @@ Leave `doc_strategy` out until `/lumberjack:cleanup` asks for it; once set, it n
 
 ## Cleanup rule
 
-After fetching `origin` (5 second limit; on failure the summary says `origin stale`),
+After fetching `origin` (10 second limit; on failure the summary says `origin stale`),
 a worktree is removed only when its tip is verified landed in `origin/<primary_branch>`
 and nothing blocks it. Eight reasons block it, and the sweep names the one it hit:
 
 - `current checkout`: the sweep is running inside this worktree
 - `locked`: the worktree is locked with `git worktree lock`
 - `dirty`: uncommitted or untracked files (ignored files do not count)
-- `unpushed`: no upstream, or the tip is not contained in it; waived when a merged pull
-  request had exactly this tip
+- `unpushed`: no upstream, or the tip is not contained in it; waived when `integrated` on
+  `origin/<primary_branch>` or when a merged pull request had exactly this tip
 - `evidence`: `evidence_dir` is set and not empty in the worktree
 - `docs`: a `doc_roots` folder holds a file that git does not track, ignored files included
 - `tip diverged`: a pull request from this branch merged into the primary branch with a
   different tip
-- `fresh`: the worktree was added less than 24 hours ago and its branch has not moved since
-  it was created (its reflog has only the creation entry, or no entry at all). A new branch
-  from `origin/<primary_branch>` looks landed and pushed, but its session may have just started
+- `fresh`: the worktree was added less than 24 hours ago and its branch or detached `HEAD` has
+  not moved since it was created (its reflog has only the creation entry, or no entry at all). A
+  new worktree from `origin/<primary_branch>` looks landed and pushed, but its session may have
+  just started
 
 If git itself refuses the removal, git's message is the reason. Removal deletes no commits:
 the branch is kept. Bring the work back with `git worktree add <path> <branch>`.
@@ -229,7 +231,7 @@ An `unverified` row carries a reason: `gh missing`, `not a github remote`,
 `unauthenticated`, `unreachable`, `tip diverged`, `non-primary base`
 (merged, but into another branch) or `no pull request`, with `; origin stale` appended
 when the fetch failed, and `; time budget` when the 5 seconds for `landed-probable` guesses ran
-out (with hundreds of worktrees; each sweep guesses in the same order, so the same tips can stay `unverified`). Only the first 100 branches go to `gh` in one query; the rest get
+out (with hundreds of worktrees; each sweep guesses in the same order, so the same tips can stay `unverified`). Active worktree branches are queried on `gh` ahead of loose local branches, 100 per query within a 10 second limit; branches not reached in time get
 `no pull request`. Plain `sweep_worktrees.py` output and `--json` show tier and reason.
 
 ## Summary line
@@ -340,7 +342,8 @@ It refuses with `current checkout`, `locked`, `fresh`, `dirty`, `evidence` or `d
 the cleanup rule (an unpushed tip is no loss, since the branch keeps it), and also with:
 
 - `ignored files (<names>)`: ignored files other than caches (`node_modules`, `.venv`,
-  `__pycache__`, tool caches, `.coverage`, Claude's `.claude/settings.local.json`), which removal
+  `__pycache__`, tool caches, `.coverage`, Claude's `.claude/settings.local.json`, or
+  `disposable_paths`), which removal
   would delete; the line names the first three ignored paths (an ignored folder counts once) and
   how many more, for example `ignored files (.env, data/ and 2 more)`. The automatic sweep does
   not check ignored files: it treats them as disposable.
@@ -402,7 +405,7 @@ sweep_worktrees.py --purge-trash
 ```
 
 `--clear` prints one line per path and exits 0 when all are done, 1 when any is blocked.
-With `--promoted` it fetches `origin` first (5 second limit), so a just-merged promotion counts:
+With `--promoted` it fetches `origin` first (10 second limit), so a just-merged promotion counts:
 
 ```
 cleared docs/work/eng-9-handoff: trashed 20260101T120000Z

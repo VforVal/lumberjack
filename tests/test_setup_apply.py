@@ -28,6 +28,7 @@ ANSWERS = {
     "doc_roots": ["docs/work"],
     "doc_reference": {"docs/work": ["spec", "research"]},
     "doc_strategy": {"scope": "bundle", "trash_days": 14, "grace_days": 3, "roots": {"docs/handoffs": "keep"}},
+    "disposable_paths": [".claude/skills"],
     "worktree_roots": [".wt", "~/worktrees/{name}"],
     "cleanup": "report",
     "stop_gate": False,

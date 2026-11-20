@@ -39,6 +39,7 @@ DEFAULTS: Config = {
     "doc_roots": [],
     "doc_reference": {},
     "doc_strategy": {},
+    "disposable_paths": [],
     "worktree_roots": [
         "~/.codex/worktrees/*",
         ".claude/worktrees",
@@ -48,8 +49,6 @@ DEFAULTS: Config = {
     "stop_gate": True,
 }
 # .codex-worktree-name is all Codex leaves behind after removing a worktree.
-# onexc replaced the deprecated onerror in 3.12; the handler signature is the same.
-RMTREE_HANDLER = "onexc" if sys.version_info >= (3, 12) else "onerror"
 CLEANUP_MODES = ("prune", "report", "keep")
 CACHE_DIRS = {"node_modules", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist"}
 CACHE_DIRS.add(".codex-worktree-name")
@@ -62,8 +61,9 @@ TRASH_STAMP = "%Y%m%dT%H%M%SZ"  # a trash folder is named for the UTC moment its
 SCOPES = ("markdown", "bundle")  # doc_strategy scope: only .md files, or whole bundles
 BUNDLE_ACTION = {"ephemeral": "trash", "reference": "promote"}  # by class, outside a keep-root
 SIZE_SECONDS = 3  # sizing bundles, timed from when sizing starts
-DOC_SECONDS = 7  # trashing and purging, timed after the report; with fetch and gh it fits the hook's 30
+DOC_SECONDS = 7  # trashing and purging; capped with probable guesses by SESSION_SECONDS
 PURGE_SECONDS = 3  # the end of DOC_SECONDS kept for purging, so trashing never starves it
+SESSION_SECONDS = 27  # total session sweep ceiling so offline fetch/gh + cleanup stay under the 30s hook timeout
 NO_MARKDOWN = "no Markdown in scope"
 TOO_LARGE = "too large to walk in time"
 DOC_STATE = "lumberjack-docs.json"  # next to the trash: first-seen dates and skipped bundles
@@ -215,6 +215,17 @@ def origin_default_branch(primary: Path) -> str:
     return DEFAULTS["primary_branch"]
 
 
+def repo_relative(path: object) -> str | None:
+    """Normalized relative POSIX path inside the repository, or None when invalid."""
+    if not isinstance(path, str) or not path:
+        return None
+    win = PureWindowsPath(path)
+    if win.drive or win.anchor or ".." in win.parts:
+        return None
+    norm = posixpath.normpath(path.replace("\\", "/"))
+    return None if norm in (".", "") or norm.startswith("/") else norm
+
+
 def parse_config(table: Config, source: str = "") -> Config:
     """The validated config for a raw table; source names its file in errors."""
     if unknown := sorted(table.keys() - DEFAULTS.keys()):
@@ -238,11 +249,8 @@ def parse_config(table: Config, source: str = "") -> Config:
     if not cfg["ticket_prefix"] and any("<ticket>" in shape for shape in cfg["branch_shapes"]):
         raise ConfigError("lumberjack: a branch_shapes entry with <ticket> needs a ticket_prefix", source)
     # git refuses a path outside the worktree, which would read as `docs` and keep every worktree.
-    if not all(
-        isinstance(root, str) and root and not PureWindowsPath(root).anchor
-        and ".." not in PureWindowsPath(root).parts and posixpath.normpath(root) != "."
-        for root in cfg["doc_roots"]
-    ):
+    doc_roots = [repo_relative(root) for root in cfg["doc_roots"]]
+    if any(r is None for r in doc_roots):
         raise ConfigError("lumberjack: doc_roots must be relative paths inside the repo", source)
     if not all(
         isinstance(words, list) and all(isinstance(w, str) and w for w in words)
@@ -272,8 +280,12 @@ def parse_config(table: Config, source: str = "") -> Config:
     if roots:
         strategy["roots"] = {posixpath.normpath(r): a for r, a in roots.items()}
     # One spelling per root, so "docs/work/" in doc_reference finds the root "./docs/work".
-    cfg["doc_roots"] = [posixpath.normpath(root) for root in cfg["doc_roots"]]
+    cfg["doc_roots"] = [r for r in doc_roots if r is not None]
     cfg["doc_reference"] = {posixpath.normpath(k): v for k, v in cfg["doc_reference"].items()}
+    disposable_paths = [repo_relative(p) for p in cfg["disposable_paths"]]
+    if any(p is None or ".git" in (part.lower() for part in p.split("/")) for p in disposable_paths):
+        raise ConfigError("lumberjack: disposable_paths must be relative paths inside the repo", source)
+    cfg["disposable_paths"] = [p for p in disposable_paths if p is not None]
     if cfg["cleanup"] not in CLEANUP_MODES:
         raise ConfigError(
             f"lumberjack: cleanup must be one of {', '.join(CLEANUP_MODES)}", source
@@ -281,13 +293,19 @@ def parse_config(table: Config, source: str = "") -> Config:
     return cfg
 
 
+GIT_ENV_STRIP = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+
+
+def git_env() -> dict[str, str]:
+    """Process environment without hook variables that pin git to a merging worktree."""
+    return {key: value for key, value in os.environ.items() if key not in GIT_ENV_STRIP}
+
+
 def git(cwd: Path, *args: str, input: str | None = None) -> subprocess.CompletedProcess[str]:
     # A git hook exports GIT_DIR and friends; they would point every call at the merging worktree.
-    leaked = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
-    env = {key: value for key, value in os.environ.items() if key not in leaked}
     return subprocess.run(
         ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-        env=env, input=input,
+        env=git_env(), input=input,
     )
 
 
@@ -339,9 +357,9 @@ def registered(primary: Path) -> list[Row]:
 
 # Verified tiers are safe to prune; landed-probable and unverified are report-only.
 VERIFIED = {"integrated", "content-integrated", "landed-pr"}
-GH_TIMEOUT = 5
+GH_TIMEOUT = 10
 GH_BATCH = 100
-FETCH_TIMEOUT = 5
+FETCH_TIMEOUT = 10
 FRESH_HOURS = 24
 PROBABLE_SECONDS = 5  # time for landed-probable guesses per sweep; later tips stay unverified
 Tip = tuple[str, str]  # (commit sha, branch name; empty when detached)
@@ -373,49 +391,62 @@ def content_integrated(primary: Path, base: str, tree: str, sha: str) -> bool:
     return merged.returncode == 0 and merged.stdout.splitlines()[:1] == [tree]
 
 
-def merged_prs(primary: Path, branches: list[str]) -> dict[str, list[Row]] | str:
-    """Merged PRs per branch from one GraphQL call, or the reason it failed."""
+def merged_prs(primary: Path, branches: list[str]) -> tuple[dict[str, list[Row]], str]:
+    """(merged PRs by branch, fallback failure reason) from batched GraphQL calls within GH_TIMEOUT."""
+    if not branches:
+        return {}, ""
     gh = shutil.which("gh")
     if not gh:
-        return "gh missing"
+        return {}, "gh missing"
     host, owner, repo = origin_parts(git(primary, "remote", "get-url", "origin").stdout.strip())
     if host != "github.com" or not (owner and repo):
-        return "not a github remote"
+        return {}, "not a github remote"
     owner, repo = json.dumps(owner), json.dumps(repo)
-    # shortcut: branches past GH_BATCH are not queried; batch the rest if that bites.
-    aliases = " ".join(
-        f"b{i}: pullRequests(headRefName: {json.dumps(name)}, states: MERGED, first: 10)"
-        " { nodes { headRefOid baseRefName mergeCommit { oid } } }"
-        for i, name in enumerate(branches[:GH_BATCH])
-    )
-    query = f"query {{ repository(owner: {owner}, name: {repo}) {{ {aliases} }} }}"
-    try:
-        done = subprocess.run(
-            [gh, "api", "graphql", "-f", f"query={query}"],
-            cwd=primary,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=GH_TIMEOUT,
+    out: dict[str, list[Row]] = {}
+    deadline = time.monotonic() + GH_TIMEOUT
+    for offset in range(0, len(branches), GH_BATCH):
+        remaining = deadline - time.monotonic()
+        if offset > 0 and remaining <= 0:
+            return out, ""
+        batch = branches[offset : offset + GH_BATCH]
+        aliases = " ".join(
+            f"b{i}: pullRequests(headRefName: {json.dumps(name)}, states: MERGED, first: 10)"
+            " { nodes { headRefOid baseRefName mergeCommit { oid } } }"
+            for i, name in enumerate(batch)
         )
-    except (subprocess.TimeoutExpired, OSError):
-        return "unreachable"
-    if done.returncode == 4 or "auth" in done.stderr.lower():
-        return "unauthenticated"
-    try:
-        if done.returncode:
-            return "unreachable"
-        found = json.loads(done.stdout)["data"]["repository"]
-        return {name: found[f"b{i}"]["nodes"] for i, name in enumerate(branches[:GH_BATCH])}
-    except (ValueError, KeyError, TypeError):
-        return "unreachable"
+        query = f"query {{ repository(owner: {owner}, name: {repo}) {{ {aliases} }} }}"
+        try:
+            done = subprocess.run(
+                [gh, "api", "graphql", "-f", f"query={query}"],
+                cwd=primary,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=max(0.1, remaining),
+            )
+        except subprocess.TimeoutExpired:
+            return out, "unreachable" if offset == 0 else ""
+        except OSError:
+            return out, "unreachable"
+        if done.returncode == 4 or "auth" in done.stderr.lower():
+            return out, "unauthenticated"
+        try:
+            if done.returncode:
+                return out, "unreachable"
+            found = json.loads(done.stdout)["data"]["repository"]
+            out.update({name: found[f"b{i}"]["nodes"] for i, name in enumerate(batch)})
+        except (ValueError, KeyError, TypeError):
+            return out, "unreachable"
+    return out, ""
 
 
-def pr_verdict(prs: dict[str, list[Row]] | str, tip: Tip, primary_branch: str) -> Verdict:
+def pr_verdict(
+    prs: dict[str, list[Row]], tip: Tip, primary_branch: str, fallback: str = ""
+) -> Verdict:
     """(tier, reason) from the merged-PR lookup; tier is empty on a miss."""
-    if isinstance(prs, str):
-        return "", prs
-    nodes = prs.get(tip[1], [])
+    if tip[1] not in prs:
+        return "", fallback
+    nodes = prs[tip[1]]
     into = [n for n in nodes if n["baseRefName"] == primary_branch]
     if any(n["headRefOid"] == tip[0] for n in into):
         return "landed-pr", ""
@@ -425,47 +456,70 @@ def pr_verdict(prs: dict[str, list[Row]] | str, tip: Tip, primary_branch: str) -
 
 
 def patch_ids(primary: Path, *args: str) -> list[str]:
-    shown = subprocess.run(["git", *args], cwd=primary, capture_output=True)
+    env = git_env()
+    shown = subprocess.run(["git", *args], cwd=primary, capture_output=True, env=env)
     ids = subprocess.run(
         ["git", "patch-id", "--stable"],
         cwd=primary,
         input=shown.stdout,
         capture_output=True,
+        env=env,
     )
     return [line.split()[0] for line in ids.stdout.decode().splitlines()]
 
 
-def probable(primary: Path, base: str, sha: str, recent: set[str]) -> bool:
+def probable(primary: Path, base: str, sha: str, recent: Callable[[], set[str]]) -> bool:
     cherry = lines(git(primary, "cherry", base, sha))
     if cherry and all(line.startswith("-") for line in cherry):
         return True
-    return bool(set(patch_ids(primary, "diff", f"{base}...{sha}")) & recent)
+    diffs = set(patch_ids(primary, "diff", f"{base}...{sha}"))
+    return bool(diffs and (diffs & recent()))
 
 
-def classify(primary: Path, cfg: Config, tips: set[Tip], stale: bool = False) -> dict[Tip, Verdict]:
+def classify(
+    primary: Path,
+    cfg: Config,
+    tips: set[Tip],
+    stale: bool = False,
+    priority: set[str] | None = None,
+    deadline: float = math.inf,
+    worktrees: dict[Tip, Path] | None = None,
+) -> dict[Tip, Verdict]:
     """(tier, reason) per tip against origin/<primary>, first decisive tier wins."""
     base = f"origin/{cfg['primary_branch']}"
     tree = git(primary, "rev-parse", f"{base}^{{tree}}").stdout.strip()
     unlanded = unlanded_commits(primary, base, {sha for sha, _ in tips})
     result: dict[Tip, Verdict] = {}
-    rest = []
+    rest, upgrade = [], []
     for tip in sorted(tips):
         if tip[0] not in unlanded:
             result[tip] = ("integrated", "")
         elif content_integrated(primary, base, tree, tip[0]):
-            result[tip] = ("content-integrated", "")
+            path = (worktrees or {}).get(tip)
+            # An unpushed content-integrated worktree may be a squash-merged PR whose branch was deleted.
+            if path is not None and tip[1] and unpushed(path):
+                upgrade.append(tip)
+            else:
+                result[tip] = ("content-integrated", "")
         else:
             rest.append(tip)
+    if not rest and not upgrade:
+        return result
+    prior = priority or set()
+    rest.sort(key=lambda tip: (tip[1] not in prior, tip[0], tip[1]))
+    names = sorted({name for _, name in (*rest, *upgrade) if name}, key=lambda n: (n not in prior, n))
+    prs, fallback = merged_prs(primary, names) if names else ({}, "")  # detached has no pull request
+    for tip in upgrade:
+        tier, _ = pr_verdict(prs, tip, cfg["primary_branch"], fallback)
+        result[tip] = ("landed-pr", "") if tier == "landed-pr" else ("content-integrated", "")
     if not rest:
         return result
-    names = sorted({name for _, name in rest if name})
-    prs = merged_prs(primary, names) if names else {}  # a detached tip has no pull request
-    recent = set(patch_ids(primary, "log", "-200", "-p", base))
+    recent = functools.cache(lambda: set(patch_ids(primary, "log", "-200", "-p", base)))
     # The guess costs several git calls per tip and never prunes, so it yields to the hook timeout.
-    deadline, rushed = time.monotonic() + PROBABLE_SECONDS, False
+    guess_deadline, rushed = min(time.monotonic() + PROBABLE_SECONDS, deadline), False
     for tip in rest:
-        tier, reason = pr_verdict(prs, tip, cfg["primary_branch"])
-        if not tier and not (rushed := rushed or time.monotonic() > deadline):
+        tier, reason = pr_verdict(prs, tip, cfg["primary_branch"], fallback)
+        if not tier and not (rushed := rushed or time.monotonic() > guess_deadline):
             tier = "landed-probable" if probable(primary, base, tip[0], recent) else ""
         if not tier:
             tier = "unverified"
@@ -518,11 +572,41 @@ def orphan_candidates(primary: Path, cfg: Config) -> list[Path]:
     return [path for path in found if path.is_dir()]
 
 
-def classify_orphan(path: Path) -> str:
-    entries = list(path.iterdir())
-    if entries and all(entry.name in CACHE_DIRS for entry in entries):
-        return "node_modules-only"
-    return "mixed" if (path / ".git").exists() else "not-git"
+def only_disposable(
+    folder: Path, prefix: str, extra: tuple[str, ...], *, allow_empty: bool = False
+) -> bool:
+    """Folder holding only disposable entries or subfolders that do; never follows links."""
+    with os.scandir(folder) as entries:
+        children = list(entries)
+    if not children:
+        return allow_empty
+    for entry in children:
+        rel = f"{prefix}/{entry.name}" if prefix else entry.name
+        if disposable(rel, extra):
+            continue
+        if not is_folder(entry) or not only_disposable(
+            Path(entry.path), rel, extra, allow_empty=allow_empty
+        ):
+            return False
+    return True
+
+
+def classify_orphan(path: Path, extra: tuple[str, ...] = ()) -> str:
+    st = path.lstat()
+    if not stat.S_ISDIR(st.st_mode) or reparse(st):
+        return "not-git"
+    if (path / ".git").exists():
+        return "mixed"
+    return "node_modules-only" if only_disposable(path, "", extra) else "not-git"
+
+
+def orphan_kind(path: Path, extra: tuple[str, ...]) -> str | None:
+    try:
+        return classify_orphan(path, extra)
+    except FileNotFoundError:
+        return "not-git" if path.exists() else None
+    except (OSError, RecursionError):
+        return "not-git"
 
 
 def same_dir(a: str | Path, b: str | Path) -> bool:
@@ -536,25 +620,27 @@ def dir_key(path: str | Path) -> str:
 
 def orphan_rows(primary: Path, cfg: Config, trees: list[Row]) -> list[Row]:
     listed = {dir_key(tree["path"]) for tree in trees}  # resolved once: hundreds of worktrees add up
-    return [
-        {"kind": classify_orphan(path), "path": path.as_posix()}
-        for path in sorted(orphan_candidates(primary, cfg))
-        if dir_key(path) not in listed
-    ]
+    extra = tuple(cfg["disposable_paths"])
+    rows = []
+    for path in sorted(orphan_candidates(primary, cfg)):
+        if dir_key(path) not in listed and (kind := orphan_kind(path, extra)) is not None:
+            rows.append({"kind": kind, "path": path.as_posix()})
+    return rows
 
 
 def branch_tips(primary: Path, cfg: Config, trees: list[Row]) -> dict[str, str]:
     """Unmerged local branches that no worktree has checked out, with their tips."""
     checked_out = {tree["branch"] for tree in trees}
     base = f"origin/{cfg['primary_branch']}"
-    names = lines(
-        git(primary, "branch", "--format=%(refname:short)", "--no-merged", base)
-    )
-    return {
-        name: git(primary, "rev-parse", f"refs/heads/{name}").stdout.strip()
-        for name in names
-        if name not in checked_out
-    }
+    rows = lines(git(primary, "branch", "--format=%(refname) %(objectname)", "--no-merged", base))
+    tips: dict[str, str] = {}
+    for row in rows:
+        ref, _, sha = row.rpartition(" ")
+        if ref.startswith("refs/heads/") and sha:
+            name = ref.removeprefix("refs/heads/")
+            if name not in checked_out:
+                tips[name] = sha
+    return tips
 
 
 def branch_rows(tips: dict[str, str], tiers: dict[Tip, Verdict]) -> list[Row]:
@@ -578,16 +664,7 @@ def prototype_rows(primary: Path, cfg: Config) -> list[Row]:
         )
     )
     names = sorted({ref.removeprefix("origin/") for ref in refs})
-    ticket = cfg["ticket_prefix"]
-    return [
-        {
-            "issue": f"{ticket}{m[1]}"
-            if ticket and (m := re.search(rf"{re.escape(ticket)}(\d+)", n))
-            else "none",
-            "name": n,
-        }
-        for n in names
-    ]
+    return [{"issue": next(iter(ticket_ids(cfg, n)), "none"), "name": n} for n in names]
 
 
 def primary_row(primary: Path, cfg: Config) -> Row:
@@ -621,9 +698,9 @@ def format_rows(report: Row) -> list[str]:
 
 
 def ticket_ids(cfg: Config, text: str) -> list[str]:
-    """Ticket ids (`ticket_prefix` + digits) in text, in order; none without a prefix."""
+    """Ticket ids (`ticket_prefix` + digits) in text, lowercase and in order; none without a prefix."""
     prefix = cfg["ticket_prefix"]
-    return re.findall(rf"(?<![A-Za-z0-9]){re.escape(prefix)}\d+", text) if prefix else []
+    return [m.lower() for m in re.findall(rf"(?<![A-Za-z0-9]){re.escape(prefix)}\d+", text, re.I)] if prefix else []
 
 
 def untracked_docs(path: Path, roots: list[str]) -> list[str] | None:
@@ -709,13 +786,14 @@ def mentioned(primary: Path, primary_branch: str, names: list[str], shas: list[s
     if not names:
         return set()
     # One grep for every name (patterns on stdin); matched lines only, so the cost is the repo's size.
-    grep = git(primary, "grep", "-I", "-h", "-F", "-f", "-", input="\n".join(names) + "\n")
+    grep = git(primary, "grep", "-I", "-h", "-F", "-i", "-f", "-", input="\n".join(names) + "\n")
     text = grep.stdout if grep.returncode == 0 else ""
     if shas:  # shortcut: the newest DOC_COMMITS commits, not all of them; raise it if bundles go unseen
         log = git(primary, "log", "--format=%B", f"-n{DOC_COMMITS}", *shas, "--not",
                   f"origin/{primary_branch}")
         text += log.stdout if log.returncode == 0 else ""
-    return {name for name in names if name in text}
+    lowered = text.lower()
+    return {name for name in names if name.lower() in lowered}
 
 
 def bundle_action(strategy: Config, root: str, kind: str) -> str:
@@ -740,7 +818,9 @@ def bundle_class(cfg: Config, root: str, name: str) -> str:
     return "reference" if any(w == "*" or w.lower() in name.lower() for w in words) else "ephemeral"
 
 
-def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verdict]) -> list[Row]:
+def doc_rows(
+    primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verdict], budget: float = math.inf
+) -> list[Row]:
     """Untracked doc-root bundles: class, tickets and live/linked/unlinked; size for linked."""
     # Any worktree counts, by branch or folder name, so a detached Codex worktree does too.
     # A branch without one counts until it lands: landed local branches are never deleted.
@@ -748,7 +828,7 @@ def doc_rows(primary: Path, cfg: Config, trees: list[Row], tiers: dict[Tip, Verd
     names = [n for t in trees[1:] for n in (t["branch"], worktree_name(primary, t["path"])) if n]
     names += [n for _, n in unlanded if n]
     carried = {t for name in names for t in ticket_ids(cfg, name)}
-    deadline = time.monotonic() + SIZE_SECONDS
+    deadline = min(time.monotonic() + SIZE_SECONDS, budget)
     worktrees = [Path(tree["path"]).resolve() for tree in trees[1:]]
     bundles = [
         (root, rel) for root, rel in doc_entries(primary, cfg)
@@ -969,18 +1049,29 @@ def trash_rows(primary: Path, cfg: Config) -> list[Row]:
     return rows
 
 
-def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
+def build_report(primary: Path, cfg: Config, stale: bool = False, deadline: float = math.inf) -> Row:
     trees = registered(primary)
     loose = branch_tips(primary, cfg, trees)
     tips = {(t["head"], t["branch"]) for t in trees[1:]}
     tips |= {(sha, name) for name, sha in loose.items()}
-    tiers = classify(primary, cfg, tips, stale)
+    worktrees = {(t["head"], t["branch"]): Path(t["path"]) for t in trees[1:]}
+    reserve = DOC_SECONDS if cfg["doc_strategy"] and cfg["cleanup"] != "keep" else 0
+    budget = deadline - reserve
+    tiers = classify(
+        primary,
+        cfg,
+        tips,
+        stale,
+        priority={t["branch"] for t in trees[1:] if t["branch"]},
+        deadline=budget,
+        worktrees=worktrees,
+    )
     local = lines(git(primary, "branch", "--format=%(refname:short)"))
     pattern = branch_pattern(cfg)
     return {
         "worktrees": worktree_rows(trees, tiers),
         "orphans": orphan_rows(primary, cfg, trees),
-        "docs": doc_rows(primary, cfg, trees, tiers),
+        "docs": doc_rows(primary, cfg, trees, tiers, budget),
         "doc_strategy": cfg["doc_strategy"],
         "trash": trash_rows(primary, cfg),
         "branches": branch_rows(loose, tiers),
@@ -992,18 +1083,14 @@ def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
     }
 
 
-def make_writable(func: Callable[[str], object], path: str, _: object) -> None:
-    os.chmod(path, stat.S_IWRITE)  # Windows refuses to delete read-only files.
-    func(path)
-
-
 def fetch(primary: Path) -> bool:
     """True when origin may be stale: the fetch failed or exceeded FETCH_TIMEOUT."""
     try:
         done = subprocess.run(
-            ["git", "fetch", "-q", "--prune", "origin"],
+            ["git", "fetch", "-q", "--prune", "--no-tags", "origin"],
             cwd=primary,
             capture_output=True,
+            env=git_env(),
             timeout=FETCH_TIMEOUT,
         )
     except (subprocess.TimeoutExpired, OSError):
@@ -1019,26 +1106,28 @@ def unpushed(path: Path) -> bool:
 
 
 def fresh(path: Path, branch: str, head: str) -> bool:
-    """Added under FRESH_HOURS ago, and its branch has not moved since it was created."""
+    """Added under FRESH_HOURS ago, and its branch or detached HEAD has not moved since creation."""
     admin = git(path, "rev-parse", "--absolute-git-dir").stdout.strip()
     try:  # git writes commondir once, when the worktree is added
         age = time.time() - Path(admin, "commondir").stat().st_mtime
     except OSError:
         return False
-    if not branch or age > FRESH_HOURS * 3600:
+    if age > FRESH_HOURS * 3600:
         return False
-    log = lines(git(path, "reflog", "show", "--format=%H %gs", f"refs/heads/{branch}"))
+    ref = f"refs/heads/{branch}" if branch else "HEAD"
+    log = lines(git(path, "reflog", "show", "--format=%H %gs", ref, "--"))
     if not log:  # some tools (the Claude desktop app) create branches without a reflog entry
         return True  # and any later commit or reset would have written one
     if len(log) > 1:  # moved since it was created, even when reset back to that commit
         return False
     sha, _, subject = log[0].partition(" ")
-    return sha == head and subject.startswith("branch: Created from")
+    return sha == head and (subject.startswith("branch: Created from") if branch else not subject)
 
 
 def short_path(primary: Path, path: str | Path) -> str:
     """Path relative to the primary's parent directory, else with home as ~."""
-    full = Path(path).resolve()
+    item = Path(os.path.abspath(path))
+    full = item.parent.resolve() / item.name if item.name else item.resolve()
     for base, prefix in ((primary.parent.resolve(), ""), (Path.home().resolve(), "~/")):
         if full.is_relative_to(base):
             return prefix + full.relative_to(base).as_posix()
@@ -1066,9 +1155,9 @@ def block_reason(
     # A new branch from origin/main looks integrated and pushed; its session may have just begun.
     if fresh(Path(w["path"]), w["branch"], w["head"]):
         return "fresh"
-    # landed-pr: the forge saw this exact tip, and delete-on-merge drops the upstream.
+    # integrated and landed-pr tips are already on origin or confirmed merged, even if the remote branch was pruned.
     # Explicit: the kept branch holds the commits, so unpushed is no loss; ignored files are.
-    if not explicit and w["tier"] != "landed-pr" and unpushed(Path(w["path"])):
+    if not explicit and w["tier"] not in ("integrated", "landed-pr") and unpushed(Path(w["path"])):
         return "unpushed"
     if evidence and evidence.is_dir() and any(evidence.iterdir()):
         return "evidence"
@@ -1077,7 +1166,7 @@ def block_reason(
         found = untracked_docs(Path(w["path"]), cfg["doc_roots"])
         if found is None or found:  # a failed listing keeps the worktree
             return "docs"
-    stray = stray_ignored(Path(w["path"])) if explicit else []
+    stray = stray_ignored(Path(w["path"]), tuple(cfg["disposable_paths"])) if explicit else []
     return f"ignored files ({named(stray)})" if stray else ""
 
 
@@ -1091,16 +1180,21 @@ def worktree_event(primary: Path, cfg: Config, w: Row, here: Path | None) -> tup
         return "blocked", f"blocked {tag(primary, w)}: {reason}"
     if cfg["cleanup"] == "report":
         return "removable", f"landed {tag(primary, w)}: would remove"
-    return remove_worktree(primary, w)
+    return remove_worktree(primary, w, tuple(cfg["disposable_paths"]))
 
 
-def remove_worktree(primary: Path, w: Row) -> tuple[str, str]:
+def remove_worktree(primary: Path, w: Row, extra: tuple[str, ...] = ()) -> tuple[str, str]:
     notes = ["local branch kept"] if w["branch"] else []
     if (gone := git(primary, "worktree", "remove", w["path"])).returncode:
         # On Windows a locked directory fails the remove after git deleted the files and entry.
         if any(same_dir(t["path"], w["path"]) for t in registered(primary)):
             return "blocked", f"blocked {tag(primary, w)}: {gone.stderr.strip()}"
-        notes += ["directory left"] if Path(w["path"]).exists() else []
+    leftover = Path(w["path"])
+    if leftover.exists() and orphan_kind(leftover, extra) == "node_modules-only":
+        with contextlib.suppress(OSError, RuntimeError):
+            purge_tree(str(leftover), math.inf, Footprint())
+    if leftover.exists():
+        notes.append("directory left")
     return "cleaned", f"cleaned {tag(primary, w)}" + (f" ({'; '.join(notes)})" if notes else "")
 
 
@@ -1117,8 +1211,23 @@ def remove_named(start: Path, target: str) -> tuple[bool, str]:
     here = Path(git(start, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
     if reason := block_reason(primary, cfg, w, here, explicit=True):
         return False, f"blocked {tag(primary, w)}: {reason}"
-    outcome, line = remove_worktree(primary, w)
+    outcome, line = remove_worktree(primary, w, tuple(cfg["disposable_paths"]))
     return outcome == "cleaned", line
+
+
+def update_doc_state(since: dict[str, date], skipped: set[str], rel: str, status: str) -> None:
+    """Drop cleared/partial grace dates and update skipped bundles in doc_work state."""
+    if status in ("cleared", "partial"):  # a trashed bundle loses its date: restored, it starts over
+        since.pop(rel, None)
+    if status == "cleared":
+        skipped.discard(rel)
+    elif status in ("partial", "skip"):
+        skipped.add(rel)  # nothing left in scope: not worth walking again
+
+
+def norm_rel(path: str) -> str:
+    """Normalize a repository-relative path across OS separators and redundant `./` segments."""
+    return posixpath.normpath(path.replace("\\", "/"))
 
 
 def clear_bundles(start: Path, targets: list[str], promoted: str = "") -> list[tuple[str, str]]:
@@ -1127,12 +1236,18 @@ def clear_bundles(start: Path, targets: list[str], promoted: str = "") -> list[t
     cfg = load_config(primary)
     if promoted:
         fetch(primary)  # the promotion may have merged after this session's fetch; never under the lock
+    rels = list(dict.fromkeys(map(norm_rel, targets)))
     with doc_work(primary, DOC_WAIT) as state:  # taken before the report, so it sees what is left
         if state is None:
-            return [("blocked", f"blocked {target}: {BUSY}") for target in targets]
+            return [("blocked", f"blocked {rel}: {BUSY}") for rel in rels]
         docs = {d["path"]: d for d in build_report(primary, cfg)["docs"]}
         stamp = datetime.now(timezone.utc).strftime(TRASH_STAMP)  # one trash folder per call
-        return [clear_bundle(primary, cfg, docs, target, promoted, stamp) for target in targets]
+        results: list[tuple[str, str]] = []
+        for rel in rels:
+            status, line = clear_bundle(primary, cfg, docs, rel, promoted, stamp)
+            update_doc_state(state["since"], state["skipped"], rel, status)
+            results.append((status, line))
+        return results
 
 
 def clear_bundle(
@@ -1143,16 +1258,17 @@ def clear_bundle(
 
     Status: `cleared` (gone), `partial` (its Markdown moved, other files stay), `blocked`,
     `skip` (no Markdown in scope) or `timeout` (past the deadline, nothing moved, line empty)."""
-    strategy, rel = cfg["doc_strategy"], posixpath.normpath(target.replace("\\", "/"))
+    strategy, rel = cfg["doc_strategy"], norm_rel(target)
     doc = docs.get(rel)
     action = doc["action"] if doc else ""
+    ref = norm_rel(promoted) if promoted else ""
     saved = False
-    if action == "promote" and promoted.startswith(cfg["prototype_prefix"]):  # a pushed prototype
-        copy = git(primary, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{promoted}")
+    if action == "promote" and ref.startswith(cfg["prototype_prefix"]):  # a pushed prototype
+        copy = git(primary, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{ref}")
         saved = copy.returncode == 0
-    elif action == "promote" and promoted:  # ... or a document tracked on the primary branch
+    elif action == "promote" and ref:  # ... or a document tracked on the primary branch
         base = f"origin/{cfg['primary_branch']}"
-        saved = git(primary, "cat-file", "-t", f"{base}:{promoted}").stdout.strip() == "blob"
+        saved = git(primary, "cat-file", "-t", f"{base}:{ref}").stdout.strip() == "blob"
     reason = (
         "no strategy saved" if not strategy
         else "not a bundle" if doc is None
@@ -1208,7 +1324,8 @@ def remove(func: Callable[[str], object], path: str) -> None:
     try:
         func(path)
     except PermissionError:
-        make_writable(func, path, None)
+        os.chmod(path, stat.S_IWRITE)  # Windows refuses to delete read-only files.
+        func(path)
 
 
 def purge_tree(path: str, deadline: float, deleted: Footprint) -> bool:
@@ -1263,26 +1380,48 @@ def purge_trash(start: Path) -> list[str]:
     return done or ["trash: nothing past retention"]
 
 
-def stray_ignored(path: Path) -> list[str]:
+def is_stray(root: Path, name: str, extra: tuple[str, ...]) -> bool:
+    """Whether ignored entry name holds non-disposable files (or links) that --remove would lose."""
+    if disposable(name, extra):
+        return False
+    target = root / name
+    try:
+        st = target.lstat()
+        if not stat.S_ISDIR(st.st_mode) or reparse(st):
+            return True
+        return not only_disposable(target, name.rstrip("/"), extra, allow_empty=True)
+    except FileNotFoundError:
+        return False
+    except (OSError, RecursionError):
+        return True
+
+
+def stray_ignored(path: Path, extra: tuple[str, ...] = ()) -> list[str]:
     """Ignored paths other than caches, sorted; git worktree remove deletes them silently.
 
     `matching` lists each ignored path where its pattern matched, so a folder holding only a
     cache is not reported as the folder, and an ignored folder stays one entry."""
-    ignored = lines(git(path, "status", "--porcelain", "--ignored=matching", "-uall"))
-    names = {line[3:] for line in ignored if line.startswith("!! ")}
-    return sorted(name for name in names if not disposable(name) and holds_a_file(path / name))
+    status = git(path, "status", "--porcelain", "-z", "--ignored=matching", "-uall")
+    if status.returncode:
+        return []
+    names, entries = set(), iter(status.stdout.split("\0"))
+    for entry in entries:
+        if len(entry) >= 3 and entry[2] == " " and (entry[0] in ("R", "C") or entry[1] in ("R", "C")):
+            next(entries, "")
+        elif entry.startswith("!! "):
+            names.add(entry[3:])
+    return sorted(name for name in names if is_stray(path, name, extra))
 
 
-def holds_a_file(path: Path) -> bool:
-    """path is a file, or a folder with a file somewhere below it; empty folders lose nothing."""
-    return not path.is_dir() or any(files for _, _, files in os.walk(path))
-
-
-def disposable(name: str) -> bool:
-    """A cache folder or a file a tool recreates, at any depth."""
-    return Path(name.rstrip("/")).name in CACHE_DIRS or any(
-        name == file or name.endswith("/" + file) for file in DISPOSABLE_FILES
-    )
+def disposable(name: str, extra: tuple[str, ...] = ()) -> bool:
+    """A cache folder, disposable tool file, or configured disposable path."""
+    rel = name.rstrip("/")
+    if posixpath.basename(rel) in CACHE_DIRS or any(
+        rel == file or rel.endswith("/" + file) for file in DISPOSABLE_FILES
+    ):
+        return True
+    parts = rel.split("/")
+    return any((rel == p or rel.startswith(p + "/")) if "/" in p else (p in parts) for p in extra)
 
 
 def named(entries: list[str]) -> str:
@@ -1308,8 +1447,8 @@ def clean_orphans(primary: Path, orphans: list[Row], mode: str) -> tuple[int, li
         shown = short_path(primary, o["path"])
         if o["kind"] == "node_modules-only" and mode == "prune":
             try:
-                shutil.rmtree(o["path"], **{RMTREE_HANDLER: make_writable})
-            except OSError as error:
+                purge_tree(o["path"], math.inf, Footprint())
+            except (OSError, RuntimeError) as error:
                 out.append(f"orphan {o['kind']} {shown}: {error}")
             else:
                 cleaned += 1
@@ -1362,13 +1501,11 @@ def trash_docs(primary: Path, cfg: Config, report: Row, state: Row, deadline: fl
         if status == "timeout" and deadline - started > (deadline - opened) / 2:
             skip.add(doc["path"])
             line = f"blocked {doc['path']}: {TOO_LARGE}"
-        if status in ("cleared", "partial"):  # a trashed bundle loses its date: restored, it starts over
+        if status in ("cleared", "partial"):
             trashed += 1
-            del since[doc["path"]]
         # shortcut: a skipped bundle stays skipped while linked, so a new .md in it needs --clear;
         # recheck skipped bundles by mtime if new files in them turn out to matter.
-        if status in ("partial", "skip"):
-            skip.add(doc["path"])  # nothing left in scope: not worth walking again
+        update_doc_state(since, skip, doc["path"], status)
         if line and status != "skip":
             out.append(line)
     state["since"], state["skipped"] = since, skip
@@ -1376,13 +1513,15 @@ def trash_docs(primary: Path, cfg: Config, report: Row, state: Row, deadline: fl
     return run
 
 
-def sweep_docs(primary: Path, cfg: Config, report: Row) -> DocRun:
+def sweep_docs(
+    primary: Path, cfg: Config, report: Row, session_deadline: float = math.inf
+) -> DocRun:
     """Session start's doc work: trash by rule, then purge, within DOC_SECONDS.
 
     Leaves docs alone while another run holds the doc lock: two at once would move the same files."""
     if not cfg["doc_strategy"] or cfg["cleanup"] == "keep":
         return DocRun()
-    deadline = time.monotonic() + DOC_SECONDS  # started after the branch checks, so slow git or gh never eats it
+    deadline = min(time.monotonic() + DOC_SECONDS, session_deadline)
     run = DocRun()
     try:
         with doc_work(primary) as state:
@@ -1611,12 +1750,14 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
         return [str(error), *notes]
     if include_context:
         notes.insert(0, active_settings(cfg))
+    session_deadline = time.monotonic() + SESSION_SECONDS
     stale, skipped = fetch_trunk(primary, cfg["primary_branch"])
     if skipped:
         return [skipped, *notes]
     try:
-        report = build_report(primary, cfg, stale)
-        return [*run_cleanup(primary, cfg, report, stale, here), *notes]
+        report = build_report(primary, cfg, stale, deadline=session_deadline)
+        docs = lambda p, c, r: sweep_docs(p, c, r, session_deadline=session_deadline)
+        return [*run_cleanup(primary, cfg, report, stale, here, docs=docs), *notes]
     except OSError as error:
         return [f"sweep: unavailable ({error})", *notes]
 
@@ -1856,7 +1997,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.files is not None and not (args.preview or args.tally):
         parser.error("--files needs --preview or --tally")
     if args.preview or args.tally:
-        keys = frozenset(posixpath.normpath(k.replace("\\", "/")) for k in args.files or ())
+        keys = frozenset(norm_rel(k) for k in args.files or ())
         listing = FileList(args.files is not None, keys)
         try:
             print("\n".join(preview(Path.cwd(), listing) if args.preview else tally(Path.cwd(), listing)))

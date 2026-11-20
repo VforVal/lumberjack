@@ -94,6 +94,35 @@ def test_bad_type_and_empty_prototype_prefix_are_rejected(
         sweep_worktrees.load_config(tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ('disposable_paths = "dist"', "disposable_paths must be list"),
+        ('disposable_paths = [""]', "disposable_paths must be relative"),
+        ("disposable_paths = [1]", "disposable_paths must be relative"),
+        ('disposable_paths = ["../out"]', "disposable_paths must be relative"),
+        ('disposable_paths = ["/abs"]', "disposable_paths must be relative"),
+        ('disposable_paths = ["./"]', "disposable_paths must be relative"),
+        ('disposable_paths = [".git"]', "disposable_paths must be relative"),
+        ('disposable_paths = [".GIT"]', "disposable_paths must be relative"),
+        ('disposable_paths = [".git/hooks"]', "disposable_paths must be relative"),
+        ('disposable_paths = ["sub/.GIT/hooks"]', "disposable_paths must be relative"),
+        ('disposable_paths = ["C:rel"]', "disposable_paths must be relative"),
+    ],
+)
+def test_disposable_paths_validation_and_normalization(
+    tmp_path: Path, body: str, message: str
+) -> None:
+    configure(tmp_path, body)
+    with pytest.raises(sweep_worktrees.ConfigError, match=message):
+        sweep_worktrees.load_config(tmp_path)
+
+
+def test_disposable_paths_normalizes_separators(tmp_path: Path) -> None:
+    configure(tmp_path, r'disposable_paths = [".claude\\skills/", "./.next/"]')
+    assert sweep_worktrees.load_config(tmp_path)["disposable_paths"] == [".claude/skills", ".next"]
+
+
 def test_worktree_roots_allows_parent_traversal_before_name_and_rejects_non_table_section(
     tmp_path: Path,
 ) -> None:
