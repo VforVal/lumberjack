@@ -12,7 +12,7 @@ branch, what was left for it goes. Each session start removes landed worktrees (
 stays) and moves their tickets' handoffs, plans and run output to a trash inside `.git/`,
 which it purges after a retention you choose. Research and prototypes are kept. A Stop hook
 keeps agents from ending a turn on a misnamed branch or an off-branch primary checkout. It
-ships as a plugin for Claude Code and Codex.
+ships as a plugin for Claude Code, Codex and Antigravity.
 
 ![Before: git worktree list shows ten worktrees, seven of them already merged. After the next session start: the sweep reports cleaned 7 and git worktree list shows three.](assets/before-after.png)
 
@@ -100,6 +100,17 @@ then run /hooks once in Codex to trust the plugin hooks
 Restart the harness after installation. Review and trust the installed hook commands
 before enabling them. If your version rejects a command, check `codex plugin --help`
 or `claude plugin --help` and upgrade to a tested version before continuing.
+
+## Install on Antigravity
+
+Copy the plugin files (`plugin.json`, `hooks.json`, `VERSION`, `assets/`, `scripts/`, `skills/`)
+into either your global Antigravity plugins folder or a single repository's `.agents/` folder:
+
+- Global (all repositories): `~/.gemini/config/plugins/lumberjack/`
+- Workspace (one repository): `.agents/plugins/lumberjack/`
+
+Antigravity auto-discovers the root `plugin.json`, `hooks.json`, and `skills/` directories live
+(with no restart), then invokes `/setup` and the `SessionStart` and `Stop` hooks automatically.
 
 ## Setup
 

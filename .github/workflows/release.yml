@@ -27,6 +27,7 @@ jobs:
           version = Path("VERSION").read_text().strip()
           found = {
               "pyproject.toml": tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"],
+              "plugin.json": json.loads(Path("plugin.json").read_text())["version"],
               ".claude-plugin/plugin.json": json.loads(Path(".claude-plugin/plugin.json").read_text())["version"],
               ".codex-plugin/plugin.json": json.loads(Path(".codex-plugin/plugin.json").read_text())["version"],
           }

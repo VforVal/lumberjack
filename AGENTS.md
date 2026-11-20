@@ -1,6 +1,6 @@
 # lumberjack
 
-Claude Code and Codex plugin repository: worktree sweep and Stop hook gate.
+Claude Code, Codex and Antigravity plugin repository: worktree sweep and Stop hook gate.
 Users start at `README.md`; terms are in `GLOSSARY.md`.
 
 ## Layout
@@ -20,11 +20,15 @@ Users start at `README.md`; terms are in `GLOSSARY.md`.
   removes `unverified` and `landed-probable` worktrees one confirmed `--remove <path>` at a time.
 - `skills/setup/SKILL.md` - run-once interview (`/lumberjack:setup`, user-invoked only) that drives
   `discover` and `apply`; its questions follow their JSON keys.
-- `hooks/hooks.json` - shared hooks: SessionStart, SubagentStart and Stop all run the sweep's
+- `hooks/hooks.json` - shared Claude Code and Codex hooks: SessionStart, SubagentStart and Stop all run the sweep's
   `--hook`, which reads the hook input on stdin and dispatches on `hook_event_name`.
+- `plugin.json`, `hooks.json`, `scripts/hook.sh` - Antigravity native plugin manifest and root
+  lifecycle hooks (`SessionStart` and `Stop` invoke `scripts/hook.sh`, resolving `cwd`/`workspacePaths`
+  and emitting `injectSteps` or `decision = "continue"`).
 - `.claude-plugin/`, `.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json` -
   Claude Code and Codex manifests and marketplace listings.
-- `VERSION` - keep it equal to both `plugin.json` files, `pyproject.toml` and the two
+- `VERSION` - keep it equal to all three `plugin.json` files (`plugin.json`,
+  `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`), `pyproject.toml` and the two
   version mentions in `website/dist/index.html`.
 - `README.md` - the stranger-facing guide; its config table, tier and reason names, summary
   line and setup output lines must match the scripts verbatim.

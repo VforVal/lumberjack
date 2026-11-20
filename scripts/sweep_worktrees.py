@@ -1918,46 +1918,84 @@ def active_settings(cfg: Config) -> str:
     return "Active lumberjack settings (override the defaults below):\n" + json.dumps(cfg)
 
 
+def hook_start(payload: dict[str, object], antigravity: bool) -> Path | None:
+    if not antigravity:
+        return Path.cwd()
+    candidates: list[object] = [payload.get("cwd")]
+    workspaces = payload.get("workspacePaths")
+    if isinstance(workspaces, list):
+        candidates.extend(workspaces)
+    for item in candidates:
+        if isinstance(item, str) and item and Path(item).is_dir():
+            return Path(item)
+    return None
+
+
+def hook_context(event: str, text: str, antigravity: bool) -> dict[str, object]:
+    if antigravity:
+        return {"injectSteps": [{"systemMessage": {"systemMessage": text}}]}
+    return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
+
+
 def hook(payload: dict[str, object]) -> int:
     """The one harness entry point: dispatch on the event the hook input names."""
-    event = payload.get("hook_event_name")
-    if event in ("SessionStart", "SubagentStart") and unconfigured(Path.cwd()):
-        return not_set_up(str(event))
-    if event == "Stop":
-        reasons = [] if payload.get("stop_hook_active") else gate_reasons(Path.cwd())
-        if reasons:
-            print(json.dumps({"decision": "block", "reason": "\n".join(reasons)}))
-        return 0
-    if event == "SessionStart":
-        sid = payload.get("session_id")
-        mark_session(Path.cwd(), sid if isinstance(sid, str) else "")
-        output = "\n".join(cleanup_session(Path.cwd(), include_context=True))
-    elif event == "SubagentStart":
-        # Claude forks inherit context; Codex children always receive the approved refresh.
-        if "turn_id" not in payload and payload.get("agent_type") == "fork":
-            return 0
-        try:
-            output = active_settings(load_config(find_primary(Path.cwd())))
-        except (ConfigError, SystemExit) as error:
-            output = str(error)
-    else:
+    antigravity = "hookEventName" in payload and "hook_event_name" not in payload
+    event = payload.get("hookEventName") if antigravity else payload.get("hook_event_name")
+    if event not in ("SessionStart", "SubagentStart", "Stop"):
         print(
             "lumberjack: --hook requires SessionStart, SubagentStart or Stop hook input",
             file=sys.stderr,
         )
         return 1
+    start = hook_start(payload, antigravity)
+    if start is None:
+        if antigravity:
+            print("{}")
+        return 0
+    if antigravity and event == "SessionStart":
+        try:
+            find_primary(start)
+        except SystemExit:
+            print("{}")
+            return 0
+    if event in ("SessionStart", "SubagentStart") and unconfigured(start):
+        return not_set_up(str(event), antigravity)
+    if event == "Stop":
+        skip = (
+            bool(payload.get("continuationActive"))
+            or payload.get("terminationReason") not in (None, "", "NO_TOOL_CALL")
+        ) if antigravity else bool(payload.get("stop_hook_active"))
+        reasons = [] if skip else gate_reasons(start)
+        if reasons:
+            decision = "continue" if antigravity else "block"
+            print(json.dumps({"decision": decision, "reason": "\n".join(reasons)}))
+        elif antigravity:
+            print("{}")
+        return 0
+    if event == "SessionStart":
+        sid = payload.get("conversationId") if antigravity else payload.get("session_id")
+        mark_session(start, sid if isinstance(sid, str) else "")
+        output = "\n".join(cleanup_session(start, include_context=True))
+    else:
+        # Claude forks inherit context; Codex children always receive the approved refresh.
+        if "turn_id" not in payload and payload.get("agent_type") == "fork":
+            return 0
+        try:
+            output = active_settings(load_config(find_primary(start)))
+        except (ConfigError, SystemExit) as error:
+            output = str(error)
     skill = Path(__file__).resolve().parents[1] / "skills" / "lumberjack" / "SKILL.md"
     rules = skill.read_text(encoding="utf-8").split("---", 2)[-1].strip()
-    print(json.dumps({"hookSpecificOutput": {
-        "hookEventName": event, "additionalContext": output + "\n\n" + rules,
-    }}))
+    print(json.dumps(hook_context(str(event), output + "\n\n" + rules, antigravity)))
     return 0
 
 
-def not_set_up(event: str) -> int:
+def not_set_up(event: str, antigravity: bool = False) -> int:
     """Before setup: session start gets only the nudge, without the rules; a subagent gets nothing."""
     if event == "SessionStart":
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": NOT_SET_UP}}))
+        print(json.dumps(hook_context(event, NOT_SET_UP, antigravity)))
+    elif antigravity:
+        print("{}")
     return 0
 
 
