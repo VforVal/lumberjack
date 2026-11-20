@@ -32,7 +32,7 @@ Each session start the sweep fetches `origin` (10 second limit; on failure it sa
    content, or the exact tip of a merged pull request (checked through `gh`). Squash and
    rebase merges count; a guessed match or an unreachable `gh` leaves it unverified.
 2. `git status --porcelain` is empty. Ignored files do not count; untracked ones do.
-3. The tip is pushed (upstream contains it); waived when a merged pull request had this tip.
+3. The tip is pushed (upstream contains it); waived when `integrated` or a merged PR had this tip.
 4. `evidence_dir` is empty or absent; no `doc_roots` folder holds an untracked or ignored file.
 5. The branch is not a `prototype_prefix` branch, which is never touched.
 

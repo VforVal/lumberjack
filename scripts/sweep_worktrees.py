@@ -39,6 +39,7 @@ DEFAULTS: Config = {
     "doc_roots": [],
     "doc_reference": {},
     "doc_strategy": {},
+    "disposable_paths": [],
     "worktree_roots": [
         "~/.codex/worktrees/*",
         ".claude/worktrees",
@@ -48,8 +49,6 @@ DEFAULTS: Config = {
     "stop_gate": True,
 }
 # .codex-worktree-name is all Codex leaves behind after removing a worktree.
-# onexc replaced the deprecated onerror in 3.12; the handler signature is the same.
-RMTREE_HANDLER = "onexc" if sys.version_info >= (3, 12) else "onerror"
 CLEANUP_MODES = ("prune", "report", "keep")
 CACHE_DIRS = {"node_modules", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist"}
 CACHE_DIRS.add(".codex-worktree-name")
@@ -214,6 +213,17 @@ def origin_default_branch(primary: Path) -> str:
     return DEFAULTS["primary_branch"]
 
 
+def repo_relative(path: object) -> str | None:
+    """Normalized relative POSIX path inside the repository, or None when invalid."""
+    if not isinstance(path, str) or not path:
+        return None
+    win = PureWindowsPath(path)
+    if win.drive or win.anchor or ".." in win.parts:
+        return None
+    norm = posixpath.normpath(path.replace("\\", "/"))
+    return None if norm in (".", "") or norm.startswith("/") else norm
+
+
 def parse_config(table: Config, source: str = "") -> Config:
     """The validated config for a raw table; source names its file in errors."""
     if unknown := sorted(table.keys() - DEFAULTS.keys()):
@@ -229,11 +239,8 @@ def parse_config(table: Config, source: str = "") -> Config:
     if not cfg["ticket_prefix"] and any("<ticket>" in shape for shape in cfg["branch_shapes"]):
         raise ConfigError("lumberjack: a branch_shapes entry with <ticket> needs a ticket_prefix", source)
     # git refuses a path outside the worktree, which would read as `docs` and keep every worktree.
-    if not all(
-        isinstance(root, str) and root and not PureWindowsPath(root).anchor
-        and ".." not in PureWindowsPath(root).parts and posixpath.normpath(root) != "."
-        for root in cfg["doc_roots"]
-    ):
+    doc_roots = [repo_relative(root) for root in cfg["doc_roots"]]
+    if any(r is None for r in doc_roots):
         raise ConfigError("lumberjack: doc_roots must be relative paths inside the repo", source)
     if not all(
         isinstance(words, list) and all(isinstance(w, str) and w for w in words)
@@ -263,8 +270,12 @@ def parse_config(table: Config, source: str = "") -> Config:
     if roots:
         strategy["roots"] = {posixpath.normpath(r): a for r, a in roots.items()}
     # One spelling per root, so "docs/work/" in doc_reference finds the root "./docs/work".
-    cfg["doc_roots"] = [posixpath.normpath(root) for root in cfg["doc_roots"]]
+    cfg["doc_roots"] = [r for r in doc_roots if r is not None]
     cfg["doc_reference"] = {posixpath.normpath(k): v for k, v in cfg["doc_reference"].items()}
+    disposable_paths = [repo_relative(p) for p in cfg["disposable_paths"]]
+    if any(p is None or ".git" in (part.lower() for part in p.split("/")) for p in disposable_paths):
+        raise ConfigError("lumberjack: disposable_paths must be relative paths inside the repo", source)
+    cfg["disposable_paths"] = [p for p in disposable_paths if p is not None]
     if cfg["cleanup"] not in CLEANUP_MODES:
         raise ConfigError(
             f"lumberjack: cleanup must be one of {', '.join(CLEANUP_MODES)}", source
@@ -462,26 +473,37 @@ def classify(
     stale: bool = False,
     priority: set[str] | None = None,
     deadline: float = math.inf,
+    worktrees: dict[Tip, Path] | None = None,
 ) -> dict[Tip, Verdict]:
     """(tier, reason) per tip against origin/<primary>, first decisive tier wins."""
     base = f"origin/{cfg['primary_branch']}"
     tree = git(primary, "rev-parse", f"{base}^{{tree}}").stdout.strip()
     unlanded = unlanded_commits(primary, base, {sha for sha, _ in tips})
     result: dict[Tip, Verdict] = {}
-    rest = []
+    rest, upgrade = [], []
     for tip in sorted(tips):
         if tip[0] not in unlanded:
             result[tip] = ("integrated", "")
         elif content_integrated(primary, base, tree, tip[0]):
-            result[tip] = ("content-integrated", "")
+            path = (worktrees or {}).get(tip)
+            # An unpushed content-integrated worktree may be a squash-merged PR whose branch was deleted.
+            if path is not None and tip[1] and unpushed(path):
+                upgrade.append(tip)
+            else:
+                result[tip] = ("content-integrated", "")
         else:
             rest.append(tip)
-    if not rest:
+    if not rest and not upgrade:
         return result
     prior = priority or set()
     rest.sort(key=lambda tip: (tip[1] not in prior, tip[0], tip[1]))
-    names = sorted({name for _, name in rest if name}, key=lambda n: (n not in prior, n))
+    names = sorted({name for _, name in (*rest, *upgrade) if name}, key=lambda n: (n not in prior, n))
     prs, fallback = merged_prs(primary, names) if names else ({}, "")  # detached has no pull request
+    for tip in upgrade:
+        tier, _ = pr_verdict(prs, tip, cfg["primary_branch"], fallback)
+        result[tip] = ("landed-pr", "") if tier == "landed-pr" else ("content-integrated", "")
+    if not rest:
+        return result
     recent = functools.cache(lambda: set(patch_ids(primary, "log", "-200", "-p", base)))
     # The guess costs several git calls per tip and never prunes, so it yields to the hook timeout.
     guess_deadline, rushed = min(time.monotonic() + PROBABLE_SECONDS, deadline), False
@@ -540,11 +562,41 @@ def orphan_candidates(primary: Path, cfg: Config) -> list[Path]:
     return [path for path in found if path.is_dir()]
 
 
-def classify_orphan(path: Path) -> str:
-    entries = list(path.iterdir())
-    if entries and all(entry.name in CACHE_DIRS for entry in entries):
-        return "node_modules-only"
-    return "mixed" if (path / ".git").exists() else "not-git"
+def only_disposable(
+    folder: Path, prefix: str, extra: tuple[str, ...], *, allow_empty: bool = False
+) -> bool:
+    """Folder holding only disposable entries or subfolders that do; never follows links."""
+    with os.scandir(folder) as entries:
+        children = list(entries)
+    if not children:
+        return allow_empty
+    for entry in children:
+        rel = f"{prefix}/{entry.name}" if prefix else entry.name
+        if disposable(rel, extra):
+            continue
+        if not is_folder(entry) or not only_disposable(
+            Path(entry.path), rel, extra, allow_empty=allow_empty
+        ):
+            return False
+    return True
+
+
+def classify_orphan(path: Path, extra: tuple[str, ...] = ()) -> str:
+    st = path.lstat()
+    if not stat.S_ISDIR(st.st_mode) or reparse(st):
+        return "not-git"
+    if (path / ".git").exists():
+        return "mixed"
+    return "node_modules-only" if only_disposable(path, "", extra) else "not-git"
+
+
+def orphan_kind(path: Path, extra: tuple[str, ...]) -> str | None:
+    try:
+        return classify_orphan(path, extra)
+    except FileNotFoundError:
+        return "not-git" if path.exists() else None
+    except (OSError, RecursionError):
+        return "not-git"
 
 
 def same_dir(a: str | Path, b: str | Path) -> bool:
@@ -558,11 +610,12 @@ def dir_key(path: str | Path) -> str:
 
 def orphan_rows(primary: Path, cfg: Config, trees: list[Row]) -> list[Row]:
     listed = {dir_key(tree["path"]) for tree in trees}  # resolved once: hundreds of worktrees add up
-    return [
-        {"kind": classify_orphan(path), "path": path.as_posix()}
-        for path in sorted(orphan_candidates(primary, cfg))
-        if dir_key(path) not in listed
-    ]
+    extra = tuple(cfg["disposable_paths"])
+    rows = []
+    for path in sorted(orphan_candidates(primary, cfg)):
+        if dir_key(path) not in listed and (kind := orphan_kind(path, extra)) is not None:
+            rows.append({"kind": kind, "path": path.as_posix()})
+    return rows
 
 
 def branch_tips(primary: Path, cfg: Config, trees: list[Row]) -> dict[str, str]:
@@ -999,10 +1052,17 @@ def build_report(primary: Path, cfg: Config, stale: bool = False, deadline: floa
     loose = branch_tips(primary, cfg, trees)
     tips = {(t["head"], t["branch"]) for t in trees[1:]}
     tips |= {(sha, name) for name, sha in loose.items()}
+    worktrees = {(t["head"], t["branch"]): Path(t["path"]) for t in trees[1:]}
     reserve = DOC_SECONDS if cfg["doc_strategy"] and cfg["cleanup"] != "keep" else 0
     budget = deadline - reserve
     tiers = classify(
-        primary, cfg, tips, stale, priority={t["branch"] for t in trees[1:] if t["branch"]}, deadline=budget
+        primary,
+        cfg,
+        tips,
+        stale,
+        priority={t["branch"] for t in trees[1:] if t["branch"]},
+        deadline=budget,
+        worktrees=worktrees,
     )
     local = lines(git(primary, "branch", "--format=%(refname:short)"))
     pattern = branch_pattern(cfg)
@@ -1019,11 +1079,6 @@ def build_report(primary: Path, cfg: Config, stale: bool = False, deadline: floa
             b for b in local if b != cfg["primary_branch"] and not pattern.match(b)
         ],
     }
-
-
-def make_writable(func: Callable[[str], object], path: str, _: object) -> None:
-    os.chmod(path, stat.S_IWRITE)  # Windows refuses to delete read-only files.
-    func(path)
 
 
 def fetch(primary: Path) -> bool:
@@ -1049,26 +1104,28 @@ def unpushed(path: Path) -> bool:
 
 
 def fresh(path: Path, branch: str, head: str) -> bool:
-    """Added under FRESH_HOURS ago, and its branch has not moved since it was created."""
+    """Added under FRESH_HOURS ago, and its branch or detached HEAD has not moved since creation."""
     admin = git(path, "rev-parse", "--absolute-git-dir").stdout.strip()
     try:  # git writes commondir once, when the worktree is added
         age = time.time() - Path(admin, "commondir").stat().st_mtime
     except OSError:
         return False
-    if not branch or age > FRESH_HOURS * 3600:
+    if age > FRESH_HOURS * 3600:
         return False
-    log = lines(git(path, "reflog", "show", "--format=%H %gs", f"refs/heads/{branch}"))
+    ref = f"refs/heads/{branch}" if branch else "HEAD"
+    log = lines(git(path, "reflog", "show", "--format=%H %gs", ref, "--"))
     if not log:  # some tools (the Claude desktop app) create branches without a reflog entry
         return True  # and any later commit or reset would have written one
     if len(log) > 1:  # moved since it was created, even when reset back to that commit
         return False
     sha, _, subject = log[0].partition(" ")
-    return sha == head and subject.startswith("branch: Created from")
+    return sha == head and (subject.startswith("branch: Created from") if branch else not subject)
 
 
 def short_path(primary: Path, path: str | Path) -> str:
     """Path relative to the primary's parent directory, else with home as ~."""
-    full = Path(path).resolve()
+    item = Path(os.path.abspath(path))
+    full = item.parent.resolve() / item.name if item.name else item.resolve()
     for base, prefix in ((primary.parent.resolve(), ""), (Path.home().resolve(), "~/")):
         if full.is_relative_to(base):
             return prefix + full.relative_to(base).as_posix()
@@ -1096,9 +1153,9 @@ def block_reason(
     # A new branch from origin/main looks integrated and pushed; its session may have just begun.
     if fresh(Path(w["path"]), w["branch"], w["head"]):
         return "fresh"
-    # landed-pr: the forge saw this exact tip, and delete-on-merge drops the upstream.
+    # integrated and landed-pr tips are already on origin or confirmed merged, even if the remote branch was pruned.
     # Explicit: the kept branch holds the commits, so unpushed is no loss; ignored files are.
-    if not explicit and w["tier"] != "landed-pr" and unpushed(Path(w["path"])):
+    if not explicit and w["tier"] not in ("integrated", "landed-pr") and unpushed(Path(w["path"])):
         return "unpushed"
     if evidence and evidence.is_dir() and any(evidence.iterdir()):
         return "evidence"
@@ -1107,7 +1164,7 @@ def block_reason(
         found = untracked_docs(Path(w["path"]), cfg["doc_roots"])
         if found is None or found:  # a failed listing keeps the worktree
             return "docs"
-    stray = stray_ignored(Path(w["path"])) if explicit else []
+    stray = stray_ignored(Path(w["path"]), tuple(cfg["disposable_paths"])) if explicit else []
     return f"ignored files ({named(stray)})" if stray else ""
 
 
@@ -1121,16 +1178,21 @@ def worktree_event(primary: Path, cfg: Config, w: Row, here: Path | None) -> tup
         return "blocked", f"blocked {tag(primary, w)}: {reason}"
     if cfg["cleanup"] == "report":
         return "removable", f"landed {tag(primary, w)}: would remove"
-    return remove_worktree(primary, w)
+    return remove_worktree(primary, w, tuple(cfg["disposable_paths"]))
 
 
-def remove_worktree(primary: Path, w: Row) -> tuple[str, str]:
+def remove_worktree(primary: Path, w: Row, extra: tuple[str, ...] = ()) -> tuple[str, str]:
     notes = ["local branch kept"] if w["branch"] else []
     if (gone := git(primary, "worktree", "remove", w["path"])).returncode:
         # On Windows a locked directory fails the remove after git deleted the files and entry.
         if any(same_dir(t["path"], w["path"]) for t in registered(primary)):
             return "blocked", f"blocked {tag(primary, w)}: {gone.stderr.strip()}"
-        notes += ["directory left"] if Path(w["path"]).exists() else []
+    leftover = Path(w["path"])
+    if leftover.exists() and orphan_kind(leftover, extra) == "node_modules-only":
+        with contextlib.suppress(OSError, RuntimeError):
+            purge_tree(str(leftover), math.inf, Footprint())
+    if leftover.exists():
+        notes.append("directory left")
     return "cleaned", f"cleaned {tag(primary, w)}" + (f" ({'; '.join(notes)})" if notes else "")
 
 
@@ -1147,7 +1209,7 @@ def remove_named(start: Path, target: str) -> tuple[bool, str]:
     here = Path(git(start, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
     if reason := block_reason(primary, cfg, w, here, explicit=True):
         return False, f"blocked {tag(primary, w)}: {reason}"
-    outcome, line = remove_worktree(primary, w)
+    outcome, line = remove_worktree(primary, w, tuple(cfg["disposable_paths"]))
     return outcome == "cleaned", line
 
 
@@ -1238,7 +1300,8 @@ def remove(func: Callable[[str], object], path: str) -> None:
     try:
         func(path)
     except PermissionError:
-        make_writable(func, path, None)
+        os.chmod(path, stat.S_IWRITE)  # Windows refuses to delete read-only files.
+        func(path)
 
 
 def purge_tree(path: str, deadline: float, deleted: Footprint) -> bool:
@@ -1293,26 +1356,48 @@ def purge_trash(start: Path) -> list[str]:
     return done or ["trash: nothing past retention"]
 
 
-def stray_ignored(path: Path) -> list[str]:
+def is_stray(root: Path, name: str, extra: tuple[str, ...]) -> bool:
+    """Whether ignored entry name holds non-disposable files (or links) that --remove would lose."""
+    if disposable(name, extra):
+        return False
+    target = root / name
+    try:
+        st = target.lstat()
+        if not stat.S_ISDIR(st.st_mode) or reparse(st):
+            return True
+        return not only_disposable(target, name.rstrip("/"), extra, allow_empty=True)
+    except FileNotFoundError:
+        return False
+    except (OSError, RecursionError):
+        return True
+
+
+def stray_ignored(path: Path, extra: tuple[str, ...] = ()) -> list[str]:
     """Ignored paths other than caches, sorted; git worktree remove deletes them silently.
 
     `matching` lists each ignored path where its pattern matched, so a folder holding only a
     cache is not reported as the folder, and an ignored folder stays one entry."""
-    ignored = lines(git(path, "status", "--porcelain", "--ignored=matching", "-uall"))
-    names = {line[3:] for line in ignored if line.startswith("!! ")}
-    return sorted(name for name in names if not disposable(name) and holds_a_file(path / name))
+    status = git(path, "status", "--porcelain", "-z", "--ignored=matching", "-uall")
+    if status.returncode:
+        return []
+    names, entries = set(), iter(status.stdout.split("\0"))
+    for entry in entries:
+        if len(entry) >= 3 and entry[2] == " " and (entry[0] in ("R", "C") or entry[1] in ("R", "C")):
+            next(entries, "")
+        elif entry.startswith("!! "):
+            names.add(entry[3:])
+    return sorted(name for name in names if is_stray(path, name, extra))
 
 
-def holds_a_file(path: Path) -> bool:
-    """path is a file, or a folder with a file somewhere below it; empty folders lose nothing."""
-    return not path.is_dir() or any(files for _, _, files in os.walk(path))
-
-
-def disposable(name: str) -> bool:
-    """A cache folder or a file a tool recreates, at any depth."""
-    return Path(name.rstrip("/")).name in CACHE_DIRS or any(
-        name == file or name.endswith("/" + file) for file in DISPOSABLE_FILES
-    )
+def disposable(name: str, extra: tuple[str, ...] = ()) -> bool:
+    """A cache folder, disposable tool file, or configured disposable path."""
+    rel = name.rstrip("/")
+    if posixpath.basename(rel) in CACHE_DIRS or any(
+        rel == file or rel.endswith("/" + file) for file in DISPOSABLE_FILES
+    ):
+        return True
+    parts = rel.split("/")
+    return any((rel == p or rel.startswith(p + "/")) if "/" in p else (p in parts) for p in extra)
 
 
 def named(entries: list[str]) -> str:
@@ -1338,8 +1423,8 @@ def clean_orphans(primary: Path, orphans: list[Row], mode: str) -> tuple[int, li
         shown = short_path(primary, o["path"])
         if o["kind"] == "node_modules-only" and mode == "prune":
             try:
-                shutil.rmtree(o["path"], **{RMTREE_HANDLER: make_writable})
-            except OSError as error:
+                purge_tree(o["path"], math.inf, Footprint())
+            except (OSError, RuntimeError) as error:
                 out.append(f"orphan {o['kind']} {shown}: {error}")
             else:
                 cleaned += 1

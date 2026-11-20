@@ -139,6 +139,75 @@ def test_orphan_classification(
     assert not only.exists() and mixed.exists() and plain.exists() and empty.exists()
 
 
+def test_disposable_paths_and_nested_caches_clean_orphans_without_deleting_link_targets(
+    primary: Path, tmp_path: Path,
+) -> None:
+    orphans_root = tmp_path / "primary_orphans"
+    settings(
+        primary,
+        f'worktree_roots = ["{(tmp_path / "{name}_orphans").as_posix()}"]\n'
+        'disposable_paths = [".claude/skills", ".next"]\n',
+    )
+    target = tmp_path / "shared_skills"
+    write(target, "keep.md", "keep\n")
+    ext_cache = tmp_path / "external_cache"
+    (ext_cache / "node_modules").mkdir(parents=True)
+    write(ext_cache, "node_modules/pkg.js", "keep\n")
+    linked = orphans_root / "linked"
+    (linked / ".claude").mkdir(parents=True)
+    link_dir(linked / ".claude" / "skills", target)
+    write(linked, ".claude/settings.local.json", "{}")
+    (linked / "node_modules").mkdir()
+    nested = orphans_root / "nested"
+    (nested / "packages/web/node_modules").mkdir(parents=True)
+    write(nested, "apps/ui/.next/build.json", "{}")
+    keep = orphans_root / "keep"
+    write(keep, ".claude/custom.txt", "keep\n")
+    empty_sub = orphans_root / "empty_sub"
+    (empty_sub / "src").mkdir(parents=True)
+    top_link = orphans_root / "top_link"
+    link_dir(top_link, ext_cache)
+    out = cleanup(primary)
+    assert {"cleaned orphan primary_orphans/linked", "cleaned orphan primary_orphans/nested"} <= set(out)
+    assert {
+        "orphan not-git primary_orphans/keep",
+        "orphan not-git primary_orphans/empty_sub",
+        "orphan not-git primary_orphans/top_link",
+    } <= set(out)
+    assert not linked.exists() and not nested.exists()
+    assert keep.exists() and empty_sub.exists() and top_link.exists()
+    assert (target / "keep.md").exists() and (ext_cache / "node_modules" / "pkg.js").exists()
+
+
+def test_orphan_scan_tolerates_unreadable_and_vanished_directories(
+    primary: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    locked = tmp_path / "orphans" / "locked"
+    locked.mkdir(parents=True)
+    vanished = tmp_path / "orphans" / "vanished"
+    vanished.mkdir(parents=True)
+    only = tmp_path / "orphans" / "only"
+    (only / "node_modules").mkdir(parents=True)
+    monkeypatch.setattr(sweep_worktrees, "orphan_candidates", lambda *_: [locked, vanished, only])
+    real_classify = sweep_worktrees.classify_orphan
+
+    def flaky(path: Path, extra: tuple[str, ...] = ()) -> str:
+        if path == locked:
+            raise PermissionError(13, "Access denied")
+        if path == vanished:
+            vanished.rmdir()
+            raise FileNotFoundError(2, "Gone")
+        return real_classify(path, extra)
+
+    monkeypatch.setattr(sweep_worktrees, "classify_orphan", flaky)
+    cfg = sweep_worktrees.load_config(primary)
+    rows = sweep_worktrees.orphan_rows(primary, cfg, sweep_worktrees.registered(primary))
+    assert rows == [
+        {"kind": "not-git", "path": locked.as_posix()},
+        {"kind": "node_modules-only", "path": only.as_posix()},
+    ]
+
+
 @pytest.mark.parametrize(
     ("name", "valid"),
     [
@@ -632,8 +701,12 @@ def test_cleanup_without_work_to_do_is_one_exact_line(primary: Path) -> None:
     (primary / ".git" / "info" / "exclude").write_text("ignored.txt\n")
     (primary.parent / "wt" / "eng-1-clean" / "ignored.txt").write_text("not dirty\n")
     assert cleanup(primary) == [
-        "sweep: cleaned 0, landed 2, dependents 0, blocked 2, unverified 3, orphans 0, docs 0",
-        "blocked claude/eng-1-clean wt/eng-1-clean: unpushed",
+        "sweep: cleaned 1, landed 2, dependents 0, blocked 1, unverified 3, orphans 0, docs 0",
+        "cleaned claude/eng-1-clean wt/eng-1-clean (local branch kept)",
+        "blocked claude/eng-2-dirty wt/eng-2-dirty: dirty",
+    ]
+    assert cleanup(primary) == [
+        "sweep: cleaned 0, landed 1, dependents 0, blocked 1, unverified 3, orphans 0, docs 0",
         "blocked claude/eng-2-dirty wt/eng-2-dirty: dirty",
     ]
 
@@ -650,7 +723,7 @@ def test_cleanup_removes_squash_landed_bottom_of_stack_and_hints_twice(
     )
     out = cleanup(primary)
     assert out[0] == (
-        "sweep: cleaned 1, landed 3, dependents 1, blocked 2, unverified 4, orphans 0, docs 0"
+        "sweep: cleaned 2, landed 3, dependents 1, blocked 1, unverified 4, orphans 0, docs 0"
         ", origin stale"
     )
     assert "cleaned claude/eng-20-a wt/eng-20-a (local branch kept)" in out
@@ -659,7 +732,7 @@ def test_cleanup_removes_squash_landed_bottom_of_stack_and_hints_twice(
     assert "claude/eng-20-a" in branches(primary)
     again = cleanup(primary)  # A is now a kept branch; B still needs the hint
     assert hint in again and not any(line.startswith("cleaned") for line in again)
-    assert again[0].startswith("sweep: cleaned 0, landed 3, dependents 1,")
+    assert again[0].startswith("sweep: cleaned 0, landed 2, dependents 1,")
 
 
 def test_landed_pr_worktree_whose_remote_branch_is_gone_is_cleaned(
@@ -675,13 +748,61 @@ def test_landed_pr_worktree_whose_remote_branch_is_gone_is_cleaned(
     assert not a.exists()
 
 
+def test_merge_commit_pr_whose_remote_branch_is_gone_is_cleaned(primary: Path) -> None:
+    wt = primary.parent / "wt"
+    merged = add_worktree(primary, wt, "claude/eng-22-merge-commit", merge=False)
+    git(merged, "push", "-q", "-u", "origin", "claude/eng-22-merge-commit")
+    git(primary, "merge", "-q", "--no-ff", "-m", "Merge PR", "claude/eng-22-merge-commit")
+    git(primary, "push", "-q", "origin", "main")
+    git(primary, "push", "-q", "origin", "--delete", "claude/eng-22-merge-commit")
+    git(primary, "fetch", "-q", "--prune", "origin")
+    out = cleanup(primary)
+    assert "cleaned claude/eng-22-merge-commit wt/eng-22-merge-commit (local branch kept)" in out
+    assert not merged.exists()
+
+
+def test_clean_squash_pr_whose_remote_branch_is_gone_is_cleaned(
+    primary: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wt = primary.parent / "wt"
+    squash = add_worktree(primary, wt, "claude/eng-23-clean-squash", merge=False)
+    tip = git(squash, "rev-parse", "HEAD").strip()
+    git(squash, "push", "-q", "-u", "origin", "claude/eng-23-clean-squash")
+    land(primary, "eng-23-clean-squash.txt", "x\n")  # same content as squash, no merge commit
+    git(primary, "push", "-q", "origin", "main")
+    git(primary, "push", "-q", "origin", "--delete", "claude/eng-23-clean-squash")
+    git(primary, "fetch", "-q", "--prune", "origin")
+    gh = fake_github(primary, tmp_path, monkeypatch)
+    gh.set({"claude/eng-23-clean-squash": [pr(tip)]})
+    out = cleanup(primary)
+    assert "cleaned claude/eng-23-clean-squash wt/eng-23-clean-squash (local branch kept)" in out
+    assert not squash.exists()
+    assert gh.calls() == 1
+
+
+def test_unpushed_content_integrated_worktree_without_pr_stays_blocked(
+    primary: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wt = primary.parent / "wt"
+    local = add_worktree(primary, wt, "claude/eng-24-local-content", merge=False)
+    land(primary, "eng-24-local-content.txt", "x\n")
+    git(primary, "push", "-q", "origin", "main")
+    gh = fake_github(primary, tmp_path, monkeypatch)
+    gh.set({"claude/eng-24-local-content": [pr("0" * 40)]})  # mismatched PR does not upgrade
+    out = cleanup(primary)
+    assert "blocked claude/eng-24-local-content wt/eng-24-local-content: unpushed" in out
+    assert local.exists()
+
+
 def test_cleanup_keeps_blocked_and_prototype_worktrees(
     primary: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (primary / ".git" / "info" / "exclude").write_text(".evidence/\n.env\n")
     dirty = landed_worktree(primary, "eng-30-dirty")
     (dirty / "scratch.txt").write_text("x\n")
-    local = landed_worktree(primary, "eng-31-local", push=False)
+    local = add_worktree(primary, primary.parent / "wt", "claude/eng-31-local", merge=False)
+    land(primary, "eng-31-local.txt", "x\n")
+    git(primary, "push", "-q", "origin", "main")
     evidence = landed_worktree(primary, "eng-32-evidence")
     (evidence / ".evidence").mkdir()
     (evidence / ".evidence" / "note.md").write_text("keep\n")
@@ -722,6 +843,68 @@ def test_remove_takes_a_worktree_holding_only_caches_and_tool_files(primary: Pat
     (path / "empty" / "sub").mkdir(parents=True)
     assert remove(primary, path) == (0, ["cleaned claude/eng-36-caches wt/eng-36-caches (local branch kept)"])
     assert not path.exists()
+
+
+def test_remove_honors_disposable_paths_non_ascii_and_link_leaves(
+    primary: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (primary / ".git" / "info" / "exclude").write_text(
+        ".claude/\napps/\ncafé/\n", encoding="utf-8"
+    )
+    settings(primary, 'disposable_paths = [".claude/skills", ".next"]\n')
+    target = tmp_path / "shared_skills"
+    write(target, "keep.md", "keep\n")
+    ok = landed_worktree(primary, "eng-38-disposable")
+    (ok / ".claude").mkdir()
+    link_dir(ok / ".claude" / "skills", target)
+    write(ok, "apps/web/.next/cache.json", "{}")
+    (ok / "apps" / "empty").mkdir()
+    assert remove(primary, ok) == (0, ["cleaned claude/eng-38-disposable wt/eng-38-disposable (local branch kept)"])
+    assert not ok.exists() and (target / "keep.md").exists()
+
+    # Relative disposable path ".claude/skills" does not waive a nested "apps/.claude/skills".
+    nested_link = landed_worktree(primary, "eng-45-nested-rel")
+    (nested_link / "apps" / ".claude").mkdir(parents=True)
+    link_dir(nested_link / "apps" / ".claude" / "skills", target)
+    assert remove(primary, nested_link) == (1, ["blocked claude/eng-45-nested-rel wt/eng-45-nested-rel: ignored files (apps/)"])
+    assert nested_link.exists()
+
+    # git worktree remove leaving disposable directory behind (Windows junction case) still cleans up safely.
+    leftover_wt = landed_worktree(primary, "eng-46-leftover")
+    (leftover_wt / ".claude").mkdir()
+    link_dir(leftover_wt / ".claude" / "skills", target)
+    real_git = sweep_worktrees.git
+
+    def keep_leftover_dir(cwd: Path, *args: str, input: str | None = None):
+        done = real_git(cwd, *args, input=input)
+        if args[:2] == ("worktree", "remove") and not leftover_wt.exists():
+            (leftover_wt / ".claude").mkdir(parents=True)
+            link_dir(leftover_wt / ".claude" / "skills", target)
+        return done
+
+    with monkeypatch.context() as mp:
+        mp.setattr(sweep_worktrees, "git", keep_leftover_dir)
+        outcome, line = sweep_worktrees.remove_worktree(
+            primary, {"path": str(leftover_wt), "branch": "claude/eng-46-leftover"}, (".claude/skills",)
+        )
+    assert (outcome, line) == ("cleaned", "cleaned claude/eng-46-leftover wt/eng-46-leftover (local branch kept)")
+    assert not leftover_wt.exists() and (target / "keep.md").exists()
+
+    stray = landed_worktree(primary, "eng-39-nonascii")
+    write(stray, "café/secret.txt", "keep\n")
+    code, lines_out = remove(primary, stray)
+    assert (code, lines_out) == (1, ["blocked claude/eng-39-nonascii wt/eng-39-nonascii: ignored files (café/)"])
+    assert stray.exists()
+
+    # Modified renames/copies ("RM"/"CM") still consume the original path from -z output.
+    status_line = "RM new.txt\0!! old.txt\0!! stray.txt\0"
+    monkeypatch.setattr(
+        sweep_worktrees,
+        "git",
+        lambda cwd, *args, input=None: subprocess.CompletedProcess(["git", *args], 0, status_line, ""),
+    )
+    (stray / "stray.txt").write_text("x\n")
+    assert sweep_worktrees.stray_ignored(stray) == ["stray.txt"]
 
 
 def doc_worktree(primary: Path, name: str, doc: str | None, extra: str = 'doc_roots = ["docs/work"]\n') -> Path:
@@ -1025,12 +1208,12 @@ def test_fetch_failure_marks_origin_stale_and_still_classifies(primary: Path) ->
     out = cleanup(primary)
     assert out[0].endswith(", origin stale")
     assert "landed 2" in out[0]
-    assert "blocked claude/eng-1-clean wt/eng-1-clean: unpushed" in out
+    assert "cleaned claude/eng-1-clean wt/eng-1-clean (local branch kept)" in out
 
 
 def test_cleanup_still_sweeps_when_the_primary_is_off_the_primary_branch(primary: Path) -> None:
     git(primary, "checkout", "-q", "-b", "claude/eng-50-x")
-    assert cleanup(primary)[0].startswith("sweep: cleaned 0, landed 2,")
+    assert cleanup(primary)[0].startswith("sweep: cleaned 1, landed 2,")
 
 
 def test_bad_config_prints_in_cleanup_and_blocks_the_gate(primary: Path) -> None:
@@ -1063,6 +1246,12 @@ def test_current_checkout_is_never_removed(primary: Path) -> None:
     assert path.exists()
 
 
+def age_worktree(primary: Path, name: str) -> None:
+    added = primary / ".git" / "worktrees" / name / "commondir"
+    old = added.stat().st_mtime - sweep_worktrees.FRESH_HOURS * 3600 - 60
+    os.utime(added, (old, old))
+
+
 def test_fresh_worktree_is_kept_until_it_has_its_own_commits(primary: Path) -> None:
     wt = primary.parent / "wt"
     fresh, merged = wt / "eng-40-fresh", wt / "eng-41-merged"
@@ -1081,9 +1270,7 @@ def test_fresh_worktree_is_kept_until_it_has_its_own_commits(primary: Path) -> N
     assert remove(primary, fresh) == (1, ["blocked claude/eng-40-fresh wt/eng-40-fresh: fresh"])
     (primary / ".git" / "logs" / "refs" / "heads" / "claude" / "eng-40-fresh").unlink()
     assert "blocked claude/eng-40-fresh wt/eng-40-fresh: fresh" in cleanup(primary)  # no reflog
-    added = primary / ".git" / "worktrees" / "eng-40-fresh" / "commondir"
-    old = added.stat().st_mtime - sweep_worktrees.FRESH_HOURS * 3600 - 60
-    os.utime(added, (old, old))
+    age_worktree(primary, "eng-40-fresh")
     assert "cleaned claude/eng-40-fresh wt/eng-40-fresh (local branch kept)" in cleanup(primary)
 
 
@@ -1095,6 +1282,45 @@ def test_branch_reset_to_its_creation_commit_is_not_fresh(primary: Path) -> None
     git(path, "commit", "-q", "-m", "r")
     git(path, "reset", "-q", "--hard", "origin/main")
     assert "cleaned claude/eng-43-reset wt/eng-43-reset (local branch kept)" in cleanup(primary)
+
+
+def test_fresh_detached_worktree_is_kept_until_moved_or_aged(primary: Path) -> None:
+    wt = primary.parent / "wt"
+    detached = wt / "eng-44-detached"
+    git(primary, "worktree", "add", "-q", "--detach", str(detached), "origin/main")
+    assert "blocked (detached) wt/eng-44-detached: fresh" in cleanup(primary)
+    assert remove(primary, detached) == (1, ["blocked (detached) wt/eng-44-detached: fresh"])
+    assert not sweep_worktrees.fresh(detached, "", "0" * 40)
+    assert detached.exists()
+    # A detached worktree whose HEAD moved (commit then reset) is no longer fresh, even with a HEAD file.
+    moved = wt / "eng-45-detached-moved"
+    git(primary, "worktree", "add", "-q", "--detach", str(moved), "origin/main")
+    (moved / "HEAD").write_text("file named HEAD\n")
+    git(moved, "add", "HEAD")
+    git(moved, "commit", "-q", "-m", "m")
+    git(moved, "reset", "-q", "--hard", "origin/main")
+    assert "cleaned (detached) wt/eng-45-detached-moved" in cleanup(primary)
+    assert not moved.exists()
+    # Aging past FRESH_HOURS ends the fresh protection on the unmoved detached worktree too.
+    age_worktree(primary, "eng-44-detached")
+    assert "cleaned (detached) wt/eng-44-detached" in cleanup(primary)
+    assert not detached.exists()
+
+
+def test_fresh_detached_worktree_without_reflog_is_kept(primary: Path) -> None:
+    detached = primary.parent / "wt" / "eng-46-no-reflog"
+    git(primary, "worktree", "add", "-q", "--detach", str(detached), "origin/main")
+    head_log = primary / ".git" / "worktrees" / "eng-46-no-reflog" / "logs" / "HEAD"
+    if head_log.exists():
+        head_log.unlink()
+    assert "blocked (detached) wt/eng-46-no-reflog: fresh" in cleanup(primary)
+    assert remove(primary, detached) == (1, ["blocked (detached) wt/eng-46-no-reflog: fresh"])
+    git(detached, "commit", "-q", "--allow-empty", "-m", "work")
+    tip = git(detached, "rev-parse", "HEAD").strip()
+    git(primary, "merge", "-q", "--ff-only", tip)
+    git(primary, "push", "-q", "origin", "main")  # 1 reflog entry matching HEAD, non-empty subject
+    assert "cleaned (detached) wt/eng-46-no-reflog" in cleanup(primary)
+    assert not detached.exists()
 
 
 def test_locked_worktree_is_never_removed(primary: Path) -> None:
@@ -1234,6 +1460,7 @@ def test_the_sweep_and_remove_both_keep_the_primary_and_prototypes(primary: Path
 def test_remove_takes_a_detached_worktree_whose_commit_is_on_a_branch(primary: Path) -> None:
     detached = primary.parent / "wt" / "detached"
     git(primary, "worktree", "add", "-q", "--detach", str(detached), "claude/eng-3-open")
+    age_worktree(primary, "detached")
     assert remove(primary, detached) == (0, ["cleaned (detached) wt/detached"])
     assert not detached.exists()
 
@@ -1351,8 +1578,9 @@ def link_dir(link: Path, target: Path) -> None:
     """A directory link: a junction on Windows (no privilege needed), else a symlink."""
     link.parent.mkdir(parents=True, exist_ok=True)
     if sys.platform == "win32":
-        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
-                       check=True, capture_output=True)
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
     else:
         os.symlink(target, link, target_is_directory=True)
 
@@ -1690,7 +1918,7 @@ def test_session_start_skips_a_bundle_with_no_markdown_left_silently(
     assert first[0].endswith("docs 1") and any(l.startswith("cleared docs/work/eng-150-handoff: ") for l in first)
     assert recorded(primary, "skipped") == ["docs/work/eng-150-handoff"]
     again = cleanup(primary)
-    assert again[0].endswith("blocked 2, unverified 3, orphans 0, docs 0")  # the two worktrees only
+    assert again[0].endswith("blocked 1, unverified 3, orphans 0, docs 0")  # eng-2-dirty only
     assert not any("no Markdown in scope" in line for line in again)
     assert clear(primary, "docs/work/eng-150-handoff") == (
         1, "blocked docs/work/eng-150-handoff: no Markdown in scope"
@@ -2007,7 +2235,7 @@ def test_a_bundle_that_cannot_be_read_is_a_blocked_line_not_an_error(
     out = sweep_worktrees.cleanup_session(primary)
     line = next(l for l in out if l.startswith("blocked docs/work/eng-150-handoff: "))
     assert "/abs" not in line and str(primary) not in line
-    assert out[0].endswith("blocked 3, unverified 3, orphans 0, docs 0")  # two worktrees plus this one
+    assert out[0].endswith("blocked 2, unverified 3, orphans 0, docs 0")  # eng-2-dirty plus this one
 
 
 STATE = "lumberjack-docs.json"
@@ -2162,7 +2390,7 @@ def test_preview_lists_what_the_next_session_start_does_and_changes_nothing(prim
     trash = old_trash(primary, files=3)
     out = run_lines(primary, "--preview")
     assert out[1] == (
-        "sweep would: remove 1 worktree, delete 0 orphans, trash 1 bundle (1 file, 2 B),"
+        "sweep would: remove 2 worktrees, delete 0 orphans, trash 1 bundle (1 file, 2 B),"
         " purge 1 trash folder (3 files, 3 B)"
     )
     assert "landed claude/eng-20-a wt/eng-20-a: would remove" in out
@@ -2174,7 +2402,7 @@ def test_preview_lists_what_the_next_session_start_does_and_changes_nothing(prim
         assert not (primary / ".git" / written).exists()
     assert config_value(primary, "lumberjack.script") == ""
     done = cleanup(primary)  # the preview's numbers are what prune does
-    assert done[0].startswith("sweep: cleaned 1,") and done[0].endswith("docs 1")
+    assert done[0].startswith("sweep: cleaned 2,") and done[0].endswith("docs 1")
     assert "purged " + OLD in done
 
 
