@@ -25,7 +25,7 @@ When you read or extend a bundle for your ticket, add it to the bundle's `Ticket
 
 ## Cleanup rule
 
-Each session start the sweep fetches `origin` (5 second limit; on failure it says
+Each session start the sweep fetches `origin` (10 second limit; on failure it says
 `origin stale` and carries on), then removes a worktree only when all of these hold:
 
 1. Its tip is verified landed in `origin/<primary_branch>`: an ancestor, identical

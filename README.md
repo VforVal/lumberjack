@@ -67,7 +67,7 @@ lumberjack runs its two bundled Python scripts, `git` and, when installed, `gh`.
 no code and installs nothing. The images in `assets/` are for this page and the plugin icon,
 and `website/` is the product site; no script or hook opens them.
 
-- **Network:** `git fetch --prune origin`, and with `gh` logged in, a read-only GitHub GraphQL
+- **Network:** `git fetch --prune --no-tags origin`, and with `gh` logged in, a read-only GitHub GraphQL
   query that sends the repository's branch names to find merged pull requests (setup
   also runs `gh auth status`). `gh` uses its own saved login; lumberjack never reads, stores or
   sends a token. Nothing goes to any other server.
@@ -182,7 +182,7 @@ Leave `doc_strategy` out until `/lumberjack:cleanup` asks for it; once set, it n
 
 ## Cleanup rule
 
-After fetching `origin` (5 second limit; on failure the summary says `origin stale`),
+After fetching `origin` (10 second limit; on failure the summary says `origin stale`),
 a worktree is removed only when its tip is verified landed in `origin/<primary_branch>`
 and nothing blocks it. Eight reasons block it, and the sweep names the one it hit:
 
@@ -231,7 +231,7 @@ An `unverified` row carries a reason: `gh missing`, `not a github remote`,
 `unauthenticated`, `unreachable`, `tip diverged`, `non-primary base`
 (merged, but into another branch) or `no pull request`, with `; origin stale` appended
 when the fetch failed, and `; time budget` when the 5 seconds for `landed-probable` guesses ran
-out (with hundreds of worktrees; each sweep guesses in the same order, so the same tips can stay `unverified`). Only the first 100 branches go to `gh` in one query; the rest get
+out (with hundreds of worktrees; each sweep guesses in the same order, so the same tips can stay `unverified`). Active worktree branches are queried on `gh` ahead of loose local branches, 100 per query within a 10 second limit; branches not reached in time get
 `no pull request`. Plain `sweep_worktrees.py` output and `--json` show tier and reason.
 
 ## Summary line
@@ -405,7 +405,7 @@ sweep_worktrees.py --purge-trash
 ```
 
 `--clear` prints one line per path and exits 0 when all are done, 1 when any is blocked.
-With `--promoted` it fetches `origin` first (5 second limit), so a just-merged promotion counts:
+With `--promoted` it fetches `origin` first (10 second limit), so a just-merged promotion counts:
 
 ```
 cleared docs/work/eng-9-handoff: trashed 20260101T120000Z

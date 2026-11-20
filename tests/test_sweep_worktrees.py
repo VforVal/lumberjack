@@ -428,6 +428,195 @@ def test_stale_origin_is_appended_to_the_reason(primary: Path) -> None:
     )
 
 
+def test_branch_tips_collects_all_loose_branches_in_one_git_call(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = sweep_worktrees.load_config(primary)
+    trees = sweep_worktrees.registered(primary)
+    calls: list[tuple[str, ...]] = []
+    real_git = sweep_worktrees.git
+
+    def spy_git(cwd: Path, *args: str, input: str | None = None):
+        calls.append(args)
+        return real_git(cwd, *args, input=input)
+
+    monkeypatch.setattr(sweep_worktrees, "git", spy_git)
+    tips = sweep_worktrees.branch_tips(primary, cfg, trees)
+    assert tips == {
+        name: real_git(primary, "rev-parse", f"refs/heads/{name}").stdout.strip()
+        for name in ("claude/eng-4-loose", "feature/x")
+    }
+    assert len(calls) == 1 and calls[0][0] == "branch"
+
+
+def test_branch_tips_skips_detached_head_and_tag_collisions(primary: Path) -> None:
+    cfg = sweep_worktrees.load_config(primary)
+    git(primary, "tag", "claude/eng-3-open", "main")
+    git(primary, "checkout", "-q", "--detach", "HEAD")
+    (primary / "detached.txt").write_text("d\n")
+    git(primary, "add", "detached.txt")
+    git(primary, "commit", "-q", "-m", "detached work")
+    trees = sweep_worktrees.registered(primary)
+    tips = sweep_worktrees.branch_tips(primary, cfg, trees)
+    assert set(tips) == {"claude/eng-4-loose", "feature/x"}
+    tiers_map = {r["branch"]: r["tier"] for r in sweep_worktrees.build_report(primary, cfg)["worktrees"]}
+    assert tiers_map["claude/eng-1-clean"] == "integrated"
+
+
+def test_gh_batches_prioritize_worktrees_and_keep_partial_results_on_timeout(
+    primary: Path, gh: Gh, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wt_tip = conflicted_branch(primary, "zz-wt-landed")
+    git(primary, "branch", "claude/aa-loose", "claude/eng-3-open")
+    git(primary, "branch", "claude/bb-loose", "claude/eng-3-open")
+    loose_tip = git(primary, "rev-parse", "claude/aa-loose").strip()
+    gh.set({
+        "claude/zz-wt-landed": [pr(wt_tip)],
+        "claude/aa-loose": [pr(loose_tip)],
+        "claude/bb-loose": [pr(loose_tip)],
+    })
+    monkeypatch.setattr(sweep_worktrees, "GH_BATCH", 2)
+    batches: list[list[str]] = []
+    timeouts: list[float] = []
+    real_run = subprocess.run
+
+    def spy_run(cmd, *args, **kwargs):
+        if "graphql" in cmd:
+            query = cmd[-1]
+            batches.append(re.findall(r'b\d+: pullRequests\(headRefName: "([^"]*)"', query))
+            timeouts.append(kwargs["timeout"])
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(sweep_worktrees.subprocess, "run", spy_run)
+    found = tiers(capsys)
+    assert len(batches) >= 2
+    assert set(batches[0]) == {"claude/eng-3-open", "claude/zz-wt-landed"}
+    assert all(0 < t <= sweep_worktrees.GH_TIMEOUT for t in timeouts)
+    assert found["claude/zz-wt-landed"] == ("landed-pr", "")
+    assert found["claude/aa-loose"] == ("landed-pr", "")
+    assert found["claude/bb-loose"] == ("landed-pr", "")
+
+    calls = 0
+
+    def fail_second_batch(mode: str):
+        def _runner(cmd, *args, **kwargs):
+            nonlocal calls
+            if "graphql" in cmd:
+                calls += 1
+                if calls > 1:
+                    if mode == "timeout":
+                        raise subprocess.TimeoutExpired(cmd, 10)
+                    if mode == "auth":
+                        return subprocess.CompletedProcess(cmd, 4, "", "To authenticate, run: gh auth login")
+                    return subprocess.CompletedProcess(cmd, 1, "", "502 Bad Gateway")
+            return real_run(cmd, *args, **kwargs)
+
+        return _runner
+
+    for mode, expected_loose_reason in (
+        ("timeout", "no pull request"),
+        ("auth", "unauthenticated"),
+        ("error", "unreachable"),
+    ):
+        calls = 0
+        monkeypatch.setattr(sweep_worktrees.subprocess, "run", fail_second_batch(mode))
+        partial = tiers(capsys)
+        assert partial["claude/zz-wt-landed"] == ("landed-pr", "")
+        assert partial["claude/aa-loose"] == ("unverified", expected_loose_reason)
+
+    # Inter-batch deadline expiry breaks loop before launching batch 2.
+    ticks = iter([0.0, 0.0, 20.0])
+    monkeypatch.setattr(
+        sweep_worktrees, "time", types.SimpleNamespace(monotonic=lambda: next(ticks, 20.0), time=time.time)
+    )
+    batch_calls = 0
+
+    def count_graphql(cmd, *args, **kwargs):
+        nonlocal batch_calls
+        if "graphql" in cmd:
+            batch_calls += 1
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(sweep_worktrees.subprocess, "run", count_graphql)
+    early = tiers(capsys)
+    assert batch_calls == 1
+    assert early["claude/zz-wt-landed"] == ("landed-pr", "")
+    assert early["claude/aa-loose"] == ("unverified", "no pull request")
+
+
+def test_patch_ids_stays_lazy_unless_cherry_also_fails(
+    primary: Path, gh: Gh, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    add_worktree(primary, primary.parent / "wt", "claude/eng-10-cherry", merge=False)
+    land(primary, "unrelated.txt", "u\n")
+    git(primary, "cherry-pick", "claude/eng-10-cherry")
+    land(primary, "eng-10-cherry.txt", "x\nmore\n")
+    open_tip = git(primary, "rev-parse", "claude/eng-3-open").strip()
+    gh.set({
+        "claude/eng-3-open": [pr(open_tip)],
+        "claude/eng-4-loose": [pr(open_tip)],
+        "feature/x": [pr(open_tip)],
+    })
+    patch_calls: list[tuple[str, ...]] = []
+    real_patch_ids = sweep_worktrees.patch_ids
+
+    def spy_patch_ids(cwd: Path, *args: str) -> list[str]:
+        patch_calls.append(args)
+        return real_patch_ids(cwd, *args)
+
+    monkeypatch.setattr(sweep_worktrees, "patch_ids", spy_patch_ids)
+    found = tiers(capsys)
+    assert found["claude/eng-10-cherry"][0] == "landed-probable"
+    assert patch_calls == []
+
+    # Empty patch-id diffs never trigger recent() log hashing.
+    monkeypatch.setattr(sweep_worktrees, "patch_ids", lambda *_: [])
+    assert not sweep_worktrees.probable(
+        primary, "origin/main", open_tip, lambda: (_ for _ in ()).throw(AssertionError("recent called"))
+    )
+
+    # Two squash branches falling through past cherry both trigger one lazy log hash + their diffs.
+    monkeypatch.setattr(sweep_worktrees, "patch_ids", spy_patch_ids)
+    for name in ("eng-11-squash-a", "eng-12-squash-b"):
+        squash = add_worktree(primary, primary.parent / "wt", f"claude/{name}", merge=False)
+        (squash / f"{name}-extra.txt").write_text("2\n")
+        git(squash, "add", ".")
+        git(squash, "commit", "-q", "-m", "second")
+        for fname in (f"{name}.txt", f"{name}-extra.txt"):
+            (primary / fname).write_text("x\n" if fname == f"{name}.txt" else "2\n")
+        git(primary, "add", ".")
+        git(primary, "commit", "-q", "-m", f"squash {name}")
+        land(primary, f"{name}.txt", "x\nmore\n")
+        land(primary, f"{name}-extra.txt", "2\nmore\n")
+    found = tiers(capsys)
+    assert found["claude/eng-11-squash-a"][0] == "landed-probable"
+    assert found["claude/eng-12-squash-b"][0] == "landed-probable"
+    log_calls = [c for c in patch_calls if c[0] == "log"]
+    assert len(log_calls) == 1
+
+
+def test_fetch_and_patch_ids_scrub_git_env_and_use_ten_second_timeouts(
+    primary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert (sweep_worktrees.FETCH_TIMEOUT, sweep_worktrees.GH_TIMEOUT) == (10, 10)
+    for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        monkeypatch.setenv(var, "leaked")
+    seen: list[tuple[list[str], dict[str, str] | None, object]] = []
+
+    def fake_run(cmd, *args, **kwargs):
+        seen.append((list(cmd), kwargs.get("env"), kwargs.get("timeout")))
+        return subprocess.CompletedProcess(cmd, 0, b"" if not kwargs.get("text") else "", b"" if not kwargs.get("text") else "")
+
+    monkeypatch.setattr(sweep_worktrees.subprocess, "run", fake_run)
+    assert not sweep_worktrees.fetch(primary)
+    sweep_worktrees.patch_ids(primary, "diff", "HEAD")
+    assert seen[0][0] == ["git", "fetch", "-q", "--prune", "--no-tags", "origin"]
+    assert seen[0][2] == 10
+    assert len(seen) == 3
+    for _, env, _ in seen:
+        assert env is not None and not (env.keys() & {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"})
+
+
 SCRIPT = Path(sweep_worktrees.__file__).resolve()
 
 
