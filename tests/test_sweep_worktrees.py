@@ -1319,16 +1319,36 @@ def test_uppercase_tickets_stay_live_normalize_lowercase_and_link_prototypes(
     primary: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     git(primary, "branch", "prototype/ENG-66-spike", "main")
+    git(primary, "checkout", "-q", "-b", "claude/eng-202-work", "origin/main")
+    write(primary, "eng-202.txt", "work\n")
+    git(primary, "add", "eng-202.txt")
+    git(primary, "commit", "-q", "-m", "notes under eng-202-notes")
+    git(primary, "checkout", "-q", "main")
+    write(primary, "tracked.md", "See docs/work/eng-201-plan for context.\n")
+    git(primary, "add", "tracked.md")
+    git(primary, "commit", "-q", "-m", "track doc ref")
     settings(primary, 'doc_roots = ["docs/work"]\n')
     write(primary, "docs/work/eng-200-handoff/a.md", "Tickets: ENG-200, ENG-3\n")
     write(primary, "docs/work/ENG-131-handoff/a.md", "notes\n")
+    write(primary, "docs/work/ENG-201-plan/a.md", "Ticket: eng-201\n")
+    write(primary, "docs/work/ENG-202-notes/a.md", "notes\n")
     data = report(capsys)
     docs = {d["path"]: d for d in data["docs"]}  # type: ignore[attr-defined]
     assert docs["docs/work/eng-200-handoff"]["state"] == "live"
     assert docs["docs/work/eng-200-handoff"]["tickets"] == ["eng-200", "eng-3"]
+    assert docs["docs/work/ENG-201-plan"]["state"] == "live"
+    assert docs["docs/work/ENG-202-notes"]["state"] == "live"
     assert docs["docs/work/ENG-131-handoff"]["state"] == "linked"
     assert docs["docs/work/ENG-131-handoff"]["tickets"] == ["eng-131"]
     assert {"issue": "eng-66", "name": "prototype/ENG-66-spike"} in data["prototypes"]  # type: ignore[operator]
+
+    # Prototype ticket extraction keeps prefix left word-boundary protection.
+    write(primary, ".lumberjack.toml", 'ticket_prefix = "it-"\n')
+    git(primary, "branch", "prototype/audit-1-spike", "main")
+    git(primary, "branch", "prototype/IT-7-spike", "main")
+    protos = {p["name"]: p["issue"] for p in report(capsys)["prototypes"]}  # type: ignore[attr-defined]
+    assert protos["prototype/audit-1-spike"] == "none"
+    assert protos["prototype/IT-7-spike"] == "it-7"
 
 
 def test_promoted_accepts_windows_backslashes(primary: Path) -> None:
@@ -1346,7 +1366,7 @@ def test_promoted_accepts_windows_backslashes(primary: Path) -> None:
 def test_manual_clear_updates_doc_state_since_and_skipped(primary: Path) -> None:
     grace_bundle(primary, 30)
     save_state(primary, {BUNDLE: "2020-01-01"}, [BUNDLE])
-    assert clear(primary, BUNDLE)[0] == 0
+    assert clear(primary, BUNDLE, f"./{BUNDLE}")[0] == 0
     assert recorded(primary) == {} and recorded(primary, "skipped") == []
 
     # Restoring the bundle restarts its grace period instead of trashing on the stale date.
