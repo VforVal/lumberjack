@@ -175,11 +175,9 @@ def config_table(primary: Path) -> tuple[str, Config]:
         except tomllib.TOMLDecodeError as exc:
             raise ConfigError(f"lumberjack: bad TOML in {path}: {exc}", name) from exc
         for key in section:
+            data = data.get(key, {})
             if not isinstance(data, dict):
                 raise ConfigError(f"lumberjack: [{'.'.join(section)}] in {path} must be a table", name)
-            data = data.get(key, {})
-        if not isinstance(data, dict):
-            raise ConfigError(f"lumberjack: [{'.'.join(section)}] in {path} must be a table", name)
         if not section or data:
             return name, data
     return "", {}

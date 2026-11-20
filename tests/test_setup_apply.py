@@ -95,7 +95,7 @@ def test_strategy_command_saves_only_the_strategy_and_a_rerun_keeps_it(
 
 
 def test_strategy_preserves_existing_stamp_and_notes_pyproject_override(
-    repo: Path, capsys: pytest.CaptureFixture[str]
+    repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     strategy_path = repo / "strategy.json"
     strategy_path.write_text(json.dumps(ANSWERS["doc_strategy"]), encoding="utf-8")
@@ -110,12 +110,27 @@ def test_strategy_preserves_existing_stamp_and_notes_pyproject_override(
     assert not read(repo, ".lumberjack.toml").startswith(setup_lumberjack.SETUP_STAMP)
     capsys.readouterr()
 
+    # Local config (.git/lumberjack.toml) preserves an existing stamp too.
     (repo / ".lumberjack.toml").unlink()
+    write(repo, ".git/lumberjack.toml", '# written by lumberjack setup 1.1.1\n\ncleanup = "prune"\n')
+    assert setup_lumberjack.main(["strategy", str(strategy_path), "--repo", str(repo)]) == 0
+    assert read(repo, ".git/lumberjack.toml").splitlines()[0] == "# written by lumberjack setup 1.1.1"
+    (repo / ".git/lumberjack.toml").unlink()
+    capsys.readouterr()
+
+    # Migrating from pyproject.toml prints override note and keeps origin's non-main trunk.
+    git(repo, "branch", "-m", "main", "master")
+    bare = tmp_path / "origin.git"
+    git(tmp_path, "init", "-q", "--bare", "-b", "master", str(bare))
+    git(repo, "remote", "add", "origin", str(bare))
+    git(repo, "push", "-q", "origin", "master")
+    git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
     write(repo, "pyproject.toml", '[tool.lumberjack]\nticket_prefix = "eng-"\n')
     assert setup_lumberjack.main(["strategy", str(strategy_path), "--repo", str(repo)]) == 0
     out = capsys.readouterr().out
     assert "note: wrote .lumberjack.toml, which overrides [tool.lumberjack] in pyproject.toml" in out
     assert not read(repo, ".lumberjack.toml").startswith(setup_lumberjack.SETUP_STAMP)
+    assert tomllib.loads(read(repo, ".lumberjack.toml"))["primary_branch"] == "master"
 
 
 def test_strategy_command_replaces_an_old_style_strategy(

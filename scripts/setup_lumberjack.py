@@ -177,10 +177,13 @@ def has_markdown(folder: Path) -> bool:
                 for entry in entries:
                     if (seen := seen + 1) > DOC_SCAN:
                         return False
-                    if entry.name.lower().endswith(".md"):
-                        return True
-                    if is_folder(entry):
-                        pending.append(Path(entry.path))
+                    try:
+                        if entry.name.lower().endswith(".md") and entry.is_file(follow_symlinks=False):
+                            return True
+                        if is_folder(entry):
+                            pending.append(Path(entry.path))
+                    except OSError:
+                        continue
         except OSError:
             continue
     return False
@@ -209,7 +212,7 @@ def doc_root_candidates(repo: Path) -> list[Facts]:
 
 
 POSIX_SH = re.compile(
-    r"^#!\s*(?:/usr/bin/env(?:\s+-S)?\s+(?:/\S+/)?|/\S+/)(?:sh|bash|dash|ash|ksh|zsh)(?:\s|$)"
+    r"^#!\s*(?:/\S+/env(?:\s+(?:-\S+|\w+=\S+))*\s+(?:/\S+/)?|/\S+/)(?:sh|bash|dash|ash|ksh|zsh)(?:\s|$)"
 )
 
 
@@ -225,7 +228,7 @@ def hook_facts(repo: Path, hooks_path: str | None) -> Facts | None:
     first = text.splitlines()[0] if text else ""
     has_marker = HOOK_BEGIN in text
     if has_marker:
-        first = re.match(r"(?:[ \t]*(?:#(?!\!)[^\n]*)?\n)*(.*)", text).group(1)
+        first = re.match(r"(?:[ \t\r]*(?:#(?!\!)[^\n]*)?\n)*(.*)", text).group(1)
     return {
         "path": str(path),
         "is_sh": bool(POSIX_SH.match(first)),
@@ -697,14 +700,15 @@ def save_strategy(strategy: Any, repo: Path) -> None:
     try:
         source, table = config_table(repo)
         table.pop("doc_strategy", None)  # replaced whole, so an old-style one never blocks its own fix
-        target = local_rel(repo, local_config(repo)) if source == LOCAL_CONFIG else ".lumberjack.toml"
+        existing = local_config(repo) if source == LOCAL_CONFIG else repo / ".lumberjack.toml"
+        target = local_rel(repo, existing) if source == LOCAL_CONFIG else ".lumberjack.toml"
         stamp = ""
         if source in (".lumberjack.toml", LOCAL_CONFIG):
-            existing = local_config(repo) if source == LOCAL_CONFIG else repo / ".lumberjack.toml"
             with existing.open(encoding="utf-8") as file:
                 first = file.readline().rstrip("\r\n")
             stamp = first if first.startswith(SETUP_STAMP) else ""
-        write_file(repo, target, config_text({**parse_config(table, source), "doc_strategy": strategy}, stamp=stamp))
+        cfg = parse_config({"primary_branch": origin_default_branch(repo), **table}, source)
+        write_file(repo, target, config_text({**cfg, "doc_strategy": strategy}, stamp=stamp))
         if source == "pyproject.toml":
             print("note: wrote .lumberjack.toml, which overrides [tool.lumberjack] in pyproject.toml")
     except ConfigError as error:

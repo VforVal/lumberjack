@@ -246,6 +246,9 @@ def test_post_merge_hook_and_hooks_path(
     ("shebang", "expected"),
     [
         ("#!/bin/sh\n", True),
+        ("#!/bin/env bash\n", True),
+        ("#!/usr/bin/env -i bash\n", True),
+        ("#!/usr/bin/env -S FOO=1 sh\n", True),
         ("#!/usr/bin/env bash\n", True),
         ("#!/usr/bin/env -S zsh -e\n", True),
         ("#!/usr/local/bin/dash\n", True),
@@ -269,17 +272,18 @@ def test_has_markdown_skips_links_and_junctions(
 ) -> None:
     outside = tmp_path / "outside"
     write(outside, "notes.md", "external\n")
-    write(repo, ".gitignore", "linked/\n")
+    write(repo, ".gitignore", "linked/\ntop_link\n")
     linked_root = repo / "linked"
     (linked_root / "sub").mkdir(parents=True)
-    link_target = linked_root / "sub" / "ext"
-    if sys.platform == "win32":
-        import _winapi
+    for link in (linked_root / "sub" / "ext", linked_root / "docs.md", repo / "top_link"):
+        if sys.platform == "win32":
+            import _winapi
 
-        _winapi.CreateJunction(str(outside), str(link_target))
-    else:
-        link_target.symlink_to(outside, target_is_directory=True)
+            _winapi.CreateJunction(str(outside), str(link))
+        else:
+            link.symlink_to(outside, target_is_directory=True)
     assert discover(capsys, repo)["doc_root_candidates"] == []
+    assert not setup_lumberjack.has_markdown(repo / "top_link")
 
 
 def test_tilde_hooks_path_is_expanded(
