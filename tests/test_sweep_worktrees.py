@@ -693,13 +693,13 @@ def test_remove_honors_disposable_paths_non_ascii_and_link_leaves(
             link_dir(leftover_wt / ".claude" / "skills", target)
         return done
 
-    monkeypatch.setattr(sweep_worktrees, "git", keep_leftover_dir)
-    outcome, line = sweep_worktrees.remove_worktree(
-        primary, {"path": str(leftover_wt), "branch": "claude/eng-46-leftover"}, (".claude/skills",)
-    )
+    with monkeypatch.context() as mp:
+        mp.setattr(sweep_worktrees, "git", keep_leftover_dir)
+        outcome, line = sweep_worktrees.remove_worktree(
+            primary, {"path": str(leftover_wt), "branch": "claude/eng-46-leftover"}, (".claude/skills",)
+        )
     assert (outcome, line) == ("cleaned", "cleaned claude/eng-46-leftover wt/eng-46-leftover (local branch kept)")
     assert not leftover_wt.exists() and (target / "keep.md").exists()
-    monkeypatch.undo()
 
     stray = landed_worktree(primary, "eng-39-nonascii")
     write(stray, "café/secret.txt", "keep\n")
