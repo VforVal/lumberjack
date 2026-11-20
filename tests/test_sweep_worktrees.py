@@ -1349,12 +1349,12 @@ def test_self_heal_sets_script_and_hooks_path_only_when_free(primary: Path) -> N
 
 def test_a_config_from_another_setup_version_hints_to_rerun_setup(primary: Path) -> None:
     current = sweep_worktrees.plugin_version()
-    write(primary, ".lumberjack.toml", "# written by lumberjack setup 1.1.1\n\ncleanup = \"report\"\n")
+    write(primary, ".lumberjack.toml", "# written by lumberjack setup 1.1.1\n\ncleanup = \"keep\"\n")
     hint = f"hint: .lumberjack.toml was written by lumberjack setup 1.1.1, the plugin is {current}; re-run /lumberjack:setup"
     assert hint in cleanup(primary)
-    write(primary, ".lumberjack.toml", f"# written by lumberjack setup {current}\n\ncleanup = \"report\"\n")
+    write(primary, ".lumberjack.toml", f"# written by lumberjack setup {current}\n\ncleanup = \"keep\"\n")
     assert not any(line.startswith("hint:") for line in cleanup(primary))
-    write(primary, ".lumberjack.toml", 'cleanup = "report"\n')  # hand-written: no stamp, no hint
+    write(primary, ".lumberjack.toml", 'cleanup = "keep"\n')  # hand-written: no stamp, no hint
     assert not any(line.startswith("hint:") for line in cleanup(primary))
 
 
@@ -2445,7 +2445,7 @@ def test_trashing_one_bundle_keeps_the_date_of_one_still_waiting(primary: Path) 
     assert recorded(primary) == {"docs/work/eng-161-handoff": yesterday}
 
 
-def session_start(primary: Path, session_id: str = "s1", source: str = "startup") -> None:
+def session_start(primary: Path, session_id: str | None = "s1", source: str = "startup") -> None:
     payload = {"hook_event_name": "SessionStart", "source": source, "session_id": session_id}
     done = sweep(primary, "--hook", stdin=json.dumps(payload))
     assert done.returncode == 0, done.stderr
@@ -2588,6 +2588,63 @@ def test_no_session_marker_without_a_doc_strategy(primary: Path) -> None:
     rule_bundles(primary, strategy=False)
     session_start(primary)
     assert not (primary / ".git" / "lumberjack-tally.jsonl").exists()
+
+
+@pytest.mark.parametrize("mode", ["report", "keep"])
+def test_no_session_marker_outside_prune_mode(primary: Path, mode: str) -> None:
+    rule_bundles(primary, mode=mode)
+    session_start(primary)
+    assert not (primary / ".git" / "lumberjack-tally.jsonl").exists()
+
+
+def test_null_session_ids_do_not_merge_in_tally(primary: Path) -> None:
+    rule_bundles(primary)
+    session_start(primary, None)  # trashes eng-150
+    assert sweep(primary, "--hook", stdin='{"hook_event_name": "SessionStart"}').returncode == 0
+    events = [
+        json.loads(line)
+        for line in (primary / ".git" / "lumberjack-tally.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [e["id"] for e in events if e["event"] == "session"] == ["", ""]
+    assert run_lines(primary, "--tally")[0].endswith("trashed 0 bundles, purged 0 files (0 B)")
+
+
+def test_report_mode_hints_only_when_cleanup_has_removable_items_and_not_in_preview(
+    primary: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hint = 'hint: cleanup = "report" removes nothing; set cleanup = "prune" to clean automatically'
+    sweep(primary, "--cleanup")
+    settings(primary, 'cleanup = "report"\n')
+    assert hint not in cleanup(primary)
+
+    # Removable worktree triggers hint in session cleanup, not in --preview under report or prune.
+    wt = landed_worktree(primary, "eng-20-a")
+    assert hint in cleanup(primary)
+    assert hint not in run_lines(primary, "--preview")
+
+    settings(primary, 'cleanup = "prune"\n')
+    preview_out = run_lines(primary, "--preview")
+    assert "landed claude/eng-20-a wt/eng-20-a: would remove" in preview_out
+    assert hint not in preview_out
+
+    # Remove worktree cleanly so subsequent checks isolate each remaining signal.
+    sweep(primary, "--cleanup")
+    assert not wt.exists()
+
+    # Cache-only orphan in report mode.
+    only = tmp_path / "orphans" / "only"
+    (only / "node_modules").mkdir(parents=True)
+    monkeypatch.setattr(sweep_worktrees, "orphan_candidates", lambda *_: [only])
+    settings(primary, 'cleanup = "report"\n')
+    assert hint in sweep_worktrees.cleanup_session(primary)
+    monkeypatch.setattr(sweep_worktrees, "orphan_candidates", lambda *_: [])
+
+    # Due bundle in report mode, then expired trash folder in report mode.
+    rule_bundles(primary, mode="report")
+    assert hint in cleanup(primary)
+    (primary / "docs/work/eng-150-handoff/a.md").unlink()
+    old_trash(primary)
+    assert hint in cleanup(primary)
 
 
 def test_files_names_a_key_that_matches_nothing(primary: Path) -> None:

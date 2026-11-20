@@ -257,6 +257,9 @@ and nothing moves:
 sweep would: remove 2 worktrees, delete 1 orphan, trash 3 bundles (120 files, 4.2 MB), purge 1 trash folder (40 files, 1.1 MB)
 ```
 
+When something would be cleaned, session start and `--cleanup` add
+`hint: cleanup = "report" removes nothing; set cleanup = "prune" to clean automatically`.
+
 A `dependent` line is a branch built on top of a landed one; run the printed rebase
 before pushing it. A `purged` line is a folder in lumberjack's trash older than `trash_days`,
 deleted at session start (see Work documents).
@@ -452,7 +455,7 @@ can answer from the summary, then list one bundle's files when asked for detail.
 `--tally` shows what was done. Every trashed bundle (by session start, the post-merge sweep or
 `--clear`) and every purge (with the files and bytes it deleted, a purge cut short included) is
 appended to `<git dir>/lumberjack-tally.jsonl`, and each session start adds a marker with the
-harness's session id (only once a `doc_strategy` is saved). A resume, `/clear` or compaction fires
+harness's session id (only when a `doc_strategy` is saved and `cleanup = "prune"`). A resume, `/clear` or compaction fires
 SessionStart again with the same id, so it does not start a new session in the tally:
 
 ```
