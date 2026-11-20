@@ -242,6 +242,46 @@ def test_post_merge_hook_and_hooks_path(
     assert (hook["is_sh"], hook["has_marker"]) == (False, True)
 
 
+@pytest.mark.parametrize(
+    ("shebang", "expected"),
+    [
+        ("#!/bin/sh\n", True),
+        ("#!/usr/bin/env bash\n", True),
+        ("#!/usr/bin/env -S zsh -e\n", True),
+        ("#!/usr/local/bin/dash\n", True),
+        ("#!/bin/ksh\n", True),
+        ("#!/bin/ash\n", True),
+        ("#!/usr/bin/env pwsh\n", False),
+        ("#!/usr/bin/fish\n", False),
+        ("#!/bin/csh\n", False),
+        ("#!/usr/bin/env python3\n", False),
+    ],
+)
+def test_hook_interpreter_distinguishes_posix_shells(
+    repo: Path, capsys: pytest.CaptureFixture[str], shebang: str, expected: bool
+) -> None:
+    write(repo, ".git/hooks/post-merge", shebang + "echo hi\n")
+    assert discover(capsys, repo)["post_merge_hook"]["is_sh"] is expected
+
+
+def test_has_markdown_skips_links_and_junctions(
+    repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    outside = tmp_path / "outside"
+    write(outside, "notes.md", "external\n")
+    write(repo, ".gitignore", "linked/\n")
+    linked_root = repo / "linked"
+    (linked_root / "sub").mkdir(parents=True)
+    link_target = linked_root / "sub" / "ext"
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(outside), str(link_target))
+    else:
+        link_target.symlink_to(outside, target_is_directory=True)
+    assert discover(capsys, repo)["doc_root_candidates"] == []
+
+
 def test_tilde_hooks_path_is_expanded(
     repo: Path, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:

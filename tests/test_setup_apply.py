@@ -94,6 +94,30 @@ def test_strategy_command_saves_only_the_strategy_and_a_rerun_keeps_it(
     assert error.value.code == 2 and load_config(repo)["doc_strategy"] == strategy
 
 
+def test_strategy_preserves_existing_stamp_and_notes_pyproject_override(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    strategy_path = repo / "strategy.json"
+    strategy_path.write_text(json.dumps(ANSWERS["doc_strategy"]), encoding="utf-8")
+
+    write(repo, ".lumberjack.toml", '# written by lumberjack setup 1.1.1\n\ncleanup = "prune"\n')
+    assert setup_lumberjack.main(["strategy", str(strategy_path), "--repo", str(repo)]) == 0
+    assert read(repo, ".lumberjack.toml").splitlines()[0] == "# written by lumberjack setup 1.1.1"
+    capsys.readouterr()
+
+    write(repo, ".lumberjack.toml", 'cleanup = "prune"\n')
+    assert setup_lumberjack.main(["strategy", str(strategy_path), "--repo", str(repo)]) == 0
+    assert not read(repo, ".lumberjack.toml").startswith(setup_lumberjack.SETUP_STAMP)
+    capsys.readouterr()
+
+    (repo / ".lumberjack.toml").unlink()
+    write(repo, "pyproject.toml", '[tool.lumberjack]\nticket_prefix = "eng-"\n')
+    assert setup_lumberjack.main(["strategy", str(strategy_path), "--repo", str(repo)]) == 0
+    out = capsys.readouterr().out
+    assert "note: wrote .lumberjack.toml, which overrides [tool.lumberjack] in pyproject.toml" in out
+    assert not read(repo, ".lumberjack.toml").startswith(setup_lumberjack.SETUP_STAMP)
+
+
 def test_strategy_command_replaces_an_old_style_strategy(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -258,17 +282,24 @@ def test_python_hook_with_lumberjack_comment_is_still_wrapped(
 ) -> None:
     original = "#!/usr/bin/env python\n# >>> lumberjack\nprint('python hook ran')\n"
     write(repo, ".git/hooks/post-merge", original)
+    hook_path = repo / ".git/hooks/post-merge"
+    hook_path.chmod(hook_path.stat().st_mode | 0o111)
+    chmods: list[Path] = []
+    real_chmod = setup_lumberjack.make_executable
+    monkeypatch.setattr(
+        setup_lumberjack, "make_executable", lambda p: (chmods.append(p), real_chmod(p))[-1]
+    )
 
     code, _, _ = apply(repo, capsys, hook="plain")
 
     assert code == 0
+    assert chmods == [hook_path]
     assert read(repo, ".git/hooks/post-merge.user") == original
     wrapper = read(repo, ".git/hooks/post-merge")
     assert wrapper.startswith('#!/bin/sh\n"$(dirname "$0")/post-merge.user" "$@"\n')
     assert block_count(wrapper) == 1
-    for name in ("post-merge", "post-merge.user"):
-        path = repo / ".git/hooks" / name
-        path.chmod(path.stat().st_mode | 0o111)
+    if os.name != "nt":
+        assert hook_path.stat().st_mode & 0o111
     git(repo, "config", "--unset", "lumberjack.script")
     monkeypatch.setenv("PATH", str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"])
     done = subprocess.run(

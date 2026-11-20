@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -30,6 +31,7 @@ from sweep_worktrees import (
     git,
     hook_manager,
     hook_script,
+    is_folder,
     lines,
     load_config,
     local_config,
@@ -38,6 +40,7 @@ from sweep_worktrees import (
     parse_config,
     plugin_version,
     registered,
+    reparse,
 )
 
 Facts = dict[str, Any]
@@ -161,6 +164,12 @@ def tracker_facts(repo: Path) -> Facts:
 def has_markdown(folder: Path) -> bool:
     """Whether a .md name shows up in the first DOC_SCAN entries; names only, no file reads."""
     # shortcut: a huge folder whose Markdown sits past the budget is missed, raise DOC_SCAN then.
+    try:
+        st = folder.lstat()
+    except OSError:
+        return False
+    if not stat.S_ISDIR(st.st_mode) or reparse(st):
+        return False
     pending, seen = [folder], 0
     while pending:
         try:
@@ -170,7 +179,7 @@ def has_markdown(folder: Path) -> bool:
                         return False
                     if entry.name.lower().endswith(".md"):
                         return True
-                    if entry.is_dir(follow_symlinks=False):
+                    if is_folder(entry):
                         pending.append(Path(entry.path))
         except OSError:
             continue
@@ -199,6 +208,11 @@ def doc_root_candidates(repo: Path) -> list[Facts]:
     return [{"path": path, "reason": reason} for path, reason in sorted(found.items())]
 
 
+POSIX_SH = re.compile(
+    r"^#!\s*(?:/usr/bin/env(?:\s+-S)?\s+(?:/\S+/)?|/\S+/)(?:sh|bash|dash|ash|ksh|zsh)(?:\s|$)"
+)
+
+
 def hook_facts(repo: Path, hooks_path: str | None) -> Facts | None:
     if hooks_path:
         base = repo / hooks_path
@@ -214,7 +228,7 @@ def hook_facts(repo: Path, hooks_path: str | None) -> Facts | None:
         first = re.match(r"(?:[ \t]*(?:#(?!\!)[^\n]*)?\n)*(.*)", text).group(1)
     return {
         "path": str(path),
-        "is_sh": first.startswith("#!") and "sh" in first,
+        "is_sh": bool(POSIX_SH.match(first)),
         "has_marker": has_marker,
     }
 
@@ -352,9 +366,10 @@ def check_answers(answers: Any, repo: Path) -> Facts:
     return full
 
 
-def config_text(answers: Facts) -> str:
+def config_text(answers: Facts, stamp: str | None = None) -> str:
     keys = (f"# {CONFIG_DOC[k]}\n{k} = {toml_value(answers[k])}\n" for k in DEFAULTS)
-    text = f"{SETUP_STAMP}{plugin_version()}\n\n" + "\n".join(keys)
+    head = f"{SETUP_STAMP}{plugin_version()}\n\n" if stamp is None else (f"{stamp}\n\n" if stamp else "")
+    text = head + "\n".join(keys)
     try:  # validate through the parser sweep uses
         parse_config(tomllib.loads(text), ".lumberjack.toml")
     except tomllib.TOMLDecodeError as error:
@@ -472,6 +487,7 @@ def plain_hook(repo: Path) -> None:
             print(f"ran rename {path.name} to {kept.name}")
             text = '#!/bin/sh\n"$(dirname "$0")/post-merge.user" "$@"\n'
         write_file(repo, path.as_posix(), merge_block(text, BLOCK))
+        make_executable(path)
         return
     rel = f"{hooks_path or '.githooks'}/post-merge"
     write_merged(repo, rel, BLOCK, start="#!/bin/sh\n")
@@ -682,7 +698,15 @@ def save_strategy(strategy: Any, repo: Path) -> None:
         source, table = config_table(repo)
         table.pop("doc_strategy", None)  # replaced whole, so an old-style one never blocks its own fix
         target = local_rel(repo, local_config(repo)) if source == LOCAL_CONFIG else ".lumberjack.toml"
-        write_file(repo, target, config_text({**parse_config(table, source), "doc_strategy": strategy}))
+        stamp = ""
+        if source in (".lumberjack.toml", LOCAL_CONFIG):
+            existing = local_config(repo) if source == LOCAL_CONFIG else repo / ".lumberjack.toml"
+            with existing.open(encoding="utf-8") as file:
+                first = file.readline().rstrip("\r\n")
+            stamp = first if first.startswith(SETUP_STAMP) else ""
+        write_file(repo, target, config_text({**parse_config(table, source), "doc_strategy": strategy}, stamp=stamp))
+        if source == "pyproject.toml":
+            print("note: wrote .lumberjack.toml, which overrides [tool.lumberjack] in pyproject.toml")
     except ConfigError as error:
         raise abort(str(error)) from error
 
