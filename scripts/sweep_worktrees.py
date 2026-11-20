@@ -432,24 +432,40 @@ def probable(primary: Path, base: str, sha: str, recent: set[str]) -> bool:
     return bool(set(patch_ids(primary, "diff", f"{base}...{sha}")) & recent)
 
 
-def classify(primary: Path, cfg: Config, tips: set[Tip], stale: bool = False) -> dict[Tip, Verdict]:
+def classify(
+    primary: Path,
+    cfg: Config,
+    tips: set[Tip],
+    stale: bool = False,
+    worktrees: dict[Tip, Path] | None = None,
+) -> dict[Tip, Verdict]:
     """(tier, reason) per tip against origin/<primary>, first decisive tier wins."""
     base = f"origin/{cfg['primary_branch']}"
     tree = git(primary, "rev-parse", f"{base}^{{tree}}").stdout.strip()
     unlanded = unlanded_commits(primary, base, {sha for sha, _ in tips})
     result: dict[Tip, Verdict] = {}
-    rest = []
+    rest, upgrade = [], []
     for tip in sorted(tips):
         if tip[0] not in unlanded:
             result[tip] = ("integrated", "")
         elif content_integrated(primary, base, tree, tip[0]):
-            result[tip] = ("content-integrated", "")
+            path = (worktrees or {}).get(tip)
+            # An unpushed content-integrated worktree may be a squash-merged PR whose branch was deleted.
+            if path is not None and tip[1] and unpushed(path):
+                upgrade.append(tip)
+            else:
+                result[tip] = ("content-integrated", "")
         else:
             rest.append(tip)
+    if not rest and not upgrade:
+        return result
+    names = sorted({name for _, name in (*rest, *upgrade) if name})
+    prs = merged_prs(primary, names) if names else {}  # a detached tip has no pull request
+    for tip in upgrade:
+        tier, _ = pr_verdict(prs, tip, cfg["primary_branch"])
+        result[tip] = ("landed-pr", "") if tier == "landed-pr" else ("content-integrated", "")
     if not rest:
         return result
-    names = sorted({name for _, name in rest if name})
-    prs = merged_prs(primary, names) if names else {}  # a detached tip has no pull request
     recent = set(patch_ids(primary, "log", "-200", "-p", base))
     # The guess costs several git calls per tip and never prunes, so it yields to the hook timeout.
     deadline, rushed = time.monotonic() + PROBABLE_SECONDS, False
@@ -964,7 +980,8 @@ def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
     loose = branch_tips(primary, cfg, trees)
     tips = {(t["head"], t["branch"]) for t in trees[1:]}
     tips |= {(sha, name) for name, sha in loose.items()}
-    tiers = classify(primary, cfg, tips, stale)
+    worktrees = {(t["head"], t["branch"]): Path(t["path"]) for t in trees[1:]}
+    tiers = classify(primary, cfg, tips, stale, worktrees)
     local = lines(git(primary, "branch", "--format=%(refname:short)"))
     pattern = branch_pattern(cfg)
     return {
@@ -1057,9 +1074,9 @@ def block_reason(
     # A new branch from origin/main looks integrated and pushed; its session may have just begun.
     if fresh(Path(w["path"]), w["branch"], w["head"]):
         return "fresh"
-    # landed-pr: the forge saw this exact tip, and delete-on-merge drops the upstream.
+    # integrated and landed-pr tips are already on origin or confirmed merged, even if the remote branch was pruned.
     # Explicit: the kept branch holds the commits, so unpushed is no loss; ignored files are.
-    if not explicit and w["tier"] != "landed-pr" and unpushed(Path(w["path"])):
+    if not explicit and w["tier"] not in ("integrated", "landed-pr") and unpushed(Path(w["path"])):
         return "unpushed"
     if evidence and evidence.is_dir() and any(evidence.iterdir()):
         return "evidence"
