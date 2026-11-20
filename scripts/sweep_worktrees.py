@@ -49,8 +49,6 @@ DEFAULTS: Config = {
     "stop_gate": True,
 }
 # .codex-worktree-name is all Codex leaves behind after removing a worktree.
-# onexc replaced the deprecated onerror in 3.12; the handler signature is the same.
-RMTREE_HANDLER = "onexc" if sys.version_info >= (3, 12) else "onerror"
 CLEANUP_MODES = ("prune", "report", "keep")
 CACHE_DIRS = {"node_modules", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist"}
 CACHE_DIRS.add(".codex-worktree-name")
@@ -214,6 +212,17 @@ def origin_default_branch(primary: Path) -> str:
     return DEFAULTS["primary_branch"]
 
 
+def repo_relative(path: object) -> str | None:
+    """Normalized relative POSIX path inside the repository, or None when invalid."""
+    if not isinstance(path, str) or not path:
+        return None
+    win = PureWindowsPath(path)
+    if win.drive or win.anchor or ".." in win.parts:
+        return None
+    norm = posixpath.normpath(path.replace("\\", "/"))
+    return None if norm in (".", "") or norm.startswith("/") else norm
+
+
 def parse_config(table: Config, source: str = "") -> Config:
     """The validated config for a raw table; source names its file in errors."""
     if unknown := sorted(table.keys() - DEFAULTS.keys()):
@@ -229,11 +238,8 @@ def parse_config(table: Config, source: str = "") -> Config:
     if not cfg["ticket_prefix"] and any("<ticket>" in shape for shape in cfg["branch_shapes"]):
         raise ConfigError("lumberjack: a branch_shapes entry with <ticket> needs a ticket_prefix", source)
     # git refuses a path outside the worktree, which would read as `docs` and keep every worktree.
-    if not all(
-        isinstance(root, str) and root and not PureWindowsPath(root).anchor
-        and ".." not in PureWindowsPath(root).parts and posixpath.normpath(root) != "."
-        for root in cfg["doc_roots"]
-    ):
+    doc_roots = [repo_relative(root) for root in cfg["doc_roots"]]
+    if any(r is None for r in doc_roots):
         raise ConfigError("lumberjack: doc_roots must be relative paths inside the repo", source)
     if not all(
         isinstance(words, list) and all(isinstance(w, str) and w for w in words)
@@ -263,19 +269,12 @@ def parse_config(table: Config, source: str = "") -> Config:
     if roots:
         strategy["roots"] = {posixpath.normpath(r): a for r, a in roots.items()}
     # One spelling per root, so "docs/work/" in doc_reference finds the root "./docs/work".
-    cfg["doc_roots"] = [posixpath.normpath(root) for root in cfg["doc_roots"]]
+    cfg["doc_roots"] = [r for r in doc_roots if r is not None]
     cfg["doc_reference"] = {posixpath.normpath(k): v for k, v in cfg["doc_reference"].items()}
-    if not all(
-        isinstance(p, str) and p and not PureWindowsPath(p).anchor
-        and ".." not in PureWindowsPath(p).parts
-        and (norm := posixpath.normpath(p.replace("\\", "/"))) not in (".", ".git")
-        and not norm.startswith(".git/")
-        for p in cfg["disposable_paths"]
-    ):
+    disposable_paths = [repo_relative(p) for p in cfg["disposable_paths"]]
+    if any(p is None or ".git" in (part.lower() for part in p.split("/")) for p in disposable_paths):
         raise ConfigError("lumberjack: disposable_paths must be relative paths inside the repo", source)
-    cfg["disposable_paths"] = [
-        posixpath.normpath(p.replace("\\", "/")) for p in cfg["disposable_paths"]
-    ]
+    cfg["disposable_paths"] = [p for p in disposable_paths if p is not None]
     if cfg["cleanup"] not in CLEANUP_MODES:
         raise ConfigError(
             f"lumberjack: cleanup must be one of {', '.join(CLEANUP_MODES)}", source
@@ -520,22 +519,29 @@ def orphan_candidates(primary: Path, cfg: Config) -> list[Path]:
     return [path for path in found if path.is_dir()]
 
 
-def only_disposable(folder: Path, prefix: str, extra: tuple[str, ...]) -> bool:
-    """Non-empty folder holding only disposable entries or subfolders that do; never follows links."""
+def only_disposable(
+    folder: Path, prefix: str, extra: tuple[str, ...], *, allow_empty: bool = False
+) -> bool:
+    """Folder holding only disposable entries or subfolders that do; never follows links."""
     with os.scandir(folder) as entries:
         children = list(entries)
     if not children:
-        return False
+        return allow_empty
     for entry in children:
         rel = f"{prefix}/{entry.name}" if prefix else entry.name
         if disposable(rel, extra):
             continue
-        if not is_folder(entry) or not only_disposable(Path(entry.path), rel, extra):
+        if not is_folder(entry) or not only_disposable(
+            Path(entry.path), rel, extra, allow_empty=allow_empty
+        ):
             return False
     return True
 
 
 def classify_orphan(path: Path, extra: tuple[str, ...] = ()) -> str:
+    st = path.lstat()
+    if not stat.S_ISDIR(st.st_mode) or reparse(st):
+        return "not-git"
     if (path / ".git").exists():
         return "mixed"
     return "node_modules-only" if only_disposable(path, "", extra) else "not-git"
@@ -1018,11 +1024,6 @@ def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
     }
 
 
-def make_writable(func: Callable[[str], object], path: str, _: object) -> None:
-    os.chmod(path, stat.S_IWRITE)  # Windows refuses to delete read-only files.
-    func(path)
-
-
 def fetch(primary: Path) -> bool:
     """True when origin may be stale: the fetch failed or exceeded FETCH_TIMEOUT."""
     try:
@@ -1064,7 +1065,8 @@ def fresh(path: Path, branch: str, head: str) -> bool:
 
 def short_path(primary: Path, path: str | Path) -> str:
     """Path relative to the primary's parent directory, else with home as ~."""
-    full = Path(path).resolve()
+    item = Path(os.path.abspath(path))
+    full = item.parent.resolve() / item.name if item.name else item.resolve()
     for base, prefix in ((primary.parent.resolve(), ""), (Path.home().resolve(), "~/")):
         if full.is_relative_to(base):
             return prefix + full.relative_to(base).as_posix()
@@ -1128,8 +1130,8 @@ def remove_worktree(primary: Path, w: Row, extra: tuple[str, ...] = ()) -> tuple
             return "blocked", f"blocked {tag(primary, w)}: {gone.stderr.strip()}"
     leftover = Path(w["path"])
     if leftover.exists() and orphan_kind(leftover, extra) == "node_modules-only":
-        with contextlib.suppress(OSError):
-            shutil.rmtree(leftover, **{RMTREE_HANDLER: make_writable})
+        with contextlib.suppress(OSError, RuntimeError):
+            purge_tree(str(leftover), math.inf, Footprint())
     if leftover.exists():
         notes.append("directory left")
     return "cleaned", f"cleaned {tag(primary, w)}" + (f" ({'; '.join(notes)})" if notes else "")
@@ -1239,7 +1241,8 @@ def remove(func: Callable[[str], object], path: str) -> None:
     try:
         func(path)
     except PermissionError:
-        make_writable(func, path, None)
+        os.chmod(path, stat.S_IWRITE)  # Windows refuses to delete read-only files.
+        func(path)
 
 
 def purge_tree(path: str, deadline: float, deleted: Footprint) -> bool:
@@ -1303,13 +1306,11 @@ def is_stray(root: Path, name: str, extra: tuple[str, ...]) -> bool:
         st = target.lstat()
         if not stat.S_ISDIR(st.st_mode) or reparse(st):
             return True
-        if only_disposable(target, name.rstrip("/"), extra):
-            return False
+        return not only_disposable(target, name.rstrip("/"), extra, allow_empty=True)
     except FileNotFoundError:
         return False
     except (OSError, RecursionError):
         return True
-    return holds_a_file(target)
 
 
 def stray_ignored(path: Path, extra: tuple[str, ...] = ()) -> list[str]:
@@ -1322,19 +1323,11 @@ def stray_ignored(path: Path, extra: tuple[str, ...] = ()) -> list[str]:
         return []
     names, entries = set(), iter(status.stdout.split("\0"))
     for entry in entries:
-        if entry[:2] in ("R ", "C "):
+        if len(entry) >= 3 and entry[2] == " " and (entry[0] in ("R", "C") or entry[1] in ("R", "C")):
             next(entries, "")
         elif entry.startswith("!! "):
             names.add(entry[3:])
     return sorted(name for name in names if is_stray(path, name, extra))
-
-
-def holds_a_file(path: Path) -> bool:
-    """Whether real directory path holds any file or link; empty folders lose nothing."""
-    try:
-        return any(not is_folder(entry) for entry in walk(str(path)))
-    except (OSError, RecursionError):
-        return True
 
 
 def disposable(name: str, extra: tuple[str, ...] = ()) -> bool:
@@ -1371,8 +1364,8 @@ def clean_orphans(primary: Path, orphans: list[Row], mode: str) -> tuple[int, li
         shown = short_path(primary, o["path"])
         if o["kind"] == "node_modules-only" and mode == "prune":
             try:
-                shutil.rmtree(o["path"], **{RMTREE_HANDLER: make_writable})
-            except OSError as error:
+                purge_tree(o["path"], math.inf, Footprint())
+            except (OSError, RuntimeError) as error:
                 out.append(f"orphan {o['kind']} {shown}: {error}")
             else:
                 cleaned += 1

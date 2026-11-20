@@ -104,7 +104,10 @@ def test_bad_type_and_empty_prototype_prefix_are_rejected(
         ('disposable_paths = ["/abs"]', "disposable_paths must be relative"),
         ('disposable_paths = ["./"]', "disposable_paths must be relative"),
         ('disposable_paths = [".git"]', "disposable_paths must be relative"),
+        ('disposable_paths = [".GIT"]', "disposable_paths must be relative"),
         ('disposable_paths = [".git/hooks"]', "disposable_paths must be relative"),
+        ('disposable_paths = ["sub/.GIT/hooks"]', "disposable_paths must be relative"),
+        ('disposable_paths = ["C:rel"]', "disposable_paths must be relative"),
     ],
 )
 def test_disposable_paths_validation_and_normalization(

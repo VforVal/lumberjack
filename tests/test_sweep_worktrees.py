@@ -139,15 +139,6 @@ def test_orphan_classification(
     assert not only.exists() and mixed.exists() and plain.exists() and empty.exists()
 
 
-def make_dir_link(target: Path, link: Path) -> None:
-    if sys.platform == "win32":
-        import _winapi
-
-        _winapi.CreateJunction(str(target), str(link))
-    else:
-        link.symlink_to(target, target_is_directory=True)
-
-
 def test_disposable_paths_and_nested_caches_clean_orphans_without_deleting_link_targets(
     primary: Path, tmp_path: Path,
 ) -> None:
@@ -159,9 +150,12 @@ def test_disposable_paths_and_nested_caches_clean_orphans_without_deleting_link_
     )
     target = tmp_path / "shared_skills"
     write(target, "keep.md", "keep\n")
+    ext_cache = tmp_path / "external_cache"
+    (ext_cache / "node_modules").mkdir(parents=True)
+    write(ext_cache, "node_modules/pkg.js", "keep\n")
     linked = orphans_root / "linked"
     (linked / ".claude").mkdir(parents=True)
-    make_dir_link(target, linked / ".claude" / "skills")
+    link_dir(linked / ".claude" / "skills", target)
     write(linked, ".claude/settings.local.json", "{}")
     (linked / "node_modules").mkdir()
     nested = orphans_root / "nested"
@@ -171,11 +165,18 @@ def test_disposable_paths_and_nested_caches_clean_orphans_without_deleting_link_
     write(keep, ".claude/custom.txt", "keep\n")
     empty_sub = orphans_root / "empty_sub"
     (empty_sub / "src").mkdir(parents=True)
+    top_link = orphans_root / "top_link"
+    link_dir(top_link, ext_cache)
     out = cleanup(primary)
     assert {"cleaned orphan primary_orphans/linked", "cleaned orphan primary_orphans/nested"} <= set(out)
-    assert {"orphan not-git primary_orphans/keep", "orphan not-git primary_orphans/empty_sub"} <= set(out)
+    assert {
+        "orphan not-git primary_orphans/keep",
+        "orphan not-git primary_orphans/empty_sub",
+        "orphan not-git primary_orphans/top_link",
+    } <= set(out)
     assert not linked.exists() and not nested.exists()
-    assert keep.exists() and empty_sub.exists() and (target / "keep.md").exists()
+    assert keep.exists() and empty_sub.exists() and top_link.exists()
+    assert (target / "keep.md").exists() and (ext_cache / "node_modules" / "pkg.js").exists()
 
 
 def test_orphan_scan_tolerates_unreadable_and_vanished_directories(
@@ -604,26 +605,65 @@ def test_remove_takes_a_worktree_holding_only_caches_and_tool_files(primary: Pat
 
 
 def test_remove_honors_disposable_paths_non_ascii_and_link_leaves(
-    primary: Path, tmp_path: Path
+    primary: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (primary / ".git" / "info" / "exclude").write_text(
-        ".claude/skills/\napps/\ncafé/\n", encoding="utf-8"
+        ".claude/\napps/\ncafé/\n", encoding="utf-8"
     )
     settings(primary, 'disposable_paths = [".claude/skills", ".next"]\n')
     target = tmp_path / "shared_skills"
     write(target, "keep.md", "keep\n")
     ok = landed_worktree(primary, "eng-38-disposable")
     (ok / ".claude").mkdir()
-    make_dir_link(target, ok / ".claude" / "skills")
+    link_dir(ok / ".claude" / "skills", target)
     write(ok, "apps/web/.next/cache.json", "{}")
+    (ok / "apps" / "empty").mkdir()
     assert remove(primary, ok) == (0, ["cleaned claude/eng-38-disposable wt/eng-38-disposable (local branch kept)"])
     assert not ok.exists() and (target / "keep.md").exists()
+
+    # Relative disposable path ".claude/skills" does not waive a nested "apps/.claude/skills".
+    nested_link = landed_worktree(primary, "eng-45-nested-rel")
+    (nested_link / "apps" / ".claude").mkdir(parents=True)
+    link_dir(nested_link / "apps" / ".claude" / "skills", target)
+    assert remove(primary, nested_link) == (1, ["blocked claude/eng-45-nested-rel wt/eng-45-nested-rel: ignored files (apps/)"])
+    assert nested_link.exists()
+
+    # git worktree remove leaving disposable directory behind (Windows junction case) still cleans up safely.
+    leftover_wt = landed_worktree(primary, "eng-46-leftover")
+    (leftover_wt / ".claude").mkdir()
+    link_dir(leftover_wt / ".claude" / "skills", target)
+    real_git = sweep_worktrees.git
+
+    def keep_leftover_dir(cwd: Path, *args: str, input: str | None = None):
+        done = real_git(cwd, *args, input=input)
+        if args[:2] == ("worktree", "remove") and not leftover_wt.exists():
+            (leftover_wt / ".claude").mkdir(parents=True)
+            link_dir(leftover_wt / ".claude" / "skills", target)
+        return done
+
+    monkeypatch.setattr(sweep_worktrees, "git", keep_leftover_dir)
+    outcome, line = sweep_worktrees.remove_worktree(
+        primary, {"path": str(leftover_wt), "branch": "claude/eng-46-leftover"}, (".claude/skills",)
+    )
+    assert (outcome, line) == ("cleaned", "cleaned claude/eng-46-leftover wt/eng-46-leftover (local branch kept)")
+    assert not leftover_wt.exists() and (target / "keep.md").exists()
+    monkeypatch.undo()
 
     stray = landed_worktree(primary, "eng-39-nonascii")
     write(stray, "café/secret.txt", "keep\n")
     code, lines_out = remove(primary, stray)
     assert (code, lines_out) == (1, ["blocked claude/eng-39-nonascii wt/eng-39-nonascii: ignored files (café/)"])
     assert stray.exists()
+
+    # Modified renames/copies ("RM"/"CM") still consume the original path from -z output.
+    status_line = "RM new.txt\0!! old.txt\0!! stray.txt\0"
+    monkeypatch.setattr(
+        sweep_worktrees,
+        "git",
+        lambda cwd, *args, input=None: subprocess.CompletedProcess(["git", *args], 0, status_line, ""),
+    )
+    (stray / "stray.txt").write_text("x\n")
+    assert sweep_worktrees.stray_ignored(stray) == ["stray.txt"]
 
 
 def doc_worktree(primary: Path, name: str, doc: str | None, extra: str = 'doc_roots = ["docs/work"]\n') -> Path:
@@ -1253,8 +1293,9 @@ def link_dir(link: Path, target: Path) -> None:
     """A directory link: a junction on Windows (no privilege needed), else a symlink."""
     link.parent.mkdir(parents=True, exist_ok=True)
     if sys.platform == "win32":
-        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
-                       check=True, capture_output=True)
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
     else:
         os.symlink(target, link, target_is_directory=True)
 
