@@ -1432,7 +1432,7 @@ DocStep = Callable[[Path, Config, Row], DocRun]
 
 def run_cleanup(
     primary: Path, cfg: Config, report: Row, stale: bool, here: Path | None,
-    docs: DocStep = sweep_docs,
+    docs: DocStep = sweep_docs, *, report_hint: bool = False,
 ) -> list[str]:
     """Remove verified-landed, clean, pushed worktrees (the branch stays); one line per event.
 
@@ -1485,6 +1485,8 @@ def run_cleanup(
         f" delete {plural(caches, 'orphan')}, trash {run.trash.text('bundle')},"
         f" purge {run.purge.text('trash folder')}"
     )
+    if report_hint and (counts["removable"] or caches or run.trash.items or run.purge.items):
+        out.append('hint: cleanup = "report" removes nothing; set cleanup = "prune" to clean automatically')
     return [summary, would, *out]
 
 
@@ -1606,7 +1608,7 @@ def cleanup_session(start: Path, include_context: bool = False) -> list[str]:
         return [skipped, *notes]
     try:
         report = build_report(primary, cfg, stale)
-        return [*run_cleanup(primary, cfg, report, stale, here), *notes]
+        return [*run_cleanup(primary, cfg, report, stale, here, report_hint=True), *notes]
     except OSError as error:
         return [f"sweep: unavailable ({error})", *notes]
 
@@ -1709,10 +1711,11 @@ def purged(events: list[Row]) -> str:
 def mark_session(start: Path, session_id: str) -> None:
     """Record a session start in the tally, so --tally can tell this session's work from earlier work.
 
-    Only with a saved doc_strategy: without one nothing is ever trashed, so there is nothing to tally."""
+    Only in prune mode with a saved doc_strategy: nothing is trashed or purged otherwise."""
     try:
         primary = find_primary(start)
-        if load_config(primary)["doc_strategy"]:
+        cfg = load_config(primary)
+        if cfg["doc_strategy"] and cfg["cleanup"] == "prune":
             record(primary, {"event": "session", "id": session_id})
     except (SystemExit, ConfigError):  # not a git repository, or a config the session start reports
         pass
@@ -1775,7 +1778,8 @@ def hook(payload: dict[str, object]) -> int:
             print(json.dumps({"decision": "block", "reason": "\n".join(reasons)}))
         return 0
     if event == "SessionStart":
-        mark_session(Path.cwd(), str(payload.get("session_id", "")))
+        sid = payload.get("session_id")
+        mark_session(Path.cwd(), "" if sid is None else str(sid))
         output = "\n".join(cleanup_session(Path.cwd(), include_context=True))
     elif event == "SubagentStart":
         # Claude forks inherit context; Codex children always receive the approved refresh.
