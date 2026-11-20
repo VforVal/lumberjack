@@ -176,6 +176,8 @@ def config_table(primary: Path) -> tuple[str, Config]:
             raise ConfigError(f"lumberjack: bad TOML in {path}: {exc}", name) from exc
         for key in section:
             data = data.get(key, {})
+            if not isinstance(data, dict):
+                raise ConfigError(f"lumberjack: [{'.'.join(section)}] in {path} must be a table", name)
         if not section or data:
             return name, data
     return "", {}
@@ -232,6 +234,14 @@ def parse_config(table: Config, source: str = "") -> Config:
     for key, default in DEFAULTS.items():
         if not isinstance(cfg[key], type(default)):
             raise ConfigError(f"lumberjack: {key} must be {type(default).__name__}", source)
+    if not cfg["primary_branch"]:
+        raise ConfigError("lumberjack: primary_branch must not be empty", source)
+    if not all(isinstance(o, str) and o for o in cfg["owners"]):
+        raise ConfigError("lumberjack: owners must be non-empty strings", source)
+    if not all(isinstance(r, str) and r for r in cfg["worktree_roots"]):
+        raise ConfigError("lumberjack: worktree_roots must be non-empty strings", source)
+    if any("{name}" in r and ".." in PureWindowsPath(r.split("{name}", 1)[1]).parts for r in cfg["worktree_roots"]):
+        raise ConfigError("lumberjack: worktree_roots must not traverse above {name}", source)
     if not cfg["prototype_prefix"]:
         raise ConfigError("lumberjack: prototype_prefix must not be empty", source)
     if not all(isinstance(shape, str) and "<slug>" in shape for shape in cfg["branch_shapes"]):
