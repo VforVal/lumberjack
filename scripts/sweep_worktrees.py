@@ -271,13 +271,19 @@ def parse_config(table: Config, source: str = "") -> Config:
     return cfg
 
 
+GIT_ENV_STRIP = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+
+
+def git_env() -> dict[str, str]:
+    """Process environment without hook variables that pin git to a merging worktree."""
+    return {key: value for key, value in os.environ.items() if key not in GIT_ENV_STRIP}
+
+
 def git(cwd: Path, *args: str, input: str | None = None) -> subprocess.CompletedProcess[str]:
     # A git hook exports GIT_DIR and friends; they would point every call at the merging worktree.
-    leaked = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
-    env = {key: value for key, value in os.environ.items() if key not in leaked}
     return subprocess.run(
         ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-        env=env, input=input,
+        env=git_env(), input=input,
     )
 
 
@@ -329,9 +335,9 @@ def registered(primary: Path) -> list[Row]:
 
 # Verified tiers are safe to prune; landed-probable and unverified are report-only.
 VERIFIED = {"integrated", "content-integrated", "landed-pr"}
-GH_TIMEOUT = 5
+GH_TIMEOUT = 10
 GH_BATCH = 100
-FETCH_TIMEOUT = 5
+FETCH_TIMEOUT = 10
 FRESH_HOURS = 24
 PROBABLE_SECONDS = 5  # time for landed-probable guesses per sweep; later tips stay unverified
 Tip = tuple[str, str]  # (commit sha, branch name; empty when detached)
@@ -364,7 +370,9 @@ def content_integrated(primary: Path, base: str, tree: str, sha: str) -> bool:
 
 
 def merged_prs(primary: Path, branches: list[str]) -> dict[str, list[Row]] | str:
-    """Merged PRs per branch from one GraphQL call, or the reason it failed."""
+    """Merged PRs per branch from batched GraphQL calls within GH_TIMEOUT, or failure reason."""
+    if not branches:
+        return {}
     gh = shutil.which("gh")
     if not gh:
         return "gh missing"
@@ -372,33 +380,40 @@ def merged_prs(primary: Path, branches: list[str]) -> dict[str, list[Row]] | str
     if host != "github.com" or not (owner and repo):
         return "not a github remote"
     owner, repo = json.dumps(owner), json.dumps(repo)
-    # shortcut: branches past GH_BATCH are not queried; batch the rest if that bites.
-    aliases = " ".join(
-        f"b{i}: pullRequests(headRefName: {json.dumps(name)}, states: MERGED, first: 10)"
-        " { nodes { headRefOid baseRefName mergeCommit { oid } } }"
-        for i, name in enumerate(branches[:GH_BATCH])
-    )
-    query = f"query {{ repository(owner: {owner}, name: {repo}) {{ {aliases} }} }}"
-    try:
-        done = subprocess.run(
-            [gh, "api", "graphql", "-f", f"query={query}"],
-            cwd=primary,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=GH_TIMEOUT,
+    out: dict[str, list[Row]] = {}
+    deadline = time.monotonic() + GH_TIMEOUT
+    for offset in range(0, len(branches), GH_BATCH):
+        remaining = deadline - time.monotonic()
+        if offset > 0 and remaining <= 0:
+            break
+        batch = branches[offset : offset + GH_BATCH]
+        aliases = " ".join(
+            f"b{i}: pullRequests(headRefName: {json.dumps(name)}, states: MERGED, first: 10)"
+            " { nodes { headRefOid baseRefName mergeCommit { oid } } }"
+            for i, name in enumerate(batch)
         )
-    except (subprocess.TimeoutExpired, OSError):
-        return "unreachable"
-    if done.returncode == 4 or "auth" in done.stderr.lower():
-        return "unauthenticated"
-    try:
-        if done.returncode:
-            return "unreachable"
-        found = json.loads(done.stdout)["data"]["repository"]
-        return {name: found[f"b{i}"]["nodes"] for i, name in enumerate(branches[:GH_BATCH])}
-    except (ValueError, KeyError, TypeError):
-        return "unreachable"
+        query = f"query {{ repository(owner: {owner}, name: {repo}) {{ {aliases} }} }}"
+        try:
+            done = subprocess.run(
+                [gh, "api", "graphql", "-f", f"query={query}"],
+                cwd=primary,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=max(0.1, remaining),
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return "unreachable" if offset == 0 else out
+        if done.returncode == 4 or "auth" in done.stderr.lower():
+            return "unauthenticated" if offset == 0 else out
+        try:
+            if done.returncode:
+                return "unreachable" if offset == 0 else out
+            found = json.loads(done.stdout)["data"]["repository"]
+            out.update({name: found[f"b{i}"]["nodes"] for i, name in enumerate(batch)})
+        except (ValueError, KeyError, TypeError):
+            return "unreachable" if offset == 0 else out
+    return out
 
 
 def pr_verdict(prs: dict[str, list[Row]] | str, tip: Tip, primary_branch: str) -> Verdict:
@@ -415,24 +430,32 @@ def pr_verdict(prs: dict[str, list[Row]] | str, tip: Tip, primary_branch: str) -
 
 
 def patch_ids(primary: Path, *args: str) -> list[str]:
-    shown = subprocess.run(["git", *args], cwd=primary, capture_output=True)
+    env = git_env()
+    shown = subprocess.run(["git", *args], cwd=primary, capture_output=True, env=env)
     ids = subprocess.run(
         ["git", "patch-id", "--stable"],
         cwd=primary,
         input=shown.stdout,
         capture_output=True,
+        env=env,
     )
     return [line.split()[0] for line in ids.stdout.decode().splitlines()]
 
 
-def probable(primary: Path, base: str, sha: str, recent: set[str]) -> bool:
+def probable(primary: Path, base: str, sha: str, recent: Callable[[], set[str]]) -> bool:
     cherry = lines(git(primary, "cherry", base, sha))
     if cherry and all(line.startswith("-") for line in cherry):
         return True
-    return bool(set(patch_ids(primary, "diff", f"{base}...{sha}")) & recent)
+    return bool(set(patch_ids(primary, "diff", f"{base}...{sha}")) & recent())
 
 
-def classify(primary: Path, cfg: Config, tips: set[Tip], stale: bool = False) -> dict[Tip, Verdict]:
+def classify(
+    primary: Path,
+    cfg: Config,
+    tips: set[Tip],
+    stale: bool = False,
+    priority: set[str] | None = None,
+) -> dict[Tip, Verdict]:
     """(tier, reason) per tip against origin/<primary>, first decisive tier wins."""
     base = f"origin/{cfg['primary_branch']}"
     tree = git(primary, "rev-parse", f"{base}^{{tree}}").stdout.strip()
@@ -448,9 +471,10 @@ def classify(primary: Path, cfg: Config, tips: set[Tip], stale: bool = False) ->
             rest.append(tip)
     if not rest:
         return result
-    names = sorted({name for _, name in rest if name})
+    prior = priority or set()
+    names = sorted({name for _, name in rest if name}, key=lambda n: (n not in prior, n))
     prs = merged_prs(primary, names) if names else {}  # a detached tip has no pull request
-    recent = set(patch_ids(primary, "log", "-200", "-p", base))
+    recent = functools.cache(lambda: set(patch_ids(primary, "log", "-200", "-p", base)))
     # The guess costs several git calls per tip and never prunes, so it yields to the hook timeout.
     deadline, rushed = time.monotonic() + PROBABLE_SECONDS, False
     for tip in rest:
@@ -537,14 +561,13 @@ def branch_tips(primary: Path, cfg: Config, trees: list[Row]) -> dict[str, str]:
     """Unmerged local branches that no worktree has checked out, with their tips."""
     checked_out = {tree["branch"] for tree in trees}
     base = f"origin/{cfg['primary_branch']}"
-    names = lines(
-        git(primary, "branch", "--format=%(refname:short)", "--no-merged", base)
-    )
-    return {
-        name: git(primary, "rev-parse", f"refs/heads/{name}").stdout.strip()
-        for name in names
-        if name not in checked_out
-    }
+    rows = lines(git(primary, "branch", "--format=%(refname:short) %(objectname)", "--no-merged", base))
+    tips: dict[str, str] = {}
+    for row in rows:
+        name, _, sha = row.partition(" ")
+        if name and sha and name not in checked_out:
+            tips[name] = sha
+    return tips
 
 
 def branch_rows(tips: dict[str, str], tiers: dict[Tip, Verdict]) -> list[Row]:
@@ -964,7 +987,7 @@ def build_report(primary: Path, cfg: Config, stale: bool = False) -> Row:
     loose = branch_tips(primary, cfg, trees)
     tips = {(t["head"], t["branch"]) for t in trees[1:]}
     tips |= {(sha, name) for name, sha in loose.items()}
-    tiers = classify(primary, cfg, tips, stale)
+    tiers = classify(primary, cfg, tips, stale, priority={t["branch"] for t in trees[1:] if t["branch"]})
     local = lines(git(primary, "branch", "--format=%(refname:short)"))
     pattern = branch_pattern(cfg)
     return {
@@ -991,9 +1014,10 @@ def fetch(primary: Path) -> bool:
     """True when origin may be stale: the fetch failed or exceeded FETCH_TIMEOUT."""
     try:
         done = subprocess.run(
-            ["git", "fetch", "-q", "--prune", "origin"],
+            ["git", "fetch", "-q", "--prune", "--no-tags", "origin"],
             cwd=primary,
             capture_output=True,
+            env=git_env(),
             timeout=FETCH_TIMEOUT,
         )
     except (subprocess.TimeoutExpired, OSError):
