@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.4.0
+
+Lumberjack now supports Antigravity alongside Claude Code and Codex, stops leaving
+already-merged worktrees and junction-linked cache folders behind on Windows and squash-merged
+repositories, and tolerates larger branch backlogs and slower Windows networks.
+
+**Upgrade:** update the plugin in Claude Code, Codex, or Antigravity, then start a new session.
+Re-running setup is optional for existing `1.3.0` configurations; re-run `/lumberjack:setup`
+(or set `disposable_paths` in `.lumberjack.toml`) if you also want extra ignored paths or
+harness skill links treated as disposable during orphan and removal checks.
+
+### Antigravity
+
+- Native plugin manifest and root hooks (`plugin.json`, `hooks.json`, `scripts/hook.sh`) for
+  Antigravity auto-discovery (#64).
+- `--hook` auto-detects camelCase `hookEventName` payloads, resolves the repository across `cwd`
+  and `workspacePaths`, records `conversationId`, emits `injectSteps` at `SessionStart`, and
+  returns `decision: "continue"` or `"allow"` on `Stop` (#64).
+
+### Cleanup & Detection
+
+- `integrated` worktrees waive the `unpushed` check alongside `landed-pr`, so merge-commit PRs
+  prune after GitHub deletes the remote head branch (#56, #63).
+- Unpushed `content-integrated` worktrees query GitHub's merged-PR lookup and upgrade to
+  `landed-pr` when a merged PR matches the tip (#56, #63).
+- Newly created detached-HEAD worktrees (under 24 hours old whose `HEAD` has not moved) are
+  protected as `fresh` from both sweep cleanup and `--remove` (#55).
+- Added configurable `disposable_paths`, nested cache-only orphan cleanup, link/Windows junction
+  safety (`purge_tree`, link-aware directory walks), NUL-delimited `git status` parsing, and
+  resilient orphan scanning (#57).
+- Prioritized active worktree branches ahead of loose branches in batched GitHub PR lookups,
+  collected loose tips in one git call, deferred `patch-id` hashing for `landed-probable`, skipped
+  tags on fetch (`--no-tags`) with a scrubbed git environment, and raised Windows fetch/`gh`
+  timeouts to 10 s within a shared session budget (#58).
+- Case-insensitive ticket matching in doc bundles and prototypes, state updates on `--clear`,
+  and Windows backslash normalization for `--promoted` (#59).
+- Restricted `"session"` tally markers to `"prune"` mode, normalized missing/`null` session IDs,
+  and surfaced a `"report"`-mode hint when removable items accumulate (#61).
+
+### Setup, CLI & Release
+
+- Marked wrapped non-shell `post-merge` scripts executable on POSIX, restricted shell detection to
+  POSIX shells, skipped links/junctions when scanning `doc_roots`, preserved setup version stamps
+  on strategy updates, and tightened config validation (`owners`, `worktree_roots`, empty
+  `primary_branch`, non-table sections) (#60).
+- Made all 9 sweep CLI mode flags mutually exclusive (`--fetch` stays composable), required
+  `--clear` with `--promoted`, normalized `same_dir` comparison in `gate()`, updated README/docs,
+  and verified website and `plugin.json` versions in the release workflow (#62, #64).
+
 ## 1.3.0
 
 Lumberjack now fits repositories that don't look like ours: a `master` trunk, ticket branches
