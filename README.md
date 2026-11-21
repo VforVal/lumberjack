@@ -12,7 +12,7 @@ branch, what was left for it goes. Each session start removes landed worktrees (
 stays) and moves their tickets' handoffs, plans and run output to a trash inside `.git/`,
 which it purges after a retention you choose. Research and prototypes are kept. A Stop hook
 keeps agents from ending a turn on a misnamed branch or an off-branch primary checkout. It
-ships as a plugin for Claude Code and Codex.
+ships as a plugin for Claude Code, Codex and Antigravity.
 
 ![Before: git worktree list shows ten worktrees, seven of them already merged. After the next session start: the sweep reports cleaned 7 and git worktree list shows three.](assets/before-after.png)
 
@@ -24,7 +24,7 @@ ships as a plugin for Claude Code and Codex.
    /plugin install lumberjack@lumberjack
    ```
 2. In the repository, run `/lumberjack:setup` (Codex: pick `lumberjack:setup` from the
-   skill picker) and answer its questions.
+   skill picker; Antigravity: ask to run lumberjack's `setup` skill) and answer its questions.
 3. Review `git diff` and commit. Done: the next session start sweeps, and the Stop gate is on.
 
 Until setup has written a config, the plugin changes nothing: session start prints
@@ -101,11 +101,25 @@ Restart the harness after installation. Review and trust the installed hook comm
 before enabling them. If your version rejects a command, check `codex plugin --help`
 or `claude plugin --help` and upgrade to a tested version before continuing.
 
+## Install on Antigravity
+
+Copy the plugin files (`plugin.json`, `hooks.json`, `VERSION`, `assets/`, `scripts/`, `skills/`)
+into either your global Antigravity plugins folder or a single repository's `.agents/` folder:
+
+- Global (all repositories): `~/.gemini/config/plugins/lumberjack/`
+- Workspace (one repository): `.agents/plugins/lumberjack/`
+
+Antigravity auto-discovers the root `plugin.json`, `hooks.json`, and `skills/` directories live
+(with no restart), enabling the `SessionStart` and `Stop` hooks automatically. Ask the agent to
+run lumberjack's `setup` skill once per repository (when unconfigured, `SessionStart` still prompts
+with `/lumberjack:setup`).
+
 ## Setup
 
 In Claude Code, run `/lumberjack:setup` once per repository, from any of its checkouts:
 it always writes to the primary checkout, which is where the hooks read config. In Codex, choose
-`lumberjack:setup` from the skill picker. The agent reads facts about the repository
+`lumberjack:setup` from the skill picker; in Antigravity, ask the agent to run lumberjack's `setup`
+skill. The agent reads facts about the repository
 (`discover`, read-only), then asks the scope first, then about harnesses, branch shape, worktree roots,
 cleanup and Stop gate behaviour, the git hook and an evidence directory and doc roots, each with a
 recommended answer. Doc roots are suggested from a `.scratch/` folder and ignored top-level
@@ -301,9 +315,10 @@ because a new version can bring settings only setup asks about (1.2.1: doc roots
 A hand-written config has no such line and gets no hint.
 
 Every plugin hook runs `--hook`, which reads the harness's hook input on stdin and acts
-on its `hook_event_name`. SessionStart fires on startup, resume, clear and
-compaction; it runs the cleanup and delivers that report, the active configuration and the canonical
-`skills/lumberjack/SKILL.md` rules through `hookSpecificOutput.additionalContext`.
+on its `hook_event_name` (or Antigravity's camelCase `hookEventName` and `cwd`/`workspacePaths`).
+SessionStart fires on startup, resume, clear and compaction; it runs the cleanup and delivers
+that report, the active configuration and the canonical `skills/lumberjack/SKILL.md` rules
+through `hookSpecificOutput.additionalContext` (or `injectSteps` in Antigravity).
 The post-merge hook keeps using plain `--cleanup`.
 
 SubagentStart refreshes rules and active settings for fresh Claude children and every
@@ -311,14 +326,16 @@ Codex child without running cleanup. Claude forks skip this refresh because they
 inherit the parent context. Codex does not identify full-history inheritance in its
 child-start payload, so inherited Codex children receive repeated rules as well.
 
-On Stop, `--hook` runs the gate: debt produces an exit-0 JSON block decision
-and reason, supported by both harnesses. This preserves blocking when PowerShell maps
+On Stop, `--hook` runs the gate: debt produces an exit-0 JSON block decision (`"block"`,
+or `"continue"` in Antigravity) and reason. This preserves blocking when PowerShell maps
 a native exit 2 to process exit 1. Running plain `--gate` still exits 2 with its reason
-on stderr. Both forms stay silent when the gate passes, is disabled, or already ran.
+on stderr. Both forms stay silent (or emit `{"decision": "allow"}` on Antigravity Stop) when
+the gate passes, is disabled, or already ran.
 
 ## Cleanup command
 
-`/lumberjack:cleanup` (Codex: `lumberjack:cleanup` from the skill picker) clears old
+`/lumberjack:cleanup` (Codex: `lumberjack:cleanup` from the skill picker; Antigravity: ask to run
+lumberjack's `cleanup` skill) clears old
 worktrees in the repository it runs in. It runs `--cleanup` and `git worktree prune`
 and relays their lines, then lists every `unverified` and `landed-probable` worktree with
 its tier and reason, and asks about each one. It removes only the worktrees the maintainer
@@ -507,7 +524,8 @@ and the command line parses the same under Git Bash and PowerShell. The Microsof
 `python` and `python3` aliases fail the version probe and are skipped; without a real
 Python 3.11+ install the plugin hooks then print the Store message instead of running
 the sweep, so install Python 3.11+ or turn the aliases off.
-In the plugin's hooks, `${CLAUDE_PLUGIN_ROOT}` expands to the plugin directory.
+In Claude Code and Codex hooks, `${CLAUDE_PLUGIN_ROOT}` expands to the plugin directory;
+Antigravity runs `scripts/hook.sh` from the plugin directory directly.
 
 ## Uninstall
 

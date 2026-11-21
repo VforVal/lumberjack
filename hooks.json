@@ -1,0 +1,18 @@
+{
+  "lumberjack": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "git --git-dir=. -c alias.lumberjack=!sh lumberjack scripts/hook.sh",
+        "timeout": 30
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "git --git-dir=. -c alias.lumberjack=!sh lumberjack scripts/hook.sh",
+        "timeout": 15
+      }
+    ]
+  }
+}
