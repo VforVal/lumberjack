@@ -1927,7 +1927,12 @@ def hook_start(payload: dict[str, object], antigravity: bool) -> Path | None:
         candidates.extend(workspaces)
     for item in candidates:
         if isinstance(item, str) and item and Path(item).is_dir():
-            return Path(item)
+            path = Path(item)
+            try:
+                find_primary(path)
+            except SystemExit:
+                continue
+            return path
     return None
 
 
@@ -1950,14 +1955,8 @@ def hook(payload: dict[str, object]) -> int:
     start = hook_start(payload, antigravity)
     if start is None:
         if antigravity:
-            print("{}")
+            print(json.dumps({"decision": "allow"} if event == "Stop" else {}))
         return 0
-    if antigravity and event == "SessionStart":
-        try:
-            find_primary(start)
-        except SystemExit:
-            print("{}")
-            return 0
     if event in ("SessionStart", "SubagentStart") and unconfigured(start):
         return not_set_up(str(event), antigravity)
     if event == "Stop":
@@ -1970,7 +1969,7 @@ def hook(payload: dict[str, object]) -> int:
             decision = "continue" if antigravity else "block"
             print(json.dumps({"decision": decision, "reason": "\n".join(reasons)}))
         elif antigravity:
-            print("{}")
+            print(json.dumps({"decision": "allow"}))
         return 0
     if event == "SessionStart":
         sid = payload.get("conversationId") if antigravity else payload.get("session_id")
